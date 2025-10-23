@@ -159,6 +159,7 @@
 1. Адаптер `AiPort` для Responses.
    - **Результат:** `adapters/openai-responses` формирует запрос `POST https://api.openai.com/v1/responses` с `assistant_id`, диалоговым контекстом, таймаутом и обработкой ошибок/ретраев (до 2 повторов).
    - **Проверка:** юнит-тесты с `fetch-mock` проверяют тело запроса, таймаут и обработку ошибок; `npm run test -- openai-adapter`; проверяется логирование requestId/responseId.
+   - **Статус:** ✅ Реализован адаптер `createOpenAIResponsesAdapter`, добавлены модульные тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`, покрывающие ретраи, таймаут и очистку текста.
 2. Конфигурация секретов.
    - **Внешние действия:**
      - `wrangler secret put OPENAI_API_KEY`.
@@ -301,6 +302,7 @@
 - 2025-10-24: Подготовлен Telegram-парсер вебхука, команды `/admin*` обрабатываются до ядра, покрыто юнит-тестами `http/telegram-webhook`.
 - 2025-10-24: Реализован адаптер Telegram messaging с ретраями и модульными тестами `apps/worker-main/adapters/telegram/__tests__/messaging.test.ts`.
 - 2025-10-24: Настроен менеджер typing-индикации, роутер вызывает его перед ядром, добавлены тесты `apps/worker-main/http/__tests__/typing-indicator.test.ts`.
+- 2025-10-24: Добавлен адаптер OpenAI Responses с таймаутами, ретраями и фильтрацией управляющих символов; написаны тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`.
 
 ## Быстрый протокол действий
 1. Проверить ветку и статус репозитория.
