@@ -114,6 +114,7 @@
 5. Guardrails.
    - **Результат:** `CODEOWNERS`, CI-гард (GitHub Actions), eslint-правила запретов импортов, файл `core/VERSION` и скрипт `npm run validate-guards`, который срабатывает при изменении `core/` без bump версии.
    - **Проверка:** `npm run lint` без ошибок; `npm run validate-guards` отрабатывает без сбоев; визуальная проверка `CODEOWNERS`; вручную симулируем изменение в `core/` без bump и убеждаемся, что guard падает.
+   - **Статус:** ✅ Добавлены `CODEOWNERS`, workflow CI (lint, test, validate-guards), правило `no-restricted-imports` и файл `core/VERSION`; guard скрипт блокирует изменения ядра без bump (локальный запуск требует `npm install`, которое в среде агента даёт 403 на npm registry).
 
 **Риски и предохранители:** закрепить владельцев `core/` и `ports/`; проверять, что адаптеры не импортируют `core/` напрямую; хранить скриншоты запусков проверок.
 

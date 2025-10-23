@@ -1,0 +1,3 @@
+# Core and ports directories require review by maintainers.
+/apps/worker-main/core/ @egormob
+/apps/worker-main/ports/ @egormob
