@@ -1,4 +1,2 @@
-// Placeholder for HTTP routing logic.
-// Реализация роутов появится после подготовки композиции.
-
-export {};
+export { createRouter, parseIncomingMessage } from './router';
+export type { RouterOptions } from './router';

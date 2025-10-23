@@ -110,6 +110,7 @@
 4. Композиция и HTTP-роутер.
    - **Результат:** `composition/compose.ts` выбирает адаптеры или NOOP в зависимости от доступных биндингов, `http/router.ts` объявляет `/webhook/:secret` и `/healthz`, webhook проверяет секрет и проксирует в `DialogEngine`.
    - **Проверка:** интеграционный тест с моками (`npm run test -- http-router`), ручной вызов `wrangler dev` + `curl /healthz` (сообщить результат); лог или скриншот команды сохраняется в `logs/`.
+   - **Статус:** ✅ Реализованы композиция и HTTP-роутер с покрытием unit-тестами (`apps/worker-main/http/__tests__/router.test.ts`, `apps/worker-main/composition/__tests__/compose.test.ts`); роут `/healthz` возвращает `status: ok`, webhook валидирует секрет и проксирует вызов в `DialogEngine`.
 5. Guardrails.
    - **Результат:** `CODEOWNERS`, CI-гард (GitHub Actions), eslint-правила запретов импортов, файл `core/VERSION` и скрипт `npm run validate-guards`, который срабатывает при изменении `core/` без bump версии.
    - **Проверка:** `npm run lint` без ошибок; `npm run validate-guards` отрабатывает без сбоев; визуальная проверка `CODEOWNERS`; вручную симулируем изменение в `core/` без bump и убеждаемся, что guard падает.
