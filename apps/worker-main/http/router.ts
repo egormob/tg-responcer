@@ -1,5 +1,4 @@
-import type { IncomingMessage } from '../core/DialogEngine';
-import { DialogEngine } from '../core/DialogEngine';
+import { DialogEngine, type IncomingMessage } from '../core/DialogEngine';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -9,6 +8,53 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+const isIncomingMessageCandidate = (value: unknown): value is IncomingMessage => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const { user, chat, text, receivedAt } = value;
+
+  if (!isRecord(user) || typeof user.userId !== 'string') {
+    return false;
+  }
+
+  if (!isRecord(chat) || typeof chat.id !== 'string') {
+    return false;
+  }
+
+  if (typeof text !== 'string') {
+    return false;
+  }
+
+  return receivedAt instanceof Date;
+};
+
+export interface HandledWebhookResult {
+  kind: 'handled';
+  response?: Response;
+}
+
+export interface MessageWebhookResult {
+  kind: 'message';
+  message: IncomingMessage;
+}
+
+export type TransformPayloadResult =
+  | IncomingMessage
+  | HandledWebhookResult
+  | MessageWebhookResult;
+
+export type TransformPayload = (
+  payload: unknown,
+) => TransformPayloadResult | Promise<TransformPayloadResult>;
+
+const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =>
+  isRecord(value) && value.kind === 'handled';
+
+const isMessageWebhookResult = (value: unknown): value is MessageWebhookResult =>
+  isRecord(value) && value.kind === 'message' && isIncomingMessageCandidate(value.message);
 
 const toOptionalString = (value: unknown): string | undefined =>
   (typeof value === 'string' && value.length > 0 ? value : undefined);
@@ -73,7 +119,7 @@ export const parseIncomingMessage = (payload: unknown): IncomingMessage => {
 export interface RouterOptions {
   dialogEngine: DialogEngine;
   webhookSecret?: string;
-  transformPayload?: (payload: unknown) => IncomingMessage;
+  transformPayload?: TransformPayload;
 }
 
 const normalizePath = (pathname: string) => pathname.replace(/\/$/, '');
@@ -91,7 +137,7 @@ const extractWebhookSecret = (pathname: string): string | undefined => {
 };
 
 export const createRouter = (options: RouterOptions) => {
-  const transformPayload = options.transformPayload ?? parseIncomingMessage;
+  const transformPayload = options.transformPayload ?? (async (payload: unknown) => parseIncomingMessage(payload));
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
 
@@ -123,7 +169,21 @@ export const createRouter = (options: RouterOptions) => {
 
     let message: IncomingMessage;
     try {
-      message = transformPayload(payload);
+      const transformed = await transformPayload(payload);
+
+      if (isHandledWebhookResult(transformed)) {
+        return (
+          transformed.response ?? jsonResponse({ status: 'ignored' }, { status: 200 })
+        );
+      }
+
+      if (isMessageWebhookResult(transformed)) {
+        message = transformed.message;
+      } else if (isIncomingMessageCandidate(transformed)) {
+        message = transformed;
+      } else {
+        throw new Error('Transform payload returned invalid result');
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Invalid payload';
       return new Response(reason, { status: 400 });
