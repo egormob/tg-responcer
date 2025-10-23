@@ -128,4 +128,28 @@ describe('http router', () => {
     expect(result.chat.id).toBe('chat-1');
     expect(result.receivedAt).toBeInstanceOf(Date);
   });
+
+  it('allows transformPayload to short-circuit handling', async () => {
+    const handleMessage = vi.fn();
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      webhookSecret: 'secret',
+      transformPayload: async () => ({
+        kind: 'handled',
+        response: new Response('handled', { status: 204 }),
+      }),
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('handled');
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
 });
