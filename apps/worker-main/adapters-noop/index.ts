@@ -11,9 +11,38 @@ type WarningDetails = Record<string, unknown> | undefined;
 
 const NOOP_PREFIX = '[noop-adapter]';
 
+const stringifyDetails = (details?: WarningDetails) => {
+  if (!details) {
+    return '';
+  }
+
+  try {
+    const seen = new WeakSet<object>();
+
+    return JSON.stringify(details, (_key, value) => {
+      if (typeof value === 'bigint') {
+        return value.toString();
+      }
+
+      if (value && typeof value === 'object') {
+        if (seen.has(value as object)) {
+          return '[Circular]';
+        }
+
+        seen.add(value as object);
+      }
+
+      return value;
+    });
+  } catch (error) {
+    console.warn(`${NOOP_PREFIX} warn serialization failed`, error);
+    return '';
+  }
+};
+
 const warn = (target: string, message: string, details?: WarningDetails) => {
   const parts = [NOOP_PREFIX, target, message];
-  const suffix = details ? JSON.stringify(details) : '';
+  const suffix = stringifyDetails(details);
   console.warn(parts.filter(Boolean).join(' '), suffix);
 };
 
