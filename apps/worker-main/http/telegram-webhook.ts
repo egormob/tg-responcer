@@ -106,7 +106,7 @@ const isCommandForThisBot = (command: string, botUsername?: string) => {
   }
 
   if (!botUsername) {
-    return true;
+    return false;
   }
 
   return mention.toLowerCase() === botUsername.toLowerCase();
