@@ -1,4 +1,2 @@
-// Placeholder for real adapter implementations.
-// Конкретные адаптеры будут добавлены после определения портов.
-
-export {};
+export { createTelegramMessagingAdapter } from './telegram';
+export type { TelegramMessagingAdapterOptions } from './telegram';
