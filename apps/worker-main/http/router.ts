@@ -1,4 +1,5 @@
 import { DialogEngine, type IncomingMessage } from '../core/DialogEngine';
+import type { TypingIndicator } from './typing-indicator';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -120,6 +121,7 @@ export interface RouterOptions {
   dialogEngine: DialogEngine;
   webhookSecret?: string;
   transformPayload?: TransformPayload;
+  typingIndicator?: TypingIndicator;
 }
 
 const normalizePath = (pathname: string) => pathname.replace(/\/$/, '');
@@ -189,8 +191,15 @@ export const createRouter = (options: RouterOptions) => {
       return new Response(reason, { status: 400 });
     }
 
+    const executeDialog = () => options.dialogEngine.handleMessage(message);
+
     try {
-      const result = await options.dialogEngine.handleMessage(message);
+      const result = options.typingIndicator
+        ? await options.typingIndicator.runWithTyping(
+            { chatId: message.chat.id, threadId: message.chat.threadId },
+            executeDialog,
+          )
+        : await executeDialog();
 
       if (result.status === 'rate_limited') {
         return jsonResponse({ status: 'rate_limited' }, { status: 429 });

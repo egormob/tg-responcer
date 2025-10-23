@@ -8,6 +8,13 @@ export {
   type TransformPayloadResult,
 } from './router';
 export {
+  createTypingIndicator,
+  type TypingIndicator,
+  type TypingIndicatorContext,
+  type TypingIndicatorOptions,
+  type TypingIndicatorRun,
+} from './typing-indicator';
+export {
   transformTelegramUpdate,
   type TelegramAdminCommandContext,
   type TelegramCommandUser,

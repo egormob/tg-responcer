@@ -136,7 +136,7 @@ describe('http router', () => {
       webhookSecret: 'secret',
       transformPayload: async () => ({
         kind: 'handled',
-        response: new Response('handled', { status: 204 }),
+        response: new Response('handled', { status: 202 }),
       }),
     });
 
@@ -148,8 +148,45 @@ describe('http router', () => {
       }),
     );
 
-    expect(response.status).toBe(204);
+    expect(response.status).toBe(202);
     expect(await response.text()).toBe('handled');
     expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('wraps dialog engine call with typing indicator when provided', async () => {
+    const handleMessage = vi
+      .fn<Parameters<DialogEngine['handleMessage']>, ReturnType<DialogEngine['handleMessage']>>()
+      .mockResolvedValue({ status: 'replied', response: { text: 'ok' } });
+    const typingIndicator = {
+      runWithTyping: vi.fn(async (_context, run: () => Promise<unknown>) => run()),
+    };
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      webhookSecret: 'secret',
+      typingIndicator: typingIndicator,
+    });
+
+    const payload = {
+      user: { userId: 'user-typing' },
+      chat: { id: 'chat-typing', threadId: 'thread-typing' },
+      text: 'typing test',
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(typingIndicator.runWithTyping).toHaveBeenCalledTimes(1);
+    expect(typingIndicator.runWithTyping).toHaveBeenCalledWith(
+      { chatId: 'chat-typing', threadId: 'thread-typing' },
+      expect.any(Function),
+    );
+    expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 });
