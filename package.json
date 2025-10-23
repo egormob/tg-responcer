@@ -1,0 +1,14 @@
+{
+  "name": "tg-responcer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "vitest",
+    "test:core": "vitest run apps/worker-main/core/__tests__/DialogEngine.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
