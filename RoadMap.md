@@ -191,6 +191,7 @@
 2. Адаптер `StoragePort` для D1.
    - **Результат:** CRUD-операции сохраняют пользователей и сообщения, `getRecentMessages` возвращает N последних реплик.
    - **Проверка:** тесты с `@cloudflare/workers-types` + `better-sqlite3` (локально) проверяют вставку/чтение и корректный порядок сообщений.
+   - **Статус:** ✅ Реализован адаптер `createD1StorageAdapter`, добавлены модульные тесты `apps/worker-main/adapters/d1-storage/__tests__/d1-storage.test.ts`, покрывающие апдейт пользователя, дедупликацию сообщений и выборку истории.
 3. Интеграция в композицию.
    - **Результат:** `compose.ts` подключает адаптер при наличии D1 binding, иначе NOOP.
    - **Проверка:** `npm run test -- composition-storage`; отрицательный тест без биндинга возвращает NOOP.
@@ -306,6 +307,7 @@
 - 2025-10-24: Настроен менеджер typing-индикации, роутер вызывает его перед ядром, добавлены тесты `apps/worker-main/http/__tests__/typing-indicator.test.ts`.
 - 2025-10-24: Добавлен адаптер OpenAI Responses с таймаутами, ретраями и фильтрацией управляющих символов; написаны тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`.
 - 2025-10-24: Подготовлена стартовая миграция D1 `0001_init_dialog_tables.sql` с таблицами пользователей и сообщений.
+- 2025-10-24: Реализован адаптер `createD1StorageAdapter` для Cloudflare D1 с модульными тестами `apps/worker-main/adapters/d1-storage/__tests__/d1-storage.test.ts`.
 
 ## Быстрый протокол действий
 1. Проверить ветку и статус репозитория.
