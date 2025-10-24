@@ -186,6 +186,8 @@
    - **Результат:** SQL миграции для таблиц `users`, `messages` (user_id, role, content, timestamps, metadata).
    - **Проверка:** `wrangler d1 execute <DB> --file=...` создаёт таблицы без ошибок; локально проверен откат миграции.
    - **Внешние действия:** создать D1 binding `wrangler d1 create dialog-db`, привязать в `wrangler.toml` как `DB`.
+   - **Статус:** ✅ Добавлена миграция `0001_init_dialog_tables.sql` с таблицами `users`, `messages` и индексами по пользователям
+     и временным меткам для быстрых выборок контекста.
 2. Адаптер `StoragePort` для D1.
    - **Результат:** CRUD-операции сохраняют пользователей и сообщения, `getRecentMessages` возвращает N последних реплик.
    - **Проверка:** тесты с `@cloudflare/workers-types` + `better-sqlite3` (локально) проверяют вставку/чтение и корректный порядок сообщений.
@@ -303,6 +305,7 @@
 - 2025-10-24: Реализован адаптер Telegram messaging с ретраями и модульными тестами `apps/worker-main/adapters/telegram/__tests__/messaging.test.ts`.
 - 2025-10-24: Настроен менеджер typing-индикации, роутер вызывает его перед ядром, добавлены тесты `apps/worker-main/http/__tests__/typing-indicator.test.ts`.
 - 2025-10-24: Добавлен адаптер OpenAI Responses с таймаутами, ретраями и фильтрацией управляющих символов; написаны тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`.
+- 2025-10-24: Подготовлена стартовая миграция D1 `0001_init_dialog_tables.sql` с таблицами пользователей и сообщений.
 
 ## Быстрый протокол действий
 1. Проверить ветку и статус репозитория.
