@@ -16,12 +16,16 @@ describe('createOpenAIResponsesAdapter', () => {
   const apiKey = 'test-key';
   const assistantId = 'asst_123';
 
-  const createAdapter = (fetchMock: ReturnType<typeof createFetchMock>): AiPort =>
+  const createAdapter = (
+    fetchMock: ReturnType<typeof createFetchMock>,
+    options: Partial<{ timeout: number; maxRetries: number }> = {},
+  ): AiPort =>
     createOpenAIResponsesAdapter({
       apiKey,
       assistantId,
       fetchApi: fetchMock,
-      requestTimeoutMs: 5_000,
+      requestTimeoutMs: options.timeout ?? 5_000,
+      maxRetries: options.maxRetries,
     });
 
   it('sends request with context and returns text', async () => {
@@ -152,5 +156,67 @@ describe('createOpenAIResponsesAdapter', () => {
     await expect(
       adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
     ).rejects.toThrow(/empty output/i);
+  });
+
+  it('aborts when retries exhaust the global timeout budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    try {
+      let attempt = 0;
+      const fetchMock = vi
+        .fn<Parameters<typeof fetch>, Promise<Response>>()
+        .mockImplementation((_, init) => {
+          const currentAttempt = attempt;
+          attempt += 1;
+
+          return new Promise<Response>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              if (currentAttempt < 2) {
+                resolve(
+                  createResponse(
+                    { error: { message: 'rate limit' } },
+                    { status: 429, headers: { 'x-request-id': `req_${currentAttempt}` } },
+                  ),
+                );
+                return;
+              }
+
+              resolve(
+                createResponse({
+                  id: 'resp_success',
+                  status: 'completed',
+                  output: [
+                    { type: 'message', content: [{ type: 'output_text', text: 'Done' }] },
+                  ],
+                }),
+              );
+            }, 500);
+
+            init?.signal?.addEventListener('abort', () => {
+              clearTimeout(timer);
+              const abortError = new Error('Aborted');
+              abortError.name = 'AbortError';
+              reject(abortError);
+            });
+          });
+        });
+
+      const adapter = createAdapter(fetchMock, { timeout: 1_200, maxRetries: 3 });
+
+      const replyPromise = adapter.reply({ userId: 'u', text: 'Ping', context: [] });
+      replyPromise.catch(() => {
+        // prevent unhandled rejection warnings in Node while the expectation attaches
+      });
+      const expectation = expect(replyPromise).rejects.toThrow(/timed out/i);
+
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(200);
+
+      await expectation;
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

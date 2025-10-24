@@ -149,15 +149,19 @@ export const createOpenAIResponsesAdapter = (
 ): AiPort => {
   const fetchImpl = options.fetchApi ?? fetch;
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-  const timeoutMs = Math.min(options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+  const timeoutBudgetMs = Math.min(
+    options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+    DEFAULT_TIMEOUT_MS,
+  );
   const maxRetries = Math.max(1, Math.min(options.maxRetries ?? DEFAULT_MAX_RETRIES, DEFAULT_MAX_RETRIES));
   const { logger } = options;
 
   const execute = async (
     requestInit: RequestInit,
     attempt: number,
+    attemptTimeoutMs: number,
   ): Promise<{ payload: ResponsesApiSuccessPayload; requestId?: string }> => {
-    const { signal, dispose } = createAbortSignal(timeoutMs);
+    const { signal, dispose } = createAbortSignal(attemptTimeoutMs);
 
     try {
       const response = await fetchImpl(baseUrl, {
@@ -235,8 +239,17 @@ export const createOpenAIResponsesAdapter = (
       let attempt = 0;
       let lastError: unknown;
 
+      const deadline = Date.now() + timeoutBudgetMs;
+
       while (attempt < maxRetries) {
+        const remainingTime = deadline - Date.now();
+        if (remainingTime <= 0) {
+          logger?.error?.('openai-responses global timeout exceeded', { attempt });
+          throw createWrappedError(new Error('OpenAI Responses request timed out'));
+        }
+
         try {
+          const attemptTimeout = Math.max(1, remainingTime);
           const { payload, requestId } = await execute(
             {
               method: 'POST',
@@ -248,6 +261,7 @@ export const createOpenAIResponsesAdapter = (
               body: JSON.stringify(body),
             },
             attempt,
+            attemptTimeout,
           );
 
           const text = extractTextFromPayload(payload);
