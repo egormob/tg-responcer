@@ -213,9 +213,11 @@
    - **Результат:** реализация инкремента суточных счётчиков, TTL = 24ч.
    - **Проверка:** юнит-тесты с локальным KV-симулятором (`miniflare`) проверяют достижение лимита и гонки при параллельных запросах.
    - **Внешние действия:** создать KV namespace `wrangler kv:namespace create RATE_LIMIT`, привязать как `RATE_LIMIT_KV`.
+   - **Статус:** ✅ Реализован адаптер `createKvRateLimitAdapter`, ключи сегментируются по окнам 24ч, покрыто тестами `apps/worker-main/adapters/kv-rate-limit/__tests__/kv-rate-limit.test.ts`.
 2. Фича `features/limits`.
    - **Результат:** middleware блокирует ядро при превышении лимита, отправляет пользователю уведомление, логирует событие с ключевыми полями (`userId`, `limit`, `ttl`).
    - **Проверка:** интеграционный тест с имитацией нескольких запросов; `npm run test -- limits` и проверка логов; метрика отказов лимита доступна в аналитике.
+   - **Статус:** ✅ Добавлен нотификатор `createRateLimitNotifier`, роутер вызывает его при ответе `'rate_limited'`, добавлены тесты `apps/worker-main/features/limits/__tests__/rate-limit-notifier.test.ts` и `apps/worker-main/http/__tests__/router.test.ts`.
 3. Конфигурация KV-флага.
    - **Результат:** `KV` ключ `LIMITS_ENABLED` включает/отключает middleware без перезагрузки воркера.
    - **Проверка:** ручной тест: переключить ключ через `wrangler kv:key put`, убедиться, что лимит срабатывает/не срабатывает без redeploy; фиксируем задержку распространения.
@@ -309,6 +311,8 @@
 - 2025-10-24: Подготовлена стартовая миграция D1 `0001_init_dialog_tables.sql` с таблицами пользователей и сообщений.
 - 2025-10-24: Реализован адаптер `createD1StorageAdapter` для Cloudflare D1 с модульными тестами `apps/worker-main/adapters/d1-storage/__tests__/d1-storage.test.ts`.
 - 2025-10-24: Настроен KV-флаг `LIMITS_ENABLED` для гибкого отключения лимитов, добавлены обёртки и тесты `apps/worker-main/features/limits`.
+- 2025-10-24: Добавлен KV-адаптер лимитов `createKvRateLimitAdapter` с TTL 24 часа и юнит-тестами `apps/worker-main/adapters/kv-rate-limit/__tests__/kv-rate-limit.test.ts`.
+- 2025-10-24: Реализован нотификатор лимита `createRateLimitNotifier`, HTTP-роутер рассылает предупреждения и покрыт тестами `apps/worker-main/features/limits/__tests__/rate-limit-notifier.test.ts`, `apps/worker-main/http/__tests__/router.test.ts`.
 
 ## Быстрый протокол действий
 1. Проверить ветку и статус репозитория.
