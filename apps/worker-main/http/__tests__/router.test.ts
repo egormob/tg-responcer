@@ -225,4 +225,35 @@ describe('http router', () => {
     );
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
+
+  it('returns 404 for admin export when handler is not configured', async () => {
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      webhookSecret: 'secret',
+    });
+
+    const response = await router.handle(new Request('https://example.com/admin/export'));
+
+    expect(response.status).toBe(404);
+  });
+
+  it('delegates admin export requests to provided handler', async () => {
+    const exportHandler = vi.fn().mockResolvedValue(new Response('csv', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      webhookSecret: 'secret',
+      admin: {
+        export: exportHandler,
+      },
+    });
+
+    const request = new Request('https://example.com/admin/export?limit=10', {
+      headers: { 'x-admin-token': 'secret' },
+    });
+
+    await router.handle(request);
+
+    expect(exportHandler).toHaveBeenCalledTimes(1);
+    expect(exportHandler).toHaveBeenCalledWith(request);
+  });
 });
