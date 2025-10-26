@@ -308,6 +308,7 @@
 - 2025-10-24: Добавлен адаптер OpenAI Responses с таймаутами, ретраями и фильтрацией управляющих символов; написаны тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`.
 - 2025-10-24: Подготовлена стартовая миграция D1 `0001_init_dialog_tables.sql` с таблицами пользователей и сообщений.
 - 2025-10-24: Реализован адаптер `createD1StorageAdapter` для Cloudflare D1 с модульными тестами `apps/worker-main/adapters/d1-storage/__tests__/d1-storage.test.ts`.
+- 2025-10-24: Настроен KV-флаг `LIMITS_ENABLED` для гибкого отключения лимитов, добавлены обёртки и тесты `apps/worker-main/features/limits`.
 
 ## Быстрый протокол действий
 1. Проверить ветку и статус репозитория.

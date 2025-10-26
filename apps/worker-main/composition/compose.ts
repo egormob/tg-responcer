@@ -1,9 +1,11 @@
 import { DialogEngine, type DialogEngineOptions } from '../core/DialogEngine';
 import { createNoopPorts, type NoopPorts } from '../adapters-noop';
+import { createRateLimitToggle, type LimitsFlagKvNamespace } from '../features/limits';
 import type { AiPort, MessagingPort, RateLimitPort, StoragePort } from '../ports';
 
 export interface ComposeEnv {
   TELEGRAM_WEBHOOK_SECRET?: string;
+  RATE_LIMIT_KV?: LimitsFlagKvNamespace;
 }
 
 export interface PortOverrides {
@@ -38,7 +40,19 @@ const mergePorts = (
 
 export const composeWorker = (options: ComposeOptions): CompositionResult => {
   const noopPorts = createNoopPorts();
-  const ports = mergePorts(options.adapters, noopPorts);
+  const basePorts = mergePorts(options.adapters, noopPorts);
+
+  const rateLimitPort = options.env.RATE_LIMIT_KV
+    ? createRateLimitToggle({
+        kv: options.env.RATE_LIMIT_KV,
+        rateLimit: basePorts.rateLimit,
+      })
+    : basePorts.rateLimit;
+
+  const ports: PortOverrides = {
+    ...basePorts,
+    rateLimit: rateLimitPort,
+  };
 
   const dialogEngine = new DialogEngine(
     {
