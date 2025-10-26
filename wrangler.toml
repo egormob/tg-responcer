@@ -1,0 +1,6 @@
+name = "tg-responcer"
+main = "apps/worker-main/index.ts"
+compatibility_date = "2025-10-26"
+
+[vars]
+# Позднее добавим биндинги D1/KV
