@@ -1,0 +1,8 @@
+node_modules/
+logs/
+snapshot/
+.DS_Store
+
+# Wrangler artifacts
+.worker/
+wrangler.toml.local
