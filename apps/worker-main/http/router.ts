@@ -125,6 +125,9 @@ export interface RouterOptions {
   rateLimitNotifier?: {
     notify(input: { userId: string; chatId: string; threadId?: string }): Promise<void>;
   };
+  admin?: {
+    export?: (request: Request) => Promise<Response>;
+  };
 }
 
 const normalizePath = (pathname: string) => pathname.replace(/\/$/, '');
@@ -246,6 +249,14 @@ export const createRouter = (options: RouterOptions) => {
 
       if (pathname.startsWith('/webhook')) {
         return handleWebhook(request, url);
+      }
+
+      if (pathname === '/admin/export') {
+        if (!options.admin?.export) {
+          return handleNotFound();
+        }
+
+        return options.admin.export(request);
       }
 
       return handleNotFound();
