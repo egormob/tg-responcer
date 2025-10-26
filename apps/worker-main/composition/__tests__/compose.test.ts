@@ -119,4 +119,29 @@ describe('composeWorker', () => {
       limit: 2,
     });
   });
+
+  it('disables rate limiting when kv flag is off', async () => {
+    const adapters = createPortOverrides();
+    adapters.rateLimit.checkAndIncrement.mockResolvedValue('limit');
+
+    const kv = {
+      get: vi.fn().mockResolvedValue('false'),
+    };
+
+    const composition = composeWorker({
+      env: { TELEGRAM_WEBHOOK_SECRET: 'secret', RATE_LIMIT_KV: kv },
+      adapters,
+    });
+
+    const result = await composition.dialogEngine.handleMessage({
+      user: { userId: 'user-4' },
+      chat: { id: 'chat-4' },
+      text: 'hello',
+      receivedAt: new Date(),
+    });
+
+    expect(result.status).toBe('replied');
+    expect(kv.get).toHaveBeenCalledWith('LIMITS_ENABLED');
+    expect(adapters.rateLimit.checkAndIncrement).not.toHaveBeenCalled();
+  });
 });
