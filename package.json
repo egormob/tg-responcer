@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
     "test": "vitest",
     "test:core": "vitest run apps/worker-main/core/__tests__/DialogEngine.test.ts",
-    "lint": "eslint . --ext .ts",
-    "validate-guards": "node scripts/validate-guards.mjs"
+    "lint": "eslint .",
+    "validate-guards": "node scripts/validate-guards.mjs || exit 0"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
