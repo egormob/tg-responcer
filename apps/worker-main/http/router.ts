@@ -122,6 +122,9 @@ export interface RouterOptions {
   webhookSecret?: string;
   transformPayload?: TransformPayload;
   typingIndicator?: TypingIndicator;
+  rateLimitNotifier?: {
+    notify(input: { userId: string; chatId: string; threadId?: string }): Promise<void>;
+  };
 }
 
 const normalizePath = (pathname: string) => pathname.replace(/\/$/, '');
@@ -202,6 +205,19 @@ export const createRouter = (options: RouterOptions) => {
         : await executeDialog();
 
       if (result.status === 'rate_limited') {
+        if (options.rateLimitNotifier) {
+          try {
+            await options.rateLimitNotifier.notify({
+              userId: message.user.userId,
+              chatId: message.chat.id,
+              threadId: message.chat.threadId,
+            });
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.warn('[router] rate limit notifier failed', error);
+          }
+        }
+
         return jsonResponse({ status: 'rate_limited' }, { status: 429 });
       }
 

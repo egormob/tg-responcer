@@ -79,9 +79,11 @@ describe('http router', () => {
 
   it('returns 429 when dialog engine signals rate limit', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
+    const notify = vi.fn().mockResolvedValue(undefined);
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
       webhookSecret: 'secret',
+      rateLimitNotifier: { notify },
     });
 
     const response = await router.handle(
@@ -98,6 +100,40 @@ describe('http router', () => {
 
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual({ status: 'rate_limited' });
+    expect(notify).toHaveBeenCalledWith({
+      userId: 'user-2',
+      chatId: 'chat-2',
+      threadId: undefined,
+    });
+  });
+
+  it('logs warning when notifier throws but still returns 429', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
+    const notify = vi.fn().mockRejectedValue(new Error('notify failed'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      webhookSecret: 'secret',
+      rateLimitNotifier: { notify },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-3' },
+          chat: { id: 'chat-3' },
+          text: 'hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(warnSpy).toHaveBeenCalledWith('[router] rate limit notifier failed', expect.any(Error));
+
+    warnSpy.mockRestore();
   });
 
   it('returns 400 for invalid payload', async () => {
