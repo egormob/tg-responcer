@@ -30,7 +30,9 @@ interface WorkerBindings {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_BOT_USERNAME?: string;
   OPENAI_API_KEY?: string;
-  OPENAI_ASSISTANT_ID?: string;
+  OPENAI_MODEL?: string;
+  OPENAI_PROMPT_ID?: string;
+  OPENAI_PROMPT_VARIABLES?: string;
   ADMIN_EXPORT_TOKEN?: string;
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
@@ -101,6 +103,56 @@ const toPositiveDurationMs = (value: string | number | undefined): number | unde
   return undefined;
 };
 
+const getTrimmedString = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const normalizePromptId = (value: unknown): string | undefined => {
+  const trimmed = getTrimmedString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (!/^pmpt_[A-Za-z0-9-]+$/.test(trimmed)) {
+    console.error('[config] invalid OPENAI_PROMPT_ID', { promptId: trimmed });
+    throw new Error('OPENAI_PROMPT_ID must start with "pmpt_" and refer to a published OpenAI prompt');
+  }
+
+  return trimmed;
+};
+
+const parsePromptVariables = (value: unknown): Record<string, unknown> | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const raw = getTrimmedString(value);
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.error('[config] OPENAI_PROMPT_VARIABLES must be a JSON object', {
+        type: Array.isArray(parsed) ? 'array' : typeof parsed,
+      });
+      throw new Error('OPENAI_PROMPT_VARIABLES must be a JSON object');
+    }
+
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[config] failed to parse OPENAI_PROMPT_VARIABLES', { error: message });
+    throw new Error('OPENAI_PROMPT_VARIABLES must be valid JSON');
+  }
+};
+
 const createPortOverrides = (env: WorkerEnv): Partial<PortOverrides> => {
   const overrides: Partial<PortOverrides> = {};
 
@@ -110,15 +162,18 @@ const createPortOverrides = (env: WorkerEnv): Partial<PortOverrides> => {
     });
   }
 
-  if (
-    typeof env.OPENAI_API_KEY === 'string'
-    && env.OPENAI_API_KEY.length > 0
-    && typeof env.OPENAI_ASSISTANT_ID === 'string'
-    && env.OPENAI_ASSISTANT_ID.length > 0
-  ) {
+  const apiKey = getTrimmedString(env.OPENAI_API_KEY);
+  const model = getTrimmedString(env.OPENAI_MODEL);
+
+  if (apiKey && model) {
+    const promptId = normalizePromptId(env.OPENAI_PROMPT_ID);
+    const promptVariables = parsePromptVariables(env.OPENAI_PROMPT_VARIABLES);
+
     overrides.ai = createOpenAIResponsesAdapter({
-      apiKey: env.OPENAI_API_KEY,
-      assistantId: env.OPENAI_ASSISTANT_ID,
+      apiKey,
+      model,
+      promptId,
+      promptVariables,
     });
   }
 

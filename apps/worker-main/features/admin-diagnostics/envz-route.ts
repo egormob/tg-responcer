@@ -7,6 +7,37 @@ export interface CreateEnvzRouteOptions {
 const hasNonEmptyString = (value: unknown): boolean =>
   typeof value === 'string' && value.trim().length > 0;
 
+const hasValidPromptId = (value: unknown): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  return /^pmpt_[A-Za-z0-9-]+$/.test(trimmed);
+};
+
+const hasValidPromptVariables = (value: unknown): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+};
+
 export const createEnvzRoute = (options: CreateEnvzRouteOptions) =>
   async (request: Request): Promise<Response> => {
     if (request.method !== 'GET') {
@@ -25,7 +56,9 @@ export const createEnvzRoute = (options: CreateEnvzRouteOptions) =>
         telegram_bot_token: hasNonEmptyString(env.TELEGRAM_BOT_TOKEN),
         telegram_bot_username: hasNonEmptyString(env.TELEGRAM_BOT_USERNAME),
         openai_api_key: hasNonEmptyString(env.OPENAI_API_KEY),
-        openai_assistant_id: hasNonEmptyString(env.OPENAI_ASSISTANT_ID),
+        openai_model: hasNonEmptyString(env.OPENAI_MODEL),
+        openai_prompt_id: hasValidPromptId(env.OPENAI_PROMPT_ID),
+        openai_prompt_variables: hasValidPromptVariables(env.OPENAI_PROMPT_VARIABLES),
         admin_export_token: hasNonEmptyString(env.ADMIN_EXPORT_TOKEN),
         admin_token: hasNonEmptyString(env.ADMIN_TOKEN),
         db_bound: Boolean(env.DB),
