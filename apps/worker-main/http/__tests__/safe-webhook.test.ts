@@ -44,4 +44,46 @@ describe('safeWebhookHandler', () => {
       text: expect.stringContaining('Повторите'),
     });
   });
+
+  it('awaits fallback delivery before resolving the handler', async () => {
+    const messaging = createMessagingMock();
+    let resolveSend: (() => void) | undefined;
+    const sendTextMock = vi.fn(
+      () =>
+        new Promise<{ messageId?: string }>((resolve) => {
+          resolveSend = () => resolve({});
+        }),
+    );
+
+    messaging.sendText = sendTextMock as unknown as MessagingPort['sendText'];
+
+    const handlerPromise = safeWebhookHandler({
+      chat: { id: 'chat-3', threadId: 'thread-3' },
+      messaging,
+      run: async () => {
+        throw new Error('unexpected');
+      },
+      mapResult: async () => ({ body: { ok: false } }),
+    });
+
+    let isResolved = false;
+    const trackedPromise = handlerPromise.then((response) => {
+      isResolved = true;
+      return response;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(isResolved).toBe(false);
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+    expect(typeof resolveSend).toBe('function');
+
+    resolveSend?.();
+
+    const response = await trackedPromise;
+
+    expect(isResolved).toBe(true);
+    expect(response.status).toBe(200);
+  });
 });
