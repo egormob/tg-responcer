@@ -104,7 +104,8 @@ const extractTextFromPayload = (payload: ResponsesApiSuccessPayload): string => 
           return piece.text;
         }
 
-        const nestedText = (piece as { text?: unknown }).text;
+        const nestedText =
+          piece && typeof piece === 'object' ? (piece as { text?: unknown }).text : undefined;
         if (
           nestedText &&
           typeof nestedText === 'object' &&
