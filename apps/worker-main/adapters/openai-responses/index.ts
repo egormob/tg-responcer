@@ -3,6 +3,7 @@ import type { AiPort, ConversationTurn } from '../../ports';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
+const ASSISTANTS_BASE_URL = 'https://api.openai.com/v1/assistants';
 
 export interface OpenAIResponsesAdapterOptions {
   apiKey: string;
@@ -197,6 +198,73 @@ export const createOpenAIResponsesAdapter = (
   );
   const maxRetries = Math.max(1, Math.min(options.maxRetries ?? DEFAULT_MAX_RETRIES, DEFAULT_MAX_RETRIES));
   const { logger } = options;
+  let cachedAssistantModel: string | undefined;
+  let assistantModelPromise: Promise<string> | undefined;
+
+  const fetchAssistantModel = async (timeoutMs: number): Promise<string> => {
+    if (typeof cachedAssistantModel === 'string') {
+      return cachedAssistantModel;
+    }
+
+    if (!assistantModelPromise) {
+      assistantModelPromise = (async () => {
+        const { signal, dispose } = createAbortSignal(Math.max(1, timeoutMs));
+        try {
+          const response = await fetchImpl(`${ASSISTANTS_BASE_URL}/${options.assistantId}`, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${options.apiKey}`,
+              'Content-Type': 'application/json',
+              'OpenAI-Beta': 'assistants=v2',
+            },
+            signal,
+          });
+
+          if (!response.ok) {
+            const error = new Error(
+              `Failed to fetch OpenAI assistant configuration (status ${response.status})`,
+            );
+            logger?.error?.('openai-assistant fetch failed', {
+              status: response.status,
+              assistantId: options.assistantId,
+            });
+            throw error;
+          }
+
+          let payload: { model?: unknown };
+          try {
+            payload = (await response.json()) as { model?: unknown };
+          } catch (parseError) {
+            logger?.error?.('openai-assistant invalid payload', {
+              assistantId: options.assistantId,
+            });
+            throw new Error('Failed to parse OpenAI assistant configuration response');
+          }
+
+          const model = typeof payload?.model === 'string' && payload.model.trim().length > 0
+            ? payload.model
+            : undefined;
+
+          if (!model) {
+            logger?.error?.('openai-assistant missing model', {
+              assistantId: options.assistantId,
+            });
+            throw new Error('OpenAI assistant model is missing');
+          }
+
+          cachedAssistantModel = model;
+          return model;
+        } finally {
+          dispose();
+        }
+      })().catch((error) => {
+        assistantModelPromise = undefined;
+        throw error;
+      });
+    }
+
+    return assistantModelPromise;
+  };
 
   const execute = async (
     requestInit: RequestInit,
@@ -287,18 +355,41 @@ export const createOpenAIResponsesAdapter = (
 
   return {
     async reply(input) {
+      let attempt = 0;
+      let lastError: unknown;
+
+      const deadline = Date.now() + timeoutBudgetMs;
+
+      const resolveAssistantModel = async (): Promise<string> => {
+        const remainingTime = deadline - Date.now();
+        if (remainingTime <= 0) {
+          logger?.error?.('openai-responses global timeout exceeded while fetching model');
+          throw createWrappedError(new Error('OpenAI Responses request timed out'));
+        }
+
+        try {
+          return await fetchAssistantModel(remainingTime);
+        } catch (error) {
+          if (error instanceof Error && error.message === 'OpenAI assistant model is missing') {
+            throw error;
+          }
+
+          throw createWrappedError(
+            error instanceof Error ? error : new Error('Failed to resolve assistant model'),
+          );
+        }
+      };
+
+      const assistantModel = await resolveAssistantModel();
+
       const body = {
         assistant_id: options.assistantId,
+        model: assistantModel,
         input: buildInputMessages(input.context, input.text),
         metadata: {
           userId: input.userId,
         },
       };
-
-      let attempt = 0;
-      let lastError: unknown;
-
-      const deadline = Date.now() + timeoutBudgetMs;
 
       while (attempt < maxRetries) {
         const remainingTime = deadline - Date.now();

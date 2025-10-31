@@ -12,6 +12,9 @@ const createResponse = (body: unknown, init?: ResponseInit) =>
     ...init,
   });
 
+const createAssistantResponse = (model = 'gpt-4o-mini') =>
+  new Response(JSON.stringify({ id: 'asst_123', model }), { status: 200 });
+
 describe('createOpenAIResponsesAdapter', () => {
   const apiKey = 'test-key';
   const assistantId = 'asst_123';
@@ -30,6 +33,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('sends request with context and returns text', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({
         id: 'resp_1',
@@ -67,19 +71,24 @@ describe('createOpenAIResponsesAdapter', () => {
       },
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('https://api.openai.com/v1/responses');
-    expect(init?.method).toBe('POST');
-    expect(init?.headers).toMatchObject({
+    expect(url).toBe('https://api.openai.com/v1/assistants/asst_123');
+    expect(init?.method ?? 'GET').toBe('GET');
+
+    const [postUrl, postInit] = fetchMock.mock.calls[1] ?? [];
+    expect(postUrl).toBe('https://api.openai.com/v1/responses');
+    expect(postInit?.method).toBe('POST');
+    expect(postInit?.headers).toMatchObject({
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'OpenAI-Beta': 'assistants=v2',
     });
 
-    const payload = JSON.parse((init?.body as string) ?? '{}');
+    const payload = JSON.parse((postInit?.body as string) ?? '{}');
     expect(payload).toMatchObject({
       assistant_id: assistantId,
+      model: 'gpt-4o-mini',
       metadata: { userId: 'user-1' },
       input: [
         {
@@ -107,8 +116,72 @@ describe('createOpenAIResponsesAdapter', () => {
     expect(userEntries[0]?.content?.[0]?.text).toBe('How are you?');
   });
 
+  it('fetches assistant model once and reuses it for subsequent replies', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse('gpt-4o-mini')); // initial GET
+    fetchMock
+      .mockResolvedValueOnce(
+        createResponse({
+          id: 'resp_first',
+          status: 'completed',
+          output_text: 'First reply',
+        }),
+      )
+      .mockResolvedValueOnce(
+        createResponse({
+          id: 'resp_second',
+          status: 'completed',
+          output_text: 'Second reply',
+        }),
+      );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({ userId: 'u1', text: 'Ping', context: [] }),
+    ).resolves.toMatchObject({ text: 'First reply' });
+
+    await expect(
+      adapter.reply({ userId: 'u1', text: 'Another', context: [] }),
+    ).resolves.toMatchObject({ text: 'Second reply' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.openai.com/v1/assistants/asst_123');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://api.openai.com/v1/responses');
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('https://api.openai.com/v1/responses');
+  });
+
+  it('throws descriptive error when assistant model is missing', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'asst_123' }), { status: 200 }));
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
+    ).rejects.toThrow('OpenAI assistant model is missing');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps assistant fetch failures with context', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404 }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
+    ).rejects.toThrow(/Failed to fetch OpenAI assistant configuration/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('extracts text when content uses nested value payload', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({
         id: 'resp_nested',
@@ -146,6 +219,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('prefers output_text when provided as a string', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({
         id: 'resp_output_text',
@@ -180,6 +254,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('supports output_text provided as array of strings', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({
         id: 'resp_output_text_array',
@@ -205,6 +280,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('combines plain and nested text fragments in order', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({
         id: 'resp_mixed',
@@ -239,6 +315,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('retries on retryable errors and succeeds', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock
       .mockResolvedValueOnce(
         createResponse(
@@ -266,11 +343,12 @@ describe('createOpenAIResponsesAdapter', () => {
       }),
     ).resolves.toMatchObject({ text: 'Done' });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('throws after exhausting retries on network error', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockRejectedValue(new TypeError('network down'));
 
     const adapter = createAdapter(fetchMock);
@@ -278,11 +356,12 @@ describe('createOpenAIResponsesAdapter', () => {
     await expect(
       adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
     ).rejects.toThrow(/openai responses/i);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('throws when response output is empty', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValueOnce(
       createResponse({ id: 'resp', status: 'completed', output: [] }),
     );
@@ -296,6 +375,7 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('throws AI_NON_2XX when non-retryable response persists', async () => {
     const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(createAssistantResponse());
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ error: { message: 'bad request' } }), {
         status: 400,
@@ -317,7 +397,11 @@ describe('createOpenAIResponsesAdapter', () => {
       let attempt = 0;
       const fetchMock = vi
         .fn<Parameters<typeof fetch>, Promise<Response>>()
-        .mockImplementation((_, init) => {
+        .mockImplementation((url, init) => {
+          if ((init?.method ?? 'GET') === 'GET') {
+            return Promise.resolve(createAssistantResponse());
+          }
+
           const currentAttempt = attempt;
           attempt += 1;
 
@@ -366,7 +450,7 @@ describe('createOpenAIResponsesAdapter', () => {
       await vi.advanceTimersByTimeAsync(200);
 
       await expectation;
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
