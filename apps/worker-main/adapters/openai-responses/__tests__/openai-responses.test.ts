@@ -106,6 +106,75 @@ describe('createOpenAIResponsesAdapter', () => {
     expect(userEntries[0]?.content?.[0]?.text).toBe('How are you?');
   });
 
+  it('extracts text when content uses nested value payload', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_nested',
+        status: 'completed',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              { type: 'output_text', text: { value: 'Nested hello!' } },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({
+        userId: 'user-2',
+        text: 'Hi?',
+        context: [],
+      }),
+    ).resolves.toEqual({
+      text: 'Nested hello!',
+      metadata: {
+        responseId: 'resp_nested',
+        status: 'completed',
+        requestId: 'req_123',
+      },
+    });
+  });
+
+  it('combines plain and nested text fragments in order', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_mixed',
+        status: 'completed',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              { type: 'output_text', text: 'First part' },
+              { type: 'output_text', text: { value: 'Second part' } },
+              { type: 'output_text', text: '   ' },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({
+        userId: 'user-3',
+        text: 'Ping',
+        context: [],
+      }),
+    ).resolves.toMatchObject({
+      text: 'First part\nSecond part',
+    });
+  });
+
   it('retries on retryable errors and succeeds', async () => {
     const fetchMock = createFetchMock();
     fetchMock
