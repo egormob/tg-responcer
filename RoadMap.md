@@ -160,6 +160,7 @@
    - **Результат:** `adapters/openai-responses` формирует запрос `POST https://api.openai.com/v1/responses` с `assistant_id`, диалоговым контекстом, таймаутом и обработкой ошибок/ретраев (до 2 повторов).
    - **Проверка:** юнит-тесты с `fetch-mock` проверяют тело запроса, таймаут и обработку ошибок; `npm run test -- openai-adapter`; проверяется логирование requestId/responseId.
    - **Статус:** ✅ Реализован адаптер `createOpenAIResponsesAdapter`, добавлены модульные тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts`, покрывающие ретраи, таймаут и очистку текста.
+   - **Обновление:** Ошибка OpenAI `Missing required parameter: 'model'` закрыта — адаптер лениво запрашивает модель ассистента и кеширует её перед `POST /v1/responses` (см. [memory-bank/openai-responses-model.md](memory-bank/openai-responses-model.md)).
 2. Конфигурация секретов.
    - **Внешние действия:**
      - `wrangler secret put OPENAI_API_KEY`.
