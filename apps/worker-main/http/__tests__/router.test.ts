@@ -305,6 +305,31 @@ describe('http router', () => {
     expect(passedRequest.headers.get('x-admin-token')).toBe('secret');
   });
 
+  it('accepts dedicated admin export token when different from global token', async () => {
+    const exportHandler = vi.fn().mockResolvedValue(new Response('csv', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'global-secret',
+        exportToken: 'export-secret',
+        export: exportHandler,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/export', {
+        headers: { 'x-admin-token': 'export-secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(exportHandler).toHaveBeenCalledTimes(1);
+    const passedRequest = exportHandler.mock.calls[0][0];
+    expect(passedRequest.headers.get('x-admin-token')).toBe('export-secret');
+  });
+
   it('enforces admin token for selftest route', async () => {
     const selfTest = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
     const router = createRouter({

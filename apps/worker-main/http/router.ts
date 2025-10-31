@@ -130,6 +130,7 @@ export interface RouterOptions {
   };
   admin?: {
     token: string;
+    exportToken?: string;
     export?: (request: Request) => Promise<Response>;
     selfTest?: (request: Request) => Promise<Response>;
     envz?: (request: Request) => Promise<Response>;
@@ -162,7 +163,11 @@ export const createRouter = (options: RouterOptions) => {
       { status },
     );
 
-  const ensureAdminAuthorization = (request: Request, url: URL):
+  const ensureAdminAuthorization = (
+    request: Request,
+    url: URL,
+    allowedTokens: string[] = [options.admin?.token ?? ''],
+  ):
   | { ok: true; request: Request }
   | { ok: false; response: Response } => {
     if (!options.admin?.token) {
@@ -172,21 +177,27 @@ export const createRouter = (options: RouterOptions) => {
     const headerToken = request.headers.get('x-admin-token');
     const queryToken = url.searchParams.get('token');
 
+    const validTokens = allowedTokens.filter((token) => token && token.length > 0);
+
+    if (validTokens.length === 0) {
+      return { ok: false, response: unauthorizedResponse('Invalid admin token', 403) };
+    }
+
     if (!headerToken && !queryToken) {
       return { ok: false, response: unauthorizedResponse('Missing admin token', 401) };
     }
 
-    if (headerToken === options.admin.token) {
+    if (headerToken && validTokens.includes(headerToken)) {
       return { ok: true, request };
     }
 
-    if (queryToken === options.admin.token) {
-      if (headerToken === options.admin.token) {
+    if (queryToken && validTokens.includes(queryToken)) {
+      if (headerToken === queryToken) {
         return { ok: true, request };
       }
 
       const headers = new Headers(request.headers);
-      headers.set('x-admin-token', options.admin.token);
+      headers.set('x-admin-token', queryToken);
       const authorizedRequest = new Request(request, { headers });
       return { ok: true, request: authorizedRequest };
     }
@@ -305,7 +316,13 @@ export const createRouter = (options: RouterOptions) => {
           return handleNotFound();
         }
 
-        const auth = ensureAdminAuthorization(request, url);
+        const auth = ensureAdminAuthorization(
+          request,
+          url,
+          [options.admin.exportToken, options.admin.token].filter(
+            (token): token is string => typeof token === 'string' && token.length > 0,
+          ),
+        );
         if (!auth.ok) {
           return auth.response;
         }

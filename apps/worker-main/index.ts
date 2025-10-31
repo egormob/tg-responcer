@@ -189,6 +189,7 @@ const createAdminRoutes = (
       adminToken: env.ADMIN_EXPORT_TOKEN,
       handleExport,
     });
+    routes.exportToken = env.ADMIN_EXPORT_TOKEN;
   }
 
   return routes;
