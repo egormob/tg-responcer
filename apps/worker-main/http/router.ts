@@ -129,7 +129,10 @@ export interface RouterOptions {
     notify(input: { userId: string; chatId: string; threadId?: string }): Promise<void>;
   };
   admin?: {
+    token: string;
     export?: (request: Request) => Promise<Response>;
+    selfTest?: (request: Request) => Promise<Response>;
+    envz?: (request: Request) => Promise<Response>;
   };
 }
 
@@ -151,6 +154,45 @@ export const createRouter = (options: RouterOptions) => {
   const transformPayload = options.transformPayload ?? (async (payload: unknown) => parseIncomingMessage(payload));
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
+  const handleNotFound = () => new Response('Not Found', { status: 404 });
+
+  const unauthorizedResponse = (message: string, status: number) =>
+    jsonResponse(
+      { error: message },
+      { status },
+    );
+
+  const ensureAdminAuthorization = (request: Request, url: URL):
+  | { ok: true; request: Request }
+  | { ok: false; response: Response } => {
+    if (!options.admin?.token) {
+      return { ok: false, response: handleNotFound() };
+    }
+
+    const headerToken = request.headers.get('x-admin-token');
+    const queryToken = url.searchParams.get('token');
+
+    if (!headerToken && !queryToken) {
+      return { ok: false, response: unauthorizedResponse('Missing admin token', 401) };
+    }
+
+    if (headerToken === options.admin.token) {
+      return { ok: true, request };
+    }
+
+    if (queryToken === options.admin.token) {
+      if (headerToken === options.admin.token) {
+        return { ok: true, request };
+      }
+
+      const headers = new Headers(request.headers);
+      headers.set('x-admin-token', options.admin.token);
+      const authorizedRequest = new Request(request, { headers });
+      return { ok: true, request: authorizedRequest };
+    }
+
+    return { ok: false, response: unauthorizedResponse('Invalid admin token', 403) };
+  };
 
   const handleWebhook = async (request: Request, url: URL) => {
     if (!options.webhookSecret) {
@@ -245,8 +287,6 @@ export const createRouter = (options: RouterOptions) => {
     });
   };
 
-  const handleNotFound = () => new Response('Not Found', { status: 404 });
-
   return {
     async handle(request: Request): Promise<Response> {
       const url = new URL(request.url);
@@ -265,7 +305,38 @@ export const createRouter = (options: RouterOptions) => {
           return handleNotFound();
         }
 
-        return options.admin.export(request);
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.export(auth.request);
+      }
+
+      if (pathname === '/admin/selftest') {
+        if (!options.admin?.selfTest) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.selfTest(auth.request);
+      }
+
+      if (pathname === '/admin/envz') {
+        if (!options.admin?.envz) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.envz(auth.request);
       }
 
       return handleNotFound();

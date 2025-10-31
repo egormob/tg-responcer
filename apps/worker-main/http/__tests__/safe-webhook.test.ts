@@ -26,6 +26,7 @@ describe('safeWebhookHandler', () => {
 
   it('sends fallback message and still returns 200 when run throws', async () => {
     const messaging = createMessagingMock();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await safeWebhookHandler({
       chat: { id: 'chat-2' },
@@ -43,6 +44,9 @@ describe('safeWebhookHandler', () => {
       threadId: undefined,
       text: expect.stringContaining('Повторите'),
     });
+
+    expect(errorSpy).toHaveBeenCalledWith('[safe][error]', { err: 'Error: boom' });
+    errorSpy.mockRestore();
   });
 
   it('awaits fallback delivery before resolving the handler', async () => {
