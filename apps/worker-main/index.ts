@@ -199,6 +199,7 @@ const createRequestHandler = (env: WorkerEnv) => {
 
   const router = createRouter({
     dialogEngine: composition.dialogEngine,
+    messaging: composition.ports.messaging,
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),

@@ -1,5 +1,7 @@
 import { DialogEngine, type IncomingMessage } from '../core/DialogEngine';
+import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
+import { safeWebhookHandler } from './safe-webhook';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -119,6 +121,7 @@ export const parseIncomingMessage = (payload: unknown): IncomingMessage => {
 
 export interface RouterOptions {
   dialogEngine: DialogEngine;
+  messaging: MessagingPort;
   webhookSecret?: string;
   transformPayload?: TransformPayload;
   typingIndicator?: TypingIndicator;
@@ -197,43 +200,49 @@ export const createRouter = (options: RouterOptions) => {
       return new Response(reason, { status: 400 });
     }
 
-    const executeDialog = () => options.dialogEngine.handleMessage(message);
+    const runDialog = async () => {
+      const executeDialog = () => options.dialogEngine.handleMessage(message);
 
-    try {
-      const result = options.typingIndicator
+      const dialogResult = options.typingIndicator
         ? await options.typingIndicator.runWithTyping(
             { chatId: message.chat.id, threadId: message.chat.threadId },
             executeDialog,
           )
         : await executeDialog();
 
-      if (result.status === 'rate_limited') {
-        if (options.rateLimitNotifier) {
-          try {
-            await options.rateLimitNotifier.notify({
-              userId: message.user.userId,
-              chatId: message.chat.id,
-              threadId: message.chat.threadId,
-            });
-          } catch (error) {
-            // eslint-disable-next-line no-console
-            console.warn('[router] rate limit notifier failed', error);
-          }
+      if (dialogResult.status === 'rate_limited' && options.rateLimitNotifier) {
+        try {
+          await options.rateLimitNotifier.notify({
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+          });
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn('[router] rate limit notifier failed', error);
         }
-
-        return jsonResponse({ status: 'rate_limited' }, { status: 429 });
       }
 
-      return jsonResponse(
-        {
-          status: 'ok',
-          messageId: result.response.messageId ?? null,
-        },
-        { status: 200 },
-      );
-    } catch (error) {
-      return new Response('Internal Server Error', { status: 500 });
-    }
+      return dialogResult;
+    };
+
+    return safeWebhookHandler({
+      chat: { id: message.chat.id, threadId: message.chat.threadId },
+      messaging: options.messaging,
+      run: runDialog,
+      mapResult: async (result) => {
+        if (result.status === 'rate_limited') {
+          return { body: { status: 'rate_limited' } };
+        }
+
+        return {
+          body: {
+            status: 'ok',
+            messageId: result.response.messageId ?? null,
+          },
+        };
+      },
+    });
   };
 
   const handleNotFound = () => new Response('Not Found', { status: 404 });
