@@ -54,18 +54,20 @@ export async function safeWebhookHandler<T>(
     const fallback = fallbackText ?? DEFAULT_FALLBACK_TEXT;
 
     if (chat.id) {
-      try {
-        await messaging.sendText({
+      void messaging
+        .sendText({
           chatId: chat.id,
           threadId: chat.threadId,
           text: fallback,
+        })
+        .then(() => {
+          // eslint-disable-next-line no-console
+          console.info('[safe] fallback sent');
+        })
+        .catch((sendError) => {
+          // eslint-disable-next-line no-console
+          console.error('[safe][fallback][sendText][error]', String(sendError));
         });
-        // eslint-disable-next-line no-console
-        console.info('[safe] fallback sent');
-      } catch (sendError) {
-        // eslint-disable-next-line no-console
-        console.error('[safe][fallback][sendText][error]', String(sendError));
-      }
     }
 
     return new Response('ok', { status: 200 });
