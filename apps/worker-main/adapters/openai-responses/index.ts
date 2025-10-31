@@ -3,11 +3,12 @@ import type { AiPort, ConversationTurn } from '../../ports';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
-const ASSISTANTS_BASE_URL = 'https://api.openai.com/v1/assistants';
 
 export interface OpenAIResponsesAdapterOptions {
   apiKey: string;
-  assistantId: string;
+  model: string;
+  promptId?: string;
+  promptVariables?: Record<string, unknown>;
   fetchApi?: typeof fetch;
   baseUrl?: string;
   requestTimeoutMs?: number;
@@ -187,22 +188,66 @@ const createWrappedError = (cause: unknown, fallbackMessage?: string): Error => 
   return error;
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && Object.getPrototypeOf(value) === Object.prototype;
+
+const extractPreviousResponseId = (
+  context: ReadonlyArray<ConversationTurn>,
+): string | undefined => {
+  for (let index = context.length - 1; index >= 0; index -= 1) {
+    const turn = context[index] as ConversationTurn & {
+      metadata?: unknown;
+    };
+
+    if (turn.role !== 'assistant') {
+      continue;
+    }
+
+    const metadata = (turn as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== 'object') {
+      continue;
+    }
+
+    const rawResponseId = (metadata as { responseId?: unknown }).responseId;
+    if (typeof rawResponseId === 'string') {
+      const trimmed = rawResponseId.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+
+  return undefined;
+};
+
 export const createOpenAIResponsesAdapter = (
   options: OpenAIResponsesAdapterOptions,
 ): AiPort => {
-  const assistantId = options.assistantId.trim();
+  const model = options.model.trim();
 
-  if (assistantId.length === 0) {
-    options.logger?.error?.('openai-assistant missing id');
-    throw new Error('OPENAI_ASSISTANT_ID is required');
+  if (model.length === 0) {
+    options.logger?.error?.('openai-responses missing model');
+    throw new Error('OPENAI_MODEL is required');
   }
 
-  if (!/^asst_[A-Za-z0-9-]+$/.test(assistantId)) {
-    options.logger?.error?.('openai-assistant invalid id format', {
-      assistantId: options.assistantId,
-    });
-    throw new Error('OPENAI_ASSISTANT_ID must start with "asst_" and refer to an OpenAI Responses assistant');
+  const promptId = typeof options.promptId === 'string' ? options.promptId.trim() : undefined;
+  if (promptId && !/^pmpt_[A-Za-z0-9-]+$/.test(promptId)) {
+    options.logger?.error?.('openai-prompt invalid id format', { promptId: options.promptId });
+    throw new Error('OPENAI_PROMPT_ID must start with "pmpt_" and refer to a published OpenAI prompt');
   }
+
+  const promptVariables = (() => {
+    if (options.promptVariables === undefined) {
+      return undefined;
+    }
+
+    if (!isPlainObject(options.promptVariables)) {
+      options.logger?.error?.('openai-prompt variables must be a plain object');
+      throw new Error('OPENAI_PROMPT_VARIABLES must be a JSON object');
+    }
+
+    return options.promptVariables;
+  })();
 
   const fetchImpl = options.fetchApi ?? fetch;
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
@@ -212,73 +257,6 @@ export const createOpenAIResponsesAdapter = (
   );
   const maxRetries = Math.max(1, Math.min(options.maxRetries ?? DEFAULT_MAX_RETRIES, DEFAULT_MAX_RETRIES));
   const { logger } = options;
-  let cachedAssistantModel: string | undefined;
-  let assistantModelPromise: Promise<string> | undefined;
-
-  const fetchAssistantModel = async (timeoutMs: number): Promise<string> => {
-    if (typeof cachedAssistantModel === 'string') {
-      return cachedAssistantModel;
-    }
-
-    if (!assistantModelPromise) {
-      assistantModelPromise = (async () => {
-        const { signal, dispose } = createAbortSignal(Math.max(1, timeoutMs));
-        try {
-          const response = await fetchImpl(`${ASSISTANTS_BASE_URL}/${assistantId}`, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${options.apiKey}`,
-              'Content-Type': 'application/json',
-              'OpenAI-Beta': 'assistants=v2',
-            },
-            signal,
-          });
-
-          if (!response.ok) {
-            const error = new Error(
-              `Failed to fetch OpenAI assistant configuration (status ${response.status})`,
-            );
-            logger?.error?.('openai-assistant fetch failed', {
-              status: response.status,
-              assistantId,
-            });
-            throw error;
-          }
-
-          let payload: { model?: unknown };
-          try {
-            payload = (await response.json()) as { model?: unknown };
-          } catch (parseError) {
-            logger?.error?.('openai-assistant invalid payload', {
-              assistantId,
-            });
-            throw new Error('Failed to parse OpenAI assistant configuration response');
-          }
-
-          const model = typeof payload?.model === 'string' && payload.model.trim().length > 0
-            ? payload.model
-            : undefined;
-
-          if (!model) {
-            logger?.error?.('openai-assistant missing model', {
-              assistantId,
-            });
-            throw new Error('OpenAI assistant model is missing');
-          }
-
-          cachedAssistantModel = model;
-          return model;
-        } finally {
-          dispose();
-        }
-      })().catch((error) => {
-        assistantModelPromise = undefined;
-        throw error;
-      });
-    }
-
-    return assistantModelPromise;
-  };
 
   const execute = async (
     requestInit: RequestInit,
@@ -373,37 +351,27 @@ export const createOpenAIResponsesAdapter = (
       let lastError: unknown;
 
       const deadline = Date.now() + timeoutBudgetMs;
+      const previousResponseId = extractPreviousResponseId(input.context);
 
-      const resolveAssistantModel = async (): Promise<string> => {
-        const remainingTime = deadline - Date.now();
-        if (remainingTime <= 0) {
-          logger?.error?.('openai-responses global timeout exceeded while fetching model');
-          throw createWrappedError(new Error('OpenAI Responses request timed out'));
-        }
-
-        try {
-          return await fetchAssistantModel(remainingTime);
-        } catch (error) {
-          if (error instanceof Error && error.message === 'OpenAI assistant model is missing') {
-            throw error;
-          }
-
-          throw createWrappedError(
-            error instanceof Error ? error : new Error('Failed to resolve assistant model'),
-          );
-        }
-      };
-
-      const assistantModel = await resolveAssistantModel();
-
-      const body = {
-        assistant_id: assistantId,
-        model: assistantModel,
+      const body: Record<string, unknown> = {
+        model,
         input: buildInputMessages(input.context, input.text),
         metadata: {
           userId: input.userId,
         },
       };
+
+      if (promptId) {
+        body.prompt = promptVariables
+          ? { id: promptId, variables: promptVariables }
+          : { id: promptId };
+      }
+
+      if (previousResponseId) {
+        body.previous_response_id = previousResponseId;
+      }
+
+      const serializedBody = JSON.stringify(body);
 
       while (attempt < maxRetries) {
         const remainingTime = deadline - Date.now();
@@ -420,9 +388,8 @@ export const createOpenAIResponsesAdapter = (
               headers: {
                 Authorization: `Bearer ${options.apiKey}`,
                 'Content-Type': 'application/json',
-                'OpenAI-Beta': 'assistants=v2',
               },
-              body: JSON.stringify(body),
+              body: serializedBody,
             },
             attempt,
             attemptTimeout,
@@ -435,6 +402,7 @@ export const createOpenAIResponsesAdapter = (
             requestId: requestId ?? null,
             usedOutputText,
             length: text.length,
+            previousResponseId: previousResponseId ?? null,
           });
 
           return {
@@ -444,6 +412,7 @@ export const createOpenAIResponsesAdapter = (
               status: payload.status,
               requestId,
               usedOutputText,
+              previousResponseId,
             },
           };
         } catch (error) {
