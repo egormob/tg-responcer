@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DialogEngine } from '../../core/DialogEngine';
+import type { MessagingPort } from '../../ports';
 import { createRouter, parseIncomingMessage } from '../router';
 
 describe('http router', () => {
@@ -8,9 +9,15 @@ describe('http router', () => {
     handleMessage: vi.fn(),
   }) as unknown as DialogEngine;
 
+  const createMessagingMock = () => ({
+    sendTyping: vi.fn().mockResolvedValue(undefined),
+    sendText: vi.fn().mockResolvedValue({}),
+  }) as unknown as MessagingPort;
+
   it('responds with ok for healthz route', async () => {
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
     });
 
@@ -22,7 +29,11 @@ describe('http router', () => {
 
   it('returns 403 when webhook secret does not match', async () => {
     const dialogEngine = createDialogEngineMock();
-    const router = createRouter({ dialogEngine, webhookSecret: 'secret' });
+    const router = createRouter({
+      dialogEngine,
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+    });
 
     const response = await router.handle(
       new Request('https://example.com/webhook/other', { method: 'POST', body: '{}' }),
@@ -34,7 +45,7 @@ describe('http router', () => {
 
   it('returns 500 when webhook secret is missing', async () => {
     const dialogEngine = createDialogEngineMock();
-    const router = createRouter({ dialogEngine });
+    const router = createRouter({ dialogEngine, messaging: createMessagingMock() });
 
     const response = await router.handle(
       new Request('https://example.com/webhook/secret', { method: 'POST', body: '{}' }),
@@ -49,7 +60,11 @@ describe('http router', () => {
       response: { text: 'ok', messageId: '123' },
     });
     const dialogEngine = { handleMessage } as unknown as DialogEngine;
-    const router = createRouter({ dialogEngine, webhookSecret: 'secret' });
+    const router = createRouter({
+      dialogEngine,
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+    });
 
     const payload = {
       user: { userId: 'user-1', username: 'demo' },
@@ -77,11 +92,13 @@ describe('http router', () => {
     expect(message.receivedAt).toBeInstanceOf(Date);
   });
 
-  it('returns 429 when dialog engine signals rate limit', async () => {
+  it('returns ok payload when dialog engine signals rate limit', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const notify = vi.fn().mockResolvedValue(undefined);
+    const messaging = createMessagingMock();
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
       webhookSecret: 'secret',
       rateLimitNotifier: { notify },
     });
@@ -98,7 +115,7 @@ describe('http router', () => {
       }),
     );
 
-    expect(response.status).toBe(429);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: 'rate_limited' });
     expect(notify).toHaveBeenCalledWith({
       userId: 'user-2',
@@ -107,13 +124,14 @@ describe('http router', () => {
     });
   });
 
-  it('logs warning when notifier throws but still returns 429', async () => {
+  it('logs warning when notifier throws but still returns ok response', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const notify = vi.fn().mockRejectedValue(new Error('notify failed'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
       rateLimitNotifier: { notify },
     });
@@ -130,7 +148,7 @@ describe('http router', () => {
       }),
     );
 
-    expect(response.status).toBe(429);
+    expect(response.status).toBe(200);
     expect(warnSpy).toHaveBeenCalledWith('[router] rate limit notifier failed', expect.any(Error));
 
     warnSpy.mockRestore();
@@ -139,6 +157,7 @@ describe('http router', () => {
   it('returns 400 for invalid payload', async () => {
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
     });
 
@@ -169,6 +188,7 @@ describe('http router', () => {
     const handleMessage = vi.fn();
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
       transformPayload: async () => ({
         kind: 'handled',
@@ -199,6 +219,7 @@ describe('http router', () => {
 
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
       typingIndicator: typingIndicator,
     });
@@ -229,6 +250,7 @@ describe('http router', () => {
   it('returns 404 for admin export when handler is not configured', async () => {
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
     });
 
@@ -241,6 +263,7 @@ describe('http router', () => {
     const exportHandler = vi.fn().mockResolvedValue(new Response('csv', { status: 200 }));
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
       webhookSecret: 'secret',
       admin: {
         export: exportHandler,
