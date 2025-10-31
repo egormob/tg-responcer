@@ -266,6 +266,7 @@ describe('http router', () => {
       messaging: createMessagingMock(),
       webhookSecret: 'secret',
       admin: {
+        token: 'secret',
         export: exportHandler,
       },
     });
@@ -278,5 +279,105 @@ describe('http router', () => {
 
     expect(exportHandler).toHaveBeenCalledTimes(1);
     expect(exportHandler).toHaveBeenCalledWith(request);
+  });
+
+  it('authorizes admin handlers using query token', async () => {
+    const exportHandler = vi.fn().mockResolvedValue(new Response('csv', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        export: exportHandler,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/export?token=secret', {
+        headers: { 'x-admin-token': '' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(exportHandler).toHaveBeenCalledTimes(1);
+    const passedRequest = exportHandler.mock.calls[0][0];
+    expect(passedRequest.headers.get('x-admin-token')).toBe('secret');
+  });
+
+  it('accepts dedicated admin export token when different from global token', async () => {
+    const exportHandler = vi.fn().mockResolvedValue(new Response('csv', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'global-secret',
+        exportToken: 'export-secret',
+        export: exportHandler,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/export', {
+        headers: { 'x-admin-token': 'export-secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(exportHandler).toHaveBeenCalledTimes(1);
+    const passedRequest = exportHandler.mock.calls[0][0];
+    expect(passedRequest.headers.get('x-admin-token')).toBe('export-secret');
+  });
+
+  it('enforces admin token for selftest route', async () => {
+    const selfTest = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        selfTest,
+      },
+    });
+
+    const unauthorized = await router.handle(new Request('https://example.com/admin/selftest'));
+    expect(unauthorized.status).toBe(401);
+
+    const forbidden = await router.handle(
+      new Request('https://example.com/admin/selftest', {
+        headers: { 'x-admin-token': 'nope' },
+      }),
+    );
+    expect(forbidden.status).toBe(403);
+
+    const okResponse = await router.handle(
+      new Request('https://example.com/admin/selftest?token=secret'),
+    );
+    expect(okResponse.status).toBe(200);
+    expect(selfTest).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches admin envz route with valid token', async () => {
+    const envz = vi.fn().mockResolvedValue(new Response('env', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        envz,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/envz', {
+        headers: { 'x-admin-token': 'secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(envz).toHaveBeenCalledTimes(1);
   });
 });

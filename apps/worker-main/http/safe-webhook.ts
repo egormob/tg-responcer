@@ -50,7 +50,7 @@ export async function safeWebhookHandler<T>(
     });
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('[safe][error]', String(error));
+    console.error('[safe][error]', { err: String(error) });
     const fallback = fallbackText ?? DEFAULT_FALLBACK_TEXT;
 
     if (chat.id) {

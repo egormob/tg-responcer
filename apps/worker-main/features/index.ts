@@ -15,3 +15,9 @@ export type {
   AdminExportRequest,
   CsvExportHandlerOptions,
 } from './export';
+export {
+  createSelfTestRoute,
+  createEnvzRoute,
+  type CreateSelfTestRouteOptions,
+  type CreateEnvzRouteOptions,
+} from './admin-diagnostics';

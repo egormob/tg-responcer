@@ -10,7 +10,9 @@ import {
 import {
   createAdminExportRoute,
   createCsvExportHandler,
+  createEnvzRoute,
   createRateLimitNotifier,
+  createSelfTestRoute,
   type LimitsFlagKvNamespace,
 } from './features';
 import {
@@ -21,6 +23,7 @@ import {
   type TypingIndicator,
 } from './http';
 import type { MessagingPort } from './ports';
+import type { CompositionResult } from './composition';
 
 interface WorkerBindings {
   TELEGRAM_WEBHOOK_SECRET?: string;
@@ -30,6 +33,7 @@ interface WorkerBindings {
   OPENAI_ASSISTANT_ID?: string;
   ADMIN_EXPORT_TOKEN?: string;
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
+  ADMIN_TOKEN?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
   RATE_LIMIT_WINDOW_MS?: string | number;
   RATE_LIMIT_NOTIFIER_WINDOW_MS?: string | number;
@@ -161,22 +165,34 @@ const createRateLimitNotifierIfConfigured = (
   });
 };
 
-const createAdminRoutes = (env: WorkerEnv) => {
-  if (!env.ADMIN_EXPORT_TOKEN || !env.DB) {
+const createAdminRoutes = (
+  env: WorkerEnv,
+  composition: CompositionResult,
+): RouterOptions['admin'] | undefined => {
+  if (!env.ADMIN_TOKEN || env.ADMIN_TOKEN.trim().length === 0) {
     return undefined;
   }
 
-  const handleExport = createCsvExportHandler({
-    db: env.DB,
-    filenamePrefix: env.ADMIN_EXPORT_FILENAME_PREFIX,
-  });
+  const routes: RouterOptions['admin'] = {
+    token: env.ADMIN_TOKEN,
+    selfTest: createSelfTestRoute({ ai: composition.ports.ai }),
+    envz: createEnvzRoute({ env }),
+  };
 
-  return {
-    export: createAdminExportRoute({
+  if (env.ADMIN_EXPORT_TOKEN && env.DB) {
+    const handleExport = createCsvExportHandler({
+      db: env.DB,
+      filenamePrefix: env.ADMIN_EXPORT_FILENAME_PREFIX,
+    });
+
+    routes.export = createAdminExportRoute({
       adminToken: env.ADMIN_EXPORT_TOKEN,
       handleExport,
-    }),
-  } satisfies RouterOptions['admin'];
+    });
+    routes.exportToken = env.ADMIN_EXPORT_TOKEN;
+  }
+
+  return routes;
 };
 
 const createTransformPayload = (env: WorkerEnv) => (payload: unknown) =>
@@ -204,7 +220,7 @@ const createRequestHandler = (env: WorkerEnv) => {
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
     transformPayload: createTransformPayload(env),
-    admin: createAdminRoutes(env),
+    admin: createAdminRoutes(env, composition),
   });
 
   return router;

@@ -63,6 +63,7 @@ describe('createOpenAIResponsesAdapter', () => {
         responseId: 'resp_1',
         status: 'completed',
         requestId: 'req_123',
+        usedOutputText: false,
       },
     });
 
@@ -138,6 +139,66 @@ describe('createOpenAIResponsesAdapter', () => {
         responseId: 'resp_nested',
         status: 'completed',
         requestId: 'req_123',
+        usedOutputText: false,
+      },
+    });
+  });
+
+  it('prefers output_text when provided as a string', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_output_text',
+        status: 'completed',
+        output_text: 'Hello via shortcut',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              { type: 'output_text', text: 'Ignored fallback' },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
+    ).resolves.toEqual({
+      text: 'Hello via shortcut',
+      metadata: {
+        responseId: 'resp_output_text',
+        status: 'completed',
+        requestId: 'req_123',
+        usedOutputText: true,
+      },
+    });
+  });
+
+  it('supports output_text provided as array of strings', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_output_text_array',
+        status: 'completed',
+        output_text: ['First', 'Second'],
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
+    ).resolves.toEqual({
+      text: 'First\nSecond',
+      metadata: {
+        responseId: 'resp_output_text_array',
+        status: 'completed',
+        requestId: 'req_123',
+        usedOutputText: true,
       },
     });
   });
@@ -172,6 +233,7 @@ describe('createOpenAIResponsesAdapter', () => {
       }),
     ).resolves.toMatchObject({
       text: 'First part\nSecond part',
+      metadata: expect.objectContaining({ usedOutputText: false }),
     });
   });
 
@@ -229,7 +291,23 @@ describe('createOpenAIResponsesAdapter', () => {
 
     await expect(
       adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
-    ).rejects.toThrow(/empty output/i);
+    ).rejects.toThrow('AI_EMPTY_REPLY');
+  });
+
+  it('throws AI_NON_2XX when non-retryable response persists', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'bad request' } }), {
+        status: 400,
+        headers: { 'x-request-id': 'req_bad' },
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock, { maxRetries: 1 });
+
+    await expect(
+      adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
+    ).rejects.toThrow('AI_NON_2XX');
   });
 
   it('aborts when retries exhaust the global timeout budget', async () => {

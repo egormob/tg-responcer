@@ -27,7 +27,7 @@ interface ResponsesApiErrorPayload {
 
 interface ResponsesOutputContent {
   type?: string;
-  text?: string;
+  text?: string | { value?: unknown };
 }
 
 interface ResponsesOutputItem {
@@ -41,6 +41,7 @@ interface ResponsesApiSuccessPayload {
   status?: string;
   output?: ResponsesOutputItem[];
   metadata?: Record<string, unknown>;
+  output_text?: string | string[];
 }
 
 const removeControlCharacters = (text: string): string =>
@@ -89,7 +90,29 @@ const buildInputMessages = (
   ];
 };
 
-const extractTextFromPayload = (payload: ResponsesApiSuccessPayload): string => {
+const extractTextFromPayload = (
+  payload: ResponsesApiSuccessPayload,
+): { text: string; usedOutputText: boolean } => {
+  const normalizeChunks = (value: string | string[]): string[] => {
+    if (typeof value === 'string') {
+      return [value];
+    }
+
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === 'string');
+    }
+
+    return [];
+  };
+
+  const preferOutputText = normalizeChunks(payload.output_text ?? '')
+    .map((chunk) => sanitizeOutputText(chunk))
+    .filter((chunk) => chunk.length > 0);
+
+  if (preferOutputText.length > 0) {
+    return { text: preferOutputText.join('\n'), usedOutputText: true };
+  }
+
   const chunks: string[] = [];
 
   const output = Array.isArray(payload.output) ? payload.output : [];
@@ -100,19 +123,19 @@ const extractTextFromPayload = (payload: ResponsesApiSuccessPayload): string => 
 
     for (const piece of item.content) {
       const rawText = (() => {
-        if (typeof piece?.text === 'string') {
-          return piece.text;
+        const directText = piece?.text;
+
+        if (typeof directText === 'string') {
+          return directText;
         }
 
-        const nestedText =
-          piece && typeof piece === 'object' ? (piece as { text?: unknown }).text : undefined;
         if (
-          nestedText &&
-          typeof nestedText === 'object' &&
-          'value' in nestedText &&
-          typeof (nestedText as { value?: unknown }).value === 'string'
+          directText
+          && typeof directText === 'object'
+          && 'value' in directText
+          && typeof (directText as { value?: unknown }).value === 'string'
         ) {
-          return (nestedText as { value: string }).value;
+          return (directText as { value: string }).value;
         }
 
         return undefined;
@@ -126,10 +149,10 @@ const extractTextFromPayload = (payload: ResponsesApiSuccessPayload): string => 
 
   const combined = sanitizeOutputText(chunks.join('\n'));
   if (combined.length === 0) {
-    throw new Error('openai-responses adapter received empty output');
+    throw new Error('AI_EMPTY_REPLY');
   }
 
-  return combined;
+  return { text: combined, usedOutputText: false };
 };
 
 const createAbortSignal = (timeoutMs: number): { signal: AbortSignal; dispose: () => void } => {
@@ -183,6 +206,9 @@ export const createOpenAIResponsesAdapter = (
     const { signal, dispose } = createAbortSignal(attemptTimeoutMs);
 
     try {
+      // eslint-disable-next-line no-console
+      console.info('[ai][request]', { attempt });
+
       const response = await fetchImpl(baseUrl, {
         ...requestInit,
         signal,
@@ -191,11 +217,23 @@ export const createOpenAIResponsesAdapter = (
       const requestId = response.headers.get('x-request-id') ?? undefined;
 
       if (!response.ok) {
-        const errorPayload = (await response.json().catch(() => undefined)) as
-          | ResponsesApiErrorPayload
-          | undefined;
+        const rawBody = await response.text();
+        let errorPayload: ResponsesApiErrorPayload | undefined;
+        try {
+          errorPayload = rawBody ? (JSON.parse(rawBody) as ResponsesApiErrorPayload) : undefined;
+        } catch {
+          errorPayload = undefined;
+        }
         const message = errorPayload?.error?.message ?? `HTTP ${response.status}`;
         const error = new Error(message);
+
+        // eslint-disable-next-line no-console
+        console.error('[ai][non-2xx]', {
+          status: response.status,
+          attempt,
+          requestId,
+          body: rawBody,
+        });
 
         if (!isRetryableStatus(response.status) || attempt === maxRetries - 1) {
           logger?.error?.('openai-responses request failed', {
@@ -203,7 +241,7 @@ export const createOpenAIResponsesAdapter = (
             attempt,
             requestId,
           });
-          throw createWrappedError(error);
+          throw new Error('AI_NON_2XX');
         }
 
         logger?.warn?.('openai-responses retryable failure', {
@@ -216,6 +254,8 @@ export const createOpenAIResponsesAdapter = (
       }
 
       const payload = (await response.json()) as ResponsesApiSuccessPayload;
+      // eslint-disable-next-line no-console
+      console.info('[ai][ok]', { attempt, requestId: requestId ?? null });
       return { payload, requestId };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -283,7 +323,14 @@ export const createOpenAIResponsesAdapter = (
             attemptTimeout,
           );
 
-          const text = extractTextFromPayload(payload);
+          const { text, usedOutputText } = extractTextFromPayload(payload);
+          // eslint-disable-next-line no-console
+          console.info('[ai][parsed]', {
+            attempt,
+            requestId: requestId ?? null,
+            usedOutputText,
+            length: text.length,
+          });
 
           return {
             text,
@@ -291,17 +338,31 @@ export const createOpenAIResponsesAdapter = (
               responseId: payload.id,
               status: payload.status,
               requestId,
+              usedOutputText,
             },
           };
         } catch (error) {
           lastError = error;
           const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
           if (!retryable || attempt === maxRetries - 1) {
+            if (
+              error instanceof Error
+              && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
+            ) {
+              throw error;
+            }
             throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
           }
 
           attempt += 1;
         }
+      }
+
+      if (
+        lastError instanceof Error
+        && (lastError.message === 'AI_NON_2XX' || lastError.message === 'AI_EMPTY_REPLY')
+      ) {
+        throw lastError;
       }
 
       throw createWrappedError(lastError instanceof Error ? lastError : new Error(DEFAULT_ERROR_MESSAGE));
