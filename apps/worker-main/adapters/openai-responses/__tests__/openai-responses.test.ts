@@ -19,6 +19,24 @@ describe('createOpenAIResponsesAdapter', () => {
   const apiKey = 'test-key';
   const assistantId = 'asst_123';
 
+  it('throws helpful error when assistant id is empty', () => {
+    expect(() =>
+      createOpenAIResponsesAdapter({
+        apiKey,
+        assistantId: '   ',
+      }),
+    ).toThrow('OPENAI_ASSISTANT_ID is required');
+  });
+
+  it('throws helpful error when assistant id does not start with asst_', () => {
+    expect(() =>
+      createOpenAIResponsesAdapter({
+        apiKey,
+        assistantId: 'gpt-4o-mini',
+      }),
+    ).toThrow('OPENAI_ASSISTANT_ID must start with "asst_" and refer to an OpenAI Responses assistant');
+  });
+
   const createAdapter = (
     fetchMock: ReturnType<typeof createFetchMock>,
     options: Partial<{ timeout: number; maxRetries: number }> = {},

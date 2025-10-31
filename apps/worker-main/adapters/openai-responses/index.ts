@@ -190,6 +190,20 @@ const createWrappedError = (cause: unknown, fallbackMessage?: string): Error => 
 export const createOpenAIResponsesAdapter = (
   options: OpenAIResponsesAdapterOptions,
 ): AiPort => {
+  const assistantId = options.assistantId.trim();
+
+  if (assistantId.length === 0) {
+    options.logger?.error?.('openai-assistant missing id');
+    throw new Error('OPENAI_ASSISTANT_ID is required');
+  }
+
+  if (!/^asst_[A-Za-z0-9-]+$/.test(assistantId)) {
+    options.logger?.error?.('openai-assistant invalid id format', {
+      assistantId: options.assistantId,
+    });
+    throw new Error('OPENAI_ASSISTANT_ID must start with "asst_" and refer to an OpenAI Responses assistant');
+  }
+
   const fetchImpl = options.fetchApi ?? fetch;
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
   const timeoutBudgetMs = Math.min(
@@ -210,7 +224,7 @@ export const createOpenAIResponsesAdapter = (
       assistantModelPromise = (async () => {
         const { signal, dispose } = createAbortSignal(Math.max(1, timeoutMs));
         try {
-          const response = await fetchImpl(`${ASSISTANTS_BASE_URL}/${options.assistantId}`, {
+          const response = await fetchImpl(`${ASSISTANTS_BASE_URL}/${assistantId}`, {
             method: 'GET',
             headers: {
               Authorization: `Bearer ${options.apiKey}`,
@@ -226,7 +240,7 @@ export const createOpenAIResponsesAdapter = (
             );
             logger?.error?.('openai-assistant fetch failed', {
               status: response.status,
-              assistantId: options.assistantId,
+              assistantId,
             });
             throw error;
           }
@@ -236,7 +250,7 @@ export const createOpenAIResponsesAdapter = (
             payload = (await response.json()) as { model?: unknown };
           } catch (parseError) {
             logger?.error?.('openai-assistant invalid payload', {
-              assistantId: options.assistantId,
+              assistantId,
             });
             throw new Error('Failed to parse OpenAI assistant configuration response');
           }
@@ -247,7 +261,7 @@ export const createOpenAIResponsesAdapter = (
 
           if (!model) {
             logger?.error?.('openai-assistant missing model', {
-              assistantId: options.assistantId,
+              assistantId,
             });
             throw new Error('OpenAI assistant model is missing');
           }
@@ -383,7 +397,7 @@ export const createOpenAIResponsesAdapter = (
       const assistantModel = await resolveAssistantModel();
 
       const body = {
-        assistant_id: options.assistantId,
+        assistant_id: assistantId,
         model: assistantModel,
         input: buildInputMessages(input.context, input.text),
         metadata: {
