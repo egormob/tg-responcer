@@ -207,9 +207,9 @@
 **Шаги и проверки:**
 1. Адаптер `AiPort` для Responses.
    - **Результат:** `adapters/openai-responses` формирует запрос `POST https://api.openai.com/v1/responses` с явным `model`, контекстом из `input` и, при наличии, `prompt: { id: pmpt_…, variables }`; поддерживает `previous_response_id` и разбирает `output_text`/items.
-   - **Проверка:** юнит-тесты с `fetch-mock` проверяют тело запроса (нет `assistant_id`), обработку переменных промпта, таймаут и ретраи; `npm run test -- openai-adapter`; лог содержит `response_id`.
-   - **Статус:** ⚠️ Требуется миграция — текущий код всё ещё опирается на `assistantId`; задачa запланирована в рамках майлстоуна 1 (шаг 1) и будет выполнена здесь.
-   - **Обновление:** после миграции сверить памятку [memory-bank/openai-responses-prompt.md](memory-bank/openai-responses-prompt.md), дополнив её фактами по ретраям и `previous_response_id`.
+   - **Проверка:** юнит-тесты с `fetch-mock` проверяют тело запроса (без `assistant_id`), обработку переменных промпта, таймаут и ретраи; `npm run test -- openai-adapter`; лог содержит `response_id`.
+   - **Статус:** ✅ Миграция завершена: адаптер использует `model`/`prompt.id`, парсит `output_text` и `items`, восстанавливает `previous_response_id` из контекста, а тесты `apps/worker-main/adapters/openai-responses/__tests__/openai-responses.test.ts` подтверждают отсутствие `assistantId` и корректный разбор ответа.
+   - **Обновление:** памятка [memory-bank/openai-responses-prompt.md](memory-bank/openai-responses-prompt.md) дополнена фактами по ретраям и `previous_response_id` (см. журнал 2025-10-27).
 2. Конфигурация секретов.
    - **Внешние действия:**
      - `wrangler secret put OPENAI_API_KEY`.
@@ -374,6 +374,7 @@
 **Критерии приёмки:** все внешние проверки завершены, отчёты сохранены, замечания устранены или зафиксированы с планом работ.
 
 ## Журнал прогресса
+- 2025-10-28: Закрыт шаг М4.Ш1 — подтверждена миграция адаптера Responses, RoadMap обновлена статусом, сверены тесты `openai-responses.test.ts`.
 - 2025-10-27: Адаптер OpenAI Responses мигрирован на `OPENAI_MODEL`/`OPENAI_PROMPT_ID`, обновлён маршрут `envz`, добавлены тесты `previous_response_id`.
 - 2025-10-23: Инициализирована дорожная карта и создан каталог памяти (этап текущей сессии).
 - 2025-10-23: Обновлена структура и правила дорожной карты.
