@@ -133,6 +133,66 @@ describe('DialogEngine', () => {
     expect(getRecentOrder[0]).toBeLessThan(appendMessageCallOrder[1]);
   });
 
+  it('не передаёт в AI свежее пользовательское сообщение повторно', async () => {
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'Ответ' }),
+    };
+
+    const incomingMessage = createMessageOverrides();
+
+    const storedMessages: StoredMessage[] = [
+      {
+        userId: incomingMessage.user.userId,
+        chatId: incomingMessage.chat.id,
+        role: 'assistant',
+        text: 'Здравствуйте ещё раз!',
+        timestamp: new Date('2024-01-01T09:59:00Z'),
+      },
+      {
+        userId: incomingMessage.user.userId,
+        chatId: incomingMessage.chat.id,
+        role: 'user',
+        text: incomingMessage.text,
+        timestamp: incomingMessage.receivedAt,
+        metadata: { messageId: incomingMessage.messageId },
+      },
+    ];
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue(undefined),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue(storedMessages),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const engine = new DialogEngine({ messaging, ai, storage, rateLimit });
+
+    await engine.handleMessage(incomingMessage);
+
+    expect(ai.reply).toHaveBeenCalledWith({
+      userId: incomingMessage.user.userId,
+      text: incomingMessage.text,
+      context: [
+        {
+          role: 'assistant',
+          text: 'Здравствуйте ещё раз!',
+        },
+      ],
+    });
+
+    const context = (ai.reply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.context;
+    const userMessagesInContext = context?.filter((item: { role: string }) => item.role === 'user') ?? [];
+    expect(userMessagesInContext).toHaveLength(0);
+  });
+
   it('останавливается при превышении лимита без обращений к остальным портам', async () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),

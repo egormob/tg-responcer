@@ -101,7 +101,9 @@ export class DialogEngine {
     const aiReply = await ai.reply({
       userId: message.user.userId,
       text: message.text,
-      context: this.mapToConversationTurns(recentMessages),
+      context: this.mapToConversationTurns(
+        this.excludeIncomingMessageFromContext(recentMessages, message),
+      ),
     });
 
     const replyTimestamp = this.now();
@@ -135,5 +137,39 @@ export class DialogEngine {
       role: message.role,
       text: message.text,
     }));
+  }
+
+  private excludeIncomingMessageFromContext(
+    messages: StoredMessage[],
+    incoming: IncomingMessage,
+  ): StoredMessage[] {
+    const messageId = incoming.messageId;
+    const incomingTimestamp = incoming.receivedAt.getTime();
+
+    return messages.filter((message) => {
+      if (message.role !== 'user') {
+        return true;
+      }
+
+      const storedMessageId = this.extractMessageId(message.metadata);
+
+      if (messageId && storedMessageId === messageId) {
+        return false;
+      }
+
+      const sameText = message.text === incoming.text;
+      const sameTimestamp = message.timestamp.getTime() === incomingTimestamp;
+
+      if (sameText && sameTimestamp) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  private extractMessageId(metadata: Record<string, unknown> | undefined): string | undefined {
+    const rawMessageId = (metadata as { messageId?: unknown } | undefined)?.messageId;
+    return typeof rawMessageId === 'string' ? rawMessageId : undefined;
   }
 }

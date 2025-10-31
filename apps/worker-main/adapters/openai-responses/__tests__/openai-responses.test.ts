@@ -99,6 +99,11 @@ describe('createOpenAIResponsesAdapter', () => {
     const userMessage = payload.input?.[2]?.content?.[0]?.text ?? '';
     expect(userMessage).toBe('How are you?');
     expect([...userMessage].map((char) => char.charCodeAt(0))).not.toContain(7);
+
+    expect(payload.input).toHaveLength(3);
+    const userEntries = payload.input.filter((item: { role: string }) => item.role === 'user');
+    expect(userEntries).toHaveLength(1);
+    expect(userEntries[0]?.content?.[0]?.text).toBe('How are you?');
   });
 
   it('retries on retryable errors and succeeds', async () => {
