@@ -99,8 +99,26 @@ const extractTextFromPayload = (payload: ResponsesApiSuccessPayload): string => 
     }
 
     for (const piece of item.content) {
-      if (typeof piece?.text === 'string' && piece.text.trim().length > 0) {
-        chunks.push(piece.text);
+      const rawText = (() => {
+        if (typeof piece?.text === 'string') {
+          return piece.text;
+        }
+
+        const nestedText = (piece as { text?: unknown }).text;
+        if (
+          nestedText &&
+          typeof nestedText === 'object' &&
+          'value' in nestedText &&
+          typeof (nestedText as { value?: unknown }).value === 'string'
+        ) {
+          return (nestedText as { value: string }).value;
+        }
+
+        return undefined;
+      })();
+
+      if (typeof rawText === 'string' && rawText.trim().length > 0) {
+        chunks.push(rawText);
       }
     }
   }
