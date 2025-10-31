@@ -134,6 +134,8 @@ export interface RouterOptions {
     export?: (request: Request) => Promise<Response>;
     selfTest?: (request: Request) => Promise<Response>;
     envz?: (request: Request) => Promise<Response>;
+    broadcastToken?: string;
+    broadcast?: (request: Request) => Promise<Response>;
   };
 }
 
@@ -328,6 +330,25 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         return options.admin.export(auth.request);
+      }
+
+      if (pathname === '/admin/broadcast') {
+        if (!options.admin?.broadcast) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(
+          request,
+          url,
+          [options.admin.broadcastToken, options.admin.token].filter(
+            (token): token is string => typeof token === 'string' && token.length > 0,
+          ),
+        );
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.broadcast(auth.request);
       }
 
       if (pathname === '/admin/selftest') {

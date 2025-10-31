@@ -172,6 +172,52 @@ describe('http router', () => {
     expect(response.status).toBe(400);
   });
 
+  it('routes admin broadcast requests when handler is provided', async () => {
+    const broadcast = vi.fn().mockResolvedValue(new Response('queued', { status: 202 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'admin-token',
+        broadcastToken: 'broadcast-token',
+        broadcast,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/broadcast', {
+        method: 'POST',
+        headers: { 'x-admin-token': 'broadcast-token' },
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const passedRequest = broadcast.mock.calls[0][0];
+    expect(passedRequest.headers.get('x-admin-token')).toBe('broadcast-token');
+  });
+
+  it('returns 404 for broadcast route when handler is missing', async () => {
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'admin-token',
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/broadcast', {
+        method: 'POST',
+        headers: { 'x-admin-token': 'admin-token' },
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   it('exposes parseIncomingMessage for custom transformations', () => {
     const result = parseIncomingMessage({
       user: { userId: 'user-1' },

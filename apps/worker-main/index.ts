@@ -8,9 +8,11 @@ import {
   type RateLimitKvNamespace,
 } from './adapters';
 import {
+  createAdminBroadcastRoute,
   createAdminExportRoute,
   createCsvExportHandler,
   createEnvzRoute,
+  createInMemoryBroadcastQueue,
   createRateLimitNotifier,
   createSelfTestRoute,
   type LimitsFlagKvNamespace,
@@ -36,6 +38,8 @@ interface WorkerBindings {
   ADMIN_EXPORT_TOKEN?: string;
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
+  ADMIN_BROADCAST_TOKEN?: string;
+  BROADCAST_ENABLED?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
   RATE_LIMIT_WINDOW_MS?: string | number;
   RATE_LIMIT_NOTIFIER_WINDOW_MS?: string | number;
@@ -53,6 +57,8 @@ interface WorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
   passThroughOnException?(): void;
 }
+
+const broadcastQueue = createInMemoryBroadcastQueue();
 
 const DEFAULT_RATE_LIMIT = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -110,6 +116,24 @@ const getTrimmedString = (value: unknown): string | undefined => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const isEnabledFlag = (value: unknown): boolean => {
+  const trimmed = getTrimmedString(value);
+  if (!trimmed) {
+    return false;
+  }
+
+  switch (trimmed.toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+    case 'enabled':
+      return true;
+    default:
+      return false;
+  }
 };
 
 const normalizePromptId = (value: unknown): string | undefined => {
@@ -224,27 +248,38 @@ const createAdminRoutes = (
   env: WorkerEnv,
   composition: CompositionResult,
 ): RouterOptions['admin'] | undefined => {
-  if (!env.ADMIN_TOKEN || env.ADMIN_TOKEN.trim().length === 0) {
+  const adminToken = getTrimmedString(env.ADMIN_TOKEN);
+  if (!adminToken) {
     return undefined;
   }
 
   const routes: RouterOptions['admin'] = {
-    token: env.ADMIN_TOKEN,
+    token: adminToken,
     selfTest: createSelfTestRoute({ ai: composition.ports.ai }),
     envz: createEnvzRoute({ env }),
   };
 
-  if (env.ADMIN_EXPORT_TOKEN && env.DB) {
+  const exportToken = getTrimmedString(env.ADMIN_EXPORT_TOKEN);
+  if (exportToken && env.DB) {
     const handleExport = createCsvExportHandler({
       db: env.DB,
       filenamePrefix: env.ADMIN_EXPORT_FILENAME_PREFIX,
     });
 
     routes.export = createAdminExportRoute({
-      adminToken: env.ADMIN_EXPORT_TOKEN,
+      adminToken: exportToken,
       handleExport,
     });
-    routes.exportToken = env.ADMIN_EXPORT_TOKEN;
+    routes.exportToken = exportToken;
+  }
+
+  const broadcastToken = getTrimmedString(env.ADMIN_BROADCAST_TOKEN) ?? adminToken;
+  if (isEnabledFlag(env.BROADCAST_ENABLED) && broadcastToken) {
+    routes.broadcast = createAdminBroadcastRoute({
+      adminToken: broadcastToken,
+      queue: broadcastQueue,
+    });
+    routes.broadcastToken = broadcastToken;
   }
 
   return routes;
