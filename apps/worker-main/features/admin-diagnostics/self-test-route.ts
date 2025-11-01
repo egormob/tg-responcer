@@ -38,10 +38,23 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         text: 'ping',
         context: [],
       });
-      openAiOk = true;
       openAiLatencyMs = Math.max(0, now() - aiStartedAt);
-      const usedOutputTextRaw = (reply.metadata as { usedOutputText?: unknown } | undefined)?.usedOutputText;
+      const metadata = reply.metadata as
+        | {
+            usedOutputText?: unknown;
+            selfTestNoop?: unknown;
+          }
+        | undefined;
+      const usedOutputTextRaw = metadata?.usedOutputText;
       openAiUsedOutputText = usedOutputTextRaw === true;
+
+      if (metadata?.selfTestNoop === true) {
+        errors.push('openai: noop adapter response');
+      } else if (usedOutputTextRaw !== true) {
+        errors.push('openai: missing diagnostic marker');
+      } else {
+        openAiOk = true;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`openai: ${message}`);

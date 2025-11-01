@@ -85,6 +85,10 @@ export const createNoopAiPort = (options?: CreateNoopPortsOptions): AiPort => ({
 
     return {
       text: getFallbackText(options),
+      metadata: {
+        selfTestNoop: true,
+        usedOutputText: false,
+      },
     };
   },
 });
