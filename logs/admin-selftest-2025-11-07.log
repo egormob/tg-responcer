@@ -1,0 +1,13 @@
+# /admin/selftest execution attempt — 2025-11-07
+
+Command: curl https://<worker-host>/admin/selftest?chatId=... (not executed)
+
+Result: Blocked — рабочее окружение агента не имеет доступа к развёрнутому воркеру или валидным OPENAI_* секретам.
+Reasoning:
+- В репозитории отсутствуют сохранённые креды или URL воркера.
+- Для реального self-test требуется live-окружение Cloudflare и опубликованный prompt `pmpt_…`.
+- Без `OPENAI_API_KEY` и `OPENAI_MODEL` self-test возвращает noop-ответ; цель задачи — убедиться в `openAiOk = true`, что невозможно офлайн.
+
+Next steps:
+- Команда с доступом к Cloudflare должна выполнить self-test из боевого окружения.
+- После получения результата сохранить JSON-ответ и обновить журнал прогресса.
