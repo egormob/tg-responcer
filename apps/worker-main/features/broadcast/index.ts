@@ -11,4 +11,18 @@ export {
   type BroadcastAudienceFilter,
   type BroadcastMessagePayload,
   type EnqueueBroadcastJobOptions,
+  type UpdateBroadcastJobOptions,
 } from './broadcast-queue';
+export {
+  createBroadcastScheduler,
+  type BroadcastScheduler,
+  type BroadcastSchedulerLogger,
+  type BroadcastSchedulerOptions,
+  type BroadcastRecipient,
+  type ResolveBroadcastRecipients,
+} from './broadcast-scheduler';
+export {
+  createInMemoryBroadcastProgressStore,
+  type BroadcastProgressStore,
+  type BroadcastJobProgress,
+} from './broadcast-progress-store';

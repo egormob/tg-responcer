@@ -36,12 +36,21 @@ export interface BroadcastQueue {
   enqueue(options: EnqueueBroadcastJobOptions): BroadcastJob;
   getJob(jobId: string): BroadcastJob | undefined;
   list(): BroadcastQueueSnapshot;
+  updateJob(jobId: string, updates: UpdateBroadcastJobOptions): BroadcastJob | undefined;
 }
 
 export interface CreateBroadcastQueueOptions {
   readonly now?: () => Date;
   readonly generateId?: () => string;
   readonly maxPending?: number;
+}
+
+export interface UpdateBroadcastJobOptions {
+  readonly status?: BroadcastJobStatus;
+  readonly attempts?: number;
+  readonly lastError?: string | null;
+  readonly requestedBy?: string | null;
+  readonly updatedAt?: Date;
 }
 
 const cloneDate = (value: Date): Date => new Date(value.getTime());
@@ -156,6 +165,37 @@ export const createInMemoryBroadcastQueue = (
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
           .map((job) => cloneJob(job)),
       } satisfies BroadcastQueueSnapshot;
+    },
+
+    updateJob(jobId, updates) {
+      const job = jobs.get(jobId);
+      if (!job) {
+        return undefined;
+      }
+
+      const resolvedUpdatedAt = updates.updatedAt ? cloneDate(updates.updatedAt) : now();
+
+      const nextJob: BroadcastJob = {
+        ...job,
+        status: updates.status ?? job.status,
+        attempts: typeof updates.attempts === 'number' ? updates.attempts : job.attempts,
+        requestedBy:
+          updates.requestedBy === undefined
+            ? job.requestedBy
+            : updates.requestedBy === null
+              ? undefined
+              : updates.requestedBy,
+        lastError:
+          updates.lastError === undefined
+            ? job.lastError
+            : updates.lastError === null
+              ? undefined
+              : updates.lastError,
+        updatedAt: resolvedUpdatedAt,
+      };
+
+      jobs.set(jobId, nextJob);
+      return cloneJob(nextJob);
     },
   };
 };

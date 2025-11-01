@@ -18,6 +18,8 @@ export type {
 export {
   createAdminBroadcastRoute,
   createInMemoryBroadcastQueue,
+  createBroadcastScheduler,
+  createInMemoryBroadcastProgressStore,
 } from './broadcast';
 export type {
   AdminBroadcastRequest,
@@ -28,6 +30,14 @@ export type {
   BroadcastQueueSnapshot,
   CreateAdminBroadcastRouteOptions,
   EnqueueBroadcastJobOptions,
+  BroadcastScheduler,
+  BroadcastSchedulerLogger,
+  BroadcastSchedulerOptions,
+  BroadcastRecipient,
+  ResolveBroadcastRecipients,
+  BroadcastProgressStore,
+  BroadcastJobProgress,
+  UpdateBroadcastJobOptions,
 } from './broadcast';
 export {
   createSelfTestRoute,

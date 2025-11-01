@@ -10,11 +10,15 @@ import {
 import {
   createAdminBroadcastRoute,
   createAdminExportRoute,
+  createBroadcastScheduler,
   createCsvExportHandler,
   createEnvzRoute,
+  createInMemoryBroadcastProgressStore,
   createInMemoryBroadcastQueue,
   createRateLimitNotifier,
   createSelfTestRoute,
+  type BroadcastJob,
+  type BroadcastScheduler,
   type LimitsFlagKvNamespace,
 } from './features';
 import {
@@ -59,6 +63,7 @@ interface WorkerExecutionContext {
 }
 
 const broadcastQueue = createInMemoryBroadcastQueue();
+const broadcastProgressStore = createInMemoryBroadcastProgressStore();
 
 const DEFAULT_RATE_LIMIT = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -318,12 +323,35 @@ const createAdminRoutes = (
   return routes;
 };
 
+const resolveBroadcastRecipientsFromJob = (job: BroadcastJob) => {
+  const filters = job.payload.filters;
+  const chatIds = filters?.chatIds ?? [];
+
+  if (chatIds.length === 0) {
+    throw new Error('Broadcast job requires filters.chatIds until audience resolver is implemented');
+  }
+
+  if ((filters?.userIds?.length ?? 0) > 0 || (filters?.languageCodes?.length ?? 0) > 0) {
+    console.warn('[broadcast] ignoring unsupported audience selectors', {
+      userIds: filters?.userIds?.length ?? 0,
+      languageCodes: filters?.languageCodes?.length ?? 0,
+    });
+  }
+
+  return chatIds.map((chatId) => ({ chatId }));
+};
+
 const createTransformPayload = (env: WorkerEnv) => (payload: unknown) =>
   transformTelegramUpdate(payload, {
     botUsername: env.TELEGRAM_BOT_USERNAME,
   });
 
-const createRequestHandler = (env: WorkerEnv) => {
+interface RequestHandlerResult {
+  router: ReturnType<typeof createRouter>;
+  scheduler?: BroadcastScheduler;
+}
+
+const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
   const runtime = validateRuntimeConfig(env);
   const adapters = createPortOverrides(env, runtime);
 
@@ -337,6 +365,8 @@ const createRequestHandler = (env: WorkerEnv) => {
 
   const typingIndicator = createTypingIndicatorIfAvailable(composition.ports.messaging);
 
+  const adminRoutes = createAdminRoutes(env, composition);
+
   const router = createRouter({
     dialogEngine: composition.dialogEngine,
     messaging: composition.ports.messaging,
@@ -344,16 +374,30 @@ const createRequestHandler = (env: WorkerEnv) => {
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
     transformPayload: createTransformPayload(env),
-    admin: createAdminRoutes(env, composition),
+    admin: adminRoutes,
   });
 
-  return router;
+  const scheduler = adminRoutes?.broadcast
+    ? createBroadcastScheduler({
+        queue: broadcastQueue,
+        messaging: composition.ports.messaging,
+        progressStore: broadcastProgressStore,
+        resolveRecipients: resolveBroadcastRecipientsFromJob,
+      })
+    : undefined;
+
+  return { router, scheduler };
 };
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext): Promise<Response> {
-    void ctx;
-    const router = createRequestHandler(env);
-    return router.handle(request);
+    const { router, scheduler } = createRequestHandler(env);
+    const response = await router.handle(request);
+
+    if (scheduler && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(scheduler.processPendingJobs());
+    }
+
+    return response;
   },
 };
