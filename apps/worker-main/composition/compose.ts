@@ -1,4 +1,4 @@
-import { DialogEngine, type DialogEngineOptions } from '../core/DialogEngine';
+import { DialogEngine, type DialogEngineOptions } from '../core';
 import { createNoopPorts, type NoopPorts } from '../adapters-noop';
 import { createRateLimitToggle, type LimitsFlagKvNamespace } from '../features/limits';
 import type { AiPort, MessagingPort, RateLimitPort, StoragePort } from '../ports';

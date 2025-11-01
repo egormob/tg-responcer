@@ -1,4 +1,5 @@
 import type { AiPort, ConversationTurn } from '../../ports';
+import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -46,10 +47,7 @@ interface ResponsesApiSuccessPayload {
   output_text?: string | string[];
 }
 
-const removeControlCharacters = (text: string): string =>
-  text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-
-const sanitizeOutputText = (text: string): string => removeControlCharacters(text).trim();
+const sanitizeOutputText = (text: string): string => sanitizeVisibleText(text);
 
 const isRetryableStatus = (status: number): boolean => status === 429 || status >= 500;
 
@@ -73,7 +71,7 @@ const buildInputMessages = (
     content: [
       {
         type: mapTurnToContentType(turn.role),
-        text: removeControlCharacters(turn.text),
+        text: stripControlCharacters(turn.text),
       },
     ],
   }));
@@ -85,7 +83,7 @@ const buildInputMessages = (
       content: [
         {
           type: 'input_text',
-          text: removeControlCharacters(latestText),
+          text: stripControlCharacters(latestText),
         },
       ],
     },
