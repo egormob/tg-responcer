@@ -15,6 +15,6 @@ Use this tag as the baseline for future recoveries and production deploys.
 - `adapters/d1-storage` — добавить `response_id` в миграции и убедиться, что self-test использует сохранённые идентификаторы при `previous_response_id`.
 - `features/export` — расширить CSV колонками `model`, `response_id`, протестировать выгрузку длинных сообщений.
 - `features/limits`/`adapters/kv-rate-limit` — синхронизировать тексты уведомлений и убедиться, что отсутствуют ссылки на `assistantId`.
-- `features/broadcast` — предусмотреть включение флага `BROADCAST_ENABLED`, троттлинг и очереди для больших рассылок.
+- `features/broadcast` — завершить планировщик и троттлинг (М8.Ш2–Ш3), проверить, что флаг `BROADCAST_ENABLED` управляет доступом к маршруту.
 - `features/observability`/`http/admin/*` — добавить requestId в логи и убедиться, что метрики не зависят от legacy-полей.
 - Памятки деплоя — обновить `memory-bank/openai-responses-prompt.md`, `memory-bank/operations.md` перед включением Responses-only.
