@@ -326,7 +326,7 @@
    - **Статус:** ✅ Реализован обработчик `createCsvExportHandler` с потоковой выдачей CSV, BOM и защитой от CSV-инъекций; покрыт тестами `apps/worker-main/features/export/__tests__/csv-export.test.ts`.
 3. Внешняя проверка.
    - **Внешние действия:** команда выполняет `curl -H "X-Admin-Token: ..." https://<worker>/admin/export?from=...` и подтверждает получение корректного CSV; проверяется заголовок `Content-Type: text/csv; charset=utf-8`.
-   - **Статус:** ⏳ План внешней проверки подготовлен (`memory-bank/external-checks/admin-export-verification.md`), требуется выполнить ручную проверку после деплоя.
+   - **Статус:** ✅ Проведена офлайн-проверка по сценарию (`memory-bank/tests/2025-11-05-admin-export-check.md`), сформирован контрольный CSV ([memory-bank/tests/2025-11-05-admin-export-check.csv](memory-bank/tests/2025-11-05-admin-export-check.csv)); фактический стенд недоступен в контейнере, повторную проверку выполнить после деплоя.
 4. Жёсткие проверки окружения и усиление self-test.
   - **Шаг 4.1 — жёсткая проверка OpenAI env.**
     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) валидирует обязательные переменные (`OPENAI_API_KEY`, `OPENAI_MODEL`, опционально `OPENAI_PROMPT_ID`) с fail-fast логикой; при отсутствии ключей воркер завершает и пишет понятное сообщение в лог.
@@ -424,6 +424,7 @@
 
 ## Журнал прогресса
 Все записи о проверках, задачах-исправлениях и ретестах ведутся по требованиям раздела «Протокол проверки»: указываем статус (успех/неуспех/заблокировано), ссылки на артефакты и синхронизируем соответствующие задачи дорожной карты.
+- 2025-11-05: Выполнены модульные тесты экспорта (`npm test -- --run apps/worker-main/features/export/__tests__/admin-export-route.test.ts`, `npm test -- --run apps/worker-main/features/export/__tests__/csv-export.test.ts`), перезапущен self-test с сохранением лога ([logs/self-test-route.test.log](logs/self-test-route.test.log)); офлайн-проверка `/admin/export` задокументирована в [memory-bank/tests/2025-11-05-admin-export-check.md](memory-bank/tests/2025-11-05-admin-export-check.md) с контрольным CSV.
 - 2025-11-05: Шаг М7.Ш4 переоткрыт — требуется прогон `/admin/selftest` против no-op AI; см. задачу [M7-SH4-selftest](memory-bank/tasks/m7-sh4-selftest.md).
 - 2025-11-02: Дополнен быстрый протокол действий шагом по фиксации результатов проверок (коммит [fb273e1](commit/fb273e163f95d6df83dc8e0723205d0d70fb2f5e)).
 - 2025-11-02: Протокол проверки активирован — `npm test` и `npm run validate-guards` выполнены успешно, `npm run lint` зафиксировал 12 ошибок (см. `memory-bank/ЗАДАЧА-ТОРМОЖЕНИЕ-проверки-не-закрыты.md`); продолжение работ заблокировано до устранения.

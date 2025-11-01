@@ -1,0 +1,14 @@
+
+> tg-responcer@0.1.0 test
+> vitest --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts
+
+
+ RUN  v1.6.1 /workspace/tg-responcer
+
+ ✓ apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts  (5 tests) 64ms
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  15:42:02
+   Duration  940ms (transform 155ms, setup 0ms, collect 142ms, tests 64ms, environment 0ms, prepare 144ms)
+
