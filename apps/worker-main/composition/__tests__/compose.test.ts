@@ -4,48 +4,93 @@ import type { AiPort, MessagingPort, RateLimitPort, StoragePort } from '../../po
 import type { PortOverrides } from '../compose';
 import { composeWorker } from '../compose';
 
-const createMessagingPort = (): MessagingPort => ({
-  sendTyping: vi
+const createMessagingPort = () => {
+  const sendTyping = vi
     .fn<Parameters<MessagingPort['sendTyping']>, ReturnType<MessagingPort['sendTyping']>>()
-    .mockResolvedValue(undefined),
-  sendText: vi
+    .mockResolvedValue(undefined);
+  const sendText = vi
     .fn<Parameters<MessagingPort['sendText']>, ReturnType<MessagingPort['sendText']>>()
-    .mockResolvedValue({ messageId: '42' }),
-});
+    .mockResolvedValue({ messageId: '42' });
 
-const createAiPort = (): AiPort => ({
-  reply: vi
+  return {
+    sendTyping,
+    sendText,
+  } satisfies MessagingPort & {
+    sendTyping: typeof sendTyping;
+    sendText: typeof sendText;
+  };
+};
+
+const createAiPort = () => {
+  const reply = vi
     .fn<Parameters<AiPort['reply']>, ReturnType<AiPort['reply']>>()
-    .mockResolvedValue({ text: 'hi' }),
-});
+    .mockResolvedValue({ text: 'hi' });
 
-const createStoragePort = (): StoragePort => ({
-  saveUser: vi
+  return {
+    reply,
+  } satisfies AiPort & {
+    reply: typeof reply;
+  };
+};
+
+const createStoragePort = () => {
+  const saveUser = vi
     .fn<Parameters<StoragePort['saveUser']>, ReturnType<StoragePort['saveUser']>>()
-    .mockResolvedValue(undefined),
-  appendMessage: vi
+    .mockResolvedValue(undefined);
+  const appendMessage = vi
     .fn<Parameters<StoragePort['appendMessage']>, ReturnType<StoragePort['appendMessage']>>()
-    .mockResolvedValue(undefined),
-  getRecentMessages: vi
-    .fn<Parameters<StoragePort['getRecentMessages']>, ReturnType<StoragePort['getRecentMessages']>>()
-    .mockResolvedValue([]),
-});
+    .mockResolvedValue(undefined);
+  const getRecentMessages = vi
+    .fn<
+      Parameters<StoragePort['getRecentMessages']>,
+      ReturnType<StoragePort['getRecentMessages']>
+    >()
+    .mockResolvedValue([]);
 
-const createRateLimitPort = (): RateLimitPort => ({
-  checkAndIncrement: vi
+  return {
+    saveUser,
+    appendMessage,
+    getRecentMessages,
+  } satisfies StoragePort & {
+    saveUser: typeof saveUser;
+    appendMessage: typeof appendMessage;
+    getRecentMessages: typeof getRecentMessages;
+  };
+};
+
+const createRateLimitPort = () => {
+  const checkAndIncrement = vi
     .fn<
       Parameters<RateLimitPort['checkAndIncrement']>,
       ReturnType<RateLimitPort['checkAndIncrement']>
     >()
-    .mockResolvedValue('ok'),
-});
+    .mockResolvedValue('ok');
 
-const createPortOverrides = (): PortOverrides => ({
-  messaging: createMessagingPort(),
-  ai: createAiPort(),
-  storage: createStoragePort(),
-  rateLimit: createRateLimitPort(),
-});
+  return {
+    checkAndIncrement,
+  } satisfies RateLimitPort & {
+    checkAndIncrement: typeof checkAndIncrement;
+  };
+};
+
+const createPortOverrides = () => {
+  const messaging = createMessagingPort();
+  const ai = createAiPort();
+  const storage = createStoragePort();
+  const rateLimit = createRateLimitPort();
+
+  return {
+    messaging,
+    ai,
+    storage,
+    rateLimit,
+  } satisfies PortOverrides & {
+    messaging: ReturnType<typeof createMessagingPort>;
+    ai: ReturnType<typeof createAiPort>;
+    storage: ReturnType<typeof createStoragePort>;
+    rateLimit: ReturnType<typeof createRateLimitPort>;
+  };
+};
 
 describe('composeWorker', () => {
   it('returns noop ports when overrides are not provided', async () => {

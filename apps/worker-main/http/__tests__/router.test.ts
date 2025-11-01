@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DialogEngine } from '../../core/DialogEngine';
 import type { MessagingPort } from '../../ports';
 import { createRouter, parseIncomingMessage } from '../router';
+import type { TypingIndicator } from '../typing-indicator';
 
 describe('http router', () => {
   const createDialogEngineMock = () => ({
@@ -259,9 +260,12 @@ describe('http router', () => {
     const handleMessage = vi
       .fn<Parameters<DialogEngine['handleMessage']>, ReturnType<DialogEngine['handleMessage']>>()
       .mockResolvedValue({ status: 'replied', response: { text: 'ok' } });
-    const typingIndicator = {
-      runWithTyping: vi.fn(async (_context, run: () => Promise<unknown>) => run()),
+    const typingIndicator: TypingIndicator = {
+      async runWithTyping(context, run) {
+        return run();
+      },
     };
+    const runWithTyping = vi.spyOn(typingIndicator, 'runWithTyping');
 
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
@@ -285,8 +289,8 @@ describe('http router', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(typingIndicator.runWithTyping).toHaveBeenCalledTimes(1);
-    expect(typingIndicator.runWithTyping).toHaveBeenCalledWith(
+    expect(runWithTyping).toHaveBeenCalledTimes(1);
+    expect(runWithTyping).toHaveBeenCalledWith(
       { chatId: 'chat-typing', threadId: 'thread-typing' },
       expect.any(Function),
     );

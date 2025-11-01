@@ -7,7 +7,7 @@ interface D1PreparedStatement {
   all<T = unknown>(): Promise<{ results: T[] }>;
 }
 
-interface D1Database {
+export interface D1Database {
   prepare(query: string): D1PreparedStatement;
 }
 
@@ -268,5 +268,3 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
     },
   };
 };
-
-export type { D1Database };

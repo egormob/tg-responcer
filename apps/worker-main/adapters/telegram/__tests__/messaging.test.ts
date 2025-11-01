@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { MessagingPort } from '../../../ports';
 import { createTelegramMessagingAdapter } from '..';
@@ -12,11 +12,11 @@ describe('createTelegramMessagingAdapter', () => {
   const botToken = 'test-token';
   const baseUrl = 'https://api.telegram.org';
 
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock<Parameters<typeof fetch>, ReturnType<typeof fetch>>;
   let waitMock: ReturnType<typeof createWaitMock>;
 
   beforeEach(() => {
-    fetchMock = vi.fn();
+    fetchMock = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>();
     waitMock = createWaitMock();
   });
 

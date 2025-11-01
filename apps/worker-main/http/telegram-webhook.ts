@@ -253,7 +253,7 @@ const handleAdminCommand = async (
   }
 
   const response = await handler(context);
-  return toHandledResult(response);
+  return response ? toHandledResult(response) : toHandledResult();
 };
 
 export const transformTelegramUpdate = async (

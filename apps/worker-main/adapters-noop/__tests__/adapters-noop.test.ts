@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import {
   createNoopAiPort,
@@ -10,10 +10,15 @@ import {
 
 describe('adapters-noop', () => {
   const originalWarn = console.warn;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: MockInstance<
+    Parameters<typeof console.warn>,
+    ReturnType<typeof console.warn>
+  >;
 
   beforeEach(() => {
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined as ReturnType<typeof console.warn>);
   });
 
   afterEach(() => {

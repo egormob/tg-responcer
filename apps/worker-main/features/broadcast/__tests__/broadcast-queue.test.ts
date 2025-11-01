@@ -35,7 +35,9 @@ describe('createInMemoryBroadcastQueue', () => {
       },
     });
 
-    original.payload.filters?.chatIds?.push('3');
+    if (original.payload.filters?.chatIds) {
+      (original.payload.filters.chatIds as unknown as string[]).push('3');
+    }
     if (original.payload.metadata) {
       original.payload.metadata.newField = 'value';
     }

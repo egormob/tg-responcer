@@ -26,7 +26,11 @@ describe('transformTelegramUpdate', () => {
   it('returns dialog message for regular text update', async () => {
     const result = await transformTelegramUpdate(createBaseUpdate());
 
-    expect(result).toMatchObject({ kind: 'message' });
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
+    expect(result.kind).toBe('message');
     if (result.kind !== 'message') {
       throw new Error('Expected message result');
     }
@@ -55,7 +59,15 @@ describe('transformTelegramUpdate', () => {
       features: { handleAdminCommand },
     });
 
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
     expect(result.kind).toBe('handled');
+    if (result.kind !== 'handled') {
+      throw new Error('Expected handled result');
+    }
+
     expect(result.response?.status).toBe(202);
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
@@ -82,6 +94,10 @@ describe('transformTelegramUpdate', () => {
       botUsername: 'mybot',
     });
 
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
     expect(result.kind).toBe('message');
     if (result.kind !== 'message') {
       throw new Error('Expected message result');
@@ -103,7 +119,15 @@ describe('transformTelegramUpdate', () => {
 
     const result = await transformTelegramUpdate(update);
 
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
     expect(result.kind).toBe('handled');
+    if (result.kind !== 'handled') {
+      throw new Error('Expected handled result');
+    }
+
     await expect(result.response?.json()).resolves.toEqual({ status: 'ok' });
   });
 
@@ -117,14 +141,30 @@ describe('transformTelegramUpdate', () => {
 
     const result = await transformTelegramUpdate(update);
 
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
     expect(result.kind).toBe('handled');
+    if (result.kind !== 'handled') {
+      throw new Error('Expected handled result');
+    }
+
     await expect(result.response?.json()).resolves.toEqual({ status: 'ignored' });
   });
 
   it('returns handled ignored result when no message present', async () => {
     const result = await transformTelegramUpdate({ update_id: 1 });
 
+    if (!('kind' in result)) {
+      throw new Error('Expected discriminated result');
+    }
+
     expect(result.kind).toBe('handled');
+    if (result.kind !== 'handled') {
+      throw new Error('Expected handled result');
+    }
+
     await expect(result.response?.json()).resolves.toEqual({ status: 'ignored' });
   });
 });
