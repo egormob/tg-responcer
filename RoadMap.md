@@ -322,6 +322,17 @@
 3. Внешняя проверка.
    - **Внешние действия:** команда выполняет `curl -H "X-Admin-Token: ..." https://<worker>/admin/export?from=...` и подтверждает получение корректного CSV; проверяется заголовок `Content-Type: text/csv; charset=utf-8`.
    - **Статус:** ⏳ План внешней проверки подготовлен (`memory-bank/external-checks/admin-export-verification.md`), требуется выполнить ручную проверку после деплоя.
+4. Жёсткие проверки окружения и усиление self-test.
+   - **Шаг 4.1 — жёсткая проверка OpenAI env.**
+     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) валидирует обязательные переменные (`OPENAI_API_KEY`, `OPENAI_MODEL`, опционально `OPENAI_PROMPT_ID`) с fail-fast логикой; при отсутствии ключей воркер завершает и пишет понятное сообщение в лог.
+     - **Проверка:** ревью кода подтверждает наличие проверки и fail-fast поведения; финальный чек `pnpm test --filter worker-main`.
+   - **Шаг 4.2 — жёсткая проверка Telegram токена.**
+     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) дополнительно проверяет `TELEGRAM_BOT_TOKEN` на непустое значение и корректный префикс `bot`, ошибки логируются и блокируют запуск.
+     - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена; финальный чек `pnpm test --filter worker-main`.
+   - **Шаг 4.3 — усиление `/admin/selftest`.**
+     - **Результат:** [`apps/worker-main/features/admin-diagnostics/self-test-route.ts`](apps/worker-main/features/admin-diagnostics/self-test-route.ts) выполняет цепочку проверок (OpenAI → Telegram) и возвращает структурированный отчёт с полями `openAiOk`, `telegramOk`, `errors[]`.
+     - **Проверка:** добавлены юнит-тесты для маршрута; финальный чек `pnpm test --filter worker-main` подтверждает корректность.
+   - **Статус:** ⏳ Шаги не начаты; команда готова к исполнению по команде «Следуй дорожной карте».
 
 **Риски и предохранители:** ограничение выгрузки пагинацией и валидацией диапазонов; токен не логируется; большая выгрузка переводится в очередь.
 
