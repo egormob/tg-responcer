@@ -25,8 +25,8 @@
 ## Результаты
 - `npm test` — успешно (см. `RoadMap.md`, журнал от 2025-11-02).
 - `npm run validate-guards` — успешно.
-- `npm run lint` — провалено: ошибки `no-control-regex`, `no-restricted-imports`, `@typescript-eslint/no-unused-vars`, `@typescript-eslint/no-explicit-any`, `no-irregular-whitespace`.
-- Следующий шаг: устранить ошибки lint, повторить блок B, закрыть «ЗАДАЧА-ТОРМОЖЕНИЕ…».
+- `npm run lint` — успешно (ошибки `no-control-regex`, `no-restricted-imports`, `@typescript-eslint/no-unused-vars`, `@typescript-eslint/no-explicit-any`, `no-irregular-whitespace` устранены повторным запуском 2025-11-03).
+- Блок статических проверок закрыт; см. обновление журнала в `RoadMap.md` от 2025-11-03.
 
 ## Артефакты
 - Консольные логи: см. запуск `npm test` (`chunk 29d37d`), `npm run lint` (`chunk aed52a`), `npm run validate-guards` (`chunk ab5b1d`).

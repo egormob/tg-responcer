@@ -1,4 +1,4 @@
-import type { IncomingMessage } from '../core/DialogEngine';
+import type { IncomingMessage } from '../core';
 
 import type {
   HandledWebhookResult,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAdminBroadcastRoute } from '../admin-broadcast-route';
-import type { BroadcastQueue } from '../broadcast-queue';
+import type { BroadcastJob, BroadcastQueue } from '../broadcast-queue';
 
 const createQueue = () => ({
   enqueue: vi.fn(),
@@ -77,14 +77,16 @@ describe('createAdminBroadcastRoute', () => {
 
   it('validates filters when provided', async () => {
     const queue = createQueue();
-    queue.enqueue = vi.fn().mockReturnValue({
+    const enqueuedJob = {
       id: 'job-1',
       status: 'pending',
       createdAt: new Date('2024-01-01T00:00:00.000Z'),
       updatedAt: new Date('2024-01-01T00:00:00.000Z'),
       attempts: 0,
       payload: { text: 'hello', filters: { chatIds: ['1'] } },
-    } as any);
+    } satisfies BroadcastJob;
+
+    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
 
     const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
 
@@ -105,7 +107,7 @@ describe('createAdminBroadcastRoute', () => {
 
   it('propagates metadata and actor header', async () => {
     const queue = createQueue();
-    queue.enqueue = vi.fn().mockReturnValue({
+    const enqueuedJob = {
       id: 'job-1',
       status: 'pending',
       createdAt: new Date('2024-01-01T00:00:00.000Z'),
@@ -113,7 +115,9 @@ describe('createAdminBroadcastRoute', () => {
       attempts: 0,
       requestedBy: 'ops',
       payload: { text: 'hello', metadata: { dryRun: true } },
-    } as any);
+    } satisfies BroadcastJob;
+
+    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
 
     const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, now: () => new Date('2024-01-01T00:00:10.000Z') });
 

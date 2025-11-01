@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../../ports';
+import { stripControlCharacters } from '../../shared';
 
 const DEFAULT_BASE_URL = 'https://api.telegram.org';
 const DEFAULT_MAX_RETRIES = 3;
@@ -53,8 +54,7 @@ class TelegramApiError extends Error {
   }
 }
 
-const sanitizeText = (text: string): string =>
-  text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+const sanitizeText = (text: string): string => stripControlCharacters(text);
 
 const isRetryableStatus = (status: number): boolean => status === 429 || status >= 500;
 

@@ -6,7 +6,8 @@ import { createKvRateLimitAdapter, type RateLimitKvNamespace } from '../index';
 class FakeKv implements RateLimitKvNamespace {
   readonly store = new Map<string, { value: string; expirationTtl: number }>();
 
-  async get(key: string, _type: 'text' = 'text'): Promise<string | null> {
+  async get(key: string, type: 'text' = 'text'): Promise<string | null> {
+    void type;
     return this.store.get(key)?.value ?? null;
   }
 

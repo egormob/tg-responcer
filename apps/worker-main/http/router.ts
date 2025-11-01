@@ -1,4 +1,4 @@
-import { DialogEngine, type IncomingMessage } from '../core/DialogEngine';
+import { DialogEngine, type IncomingMessage } from '../core';
 import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
