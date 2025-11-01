@@ -173,6 +173,10 @@ export const createInMemoryBroadcastQueue = (
         return undefined;
       }
 
+      if (updates.status === 'processing' && job.status !== 'pending') {
+        return undefined;
+      }
+
       const resolvedUpdatedAt = updates.updatedAt ? cloneDate(updates.updatedAt) : now();
 
       const nextJob: BroadcastJob = {

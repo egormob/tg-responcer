@@ -188,4 +188,41 @@ describe('createBroadcastScheduler', () => {
     expect(progress?.lastError).toContain('network failure');
     expect(progress?.attempt).toBe(2);
   });
+
+  it('skips jobs claimed by another worker between snapshot and claim', async () => {
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => new Date('2024-01-01T00:00:00.000Z'),
+    });
+    const progressStore = createInMemoryBroadcastProgressStore();
+    const messaging = createMessagingPort();
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    const job = queue.enqueue({ payload: basePayload });
+
+    const staleSnapshot = queue.list();
+
+    queue.updateJob(job.id, { status: 'processing', attempts: 1 });
+
+    (queue as { list: () => typeof staleSnapshot }).list = () => staleSnapshot;
+
+    const scheduler = createBroadcastScheduler({
+      queue,
+      messaging,
+      progressStore,
+      resolveRecipients: () => [{ chatId: '100' }],
+      now: () => new Date('2024-01-01T00:10:00.000Z'),
+      wait,
+      perRecipientDelayMs: 0,
+    });
+
+    await scheduler.processPendingJobs();
+
+    expect(messaging.sendText).not.toHaveBeenCalled();
+
+    const stored = queue.getJob(job.id);
+    expect(stored?.status).toBe('processing');
+    expect(stored?.attempts).toBe(1);
+    await expect(progressStore.read(job.id)).resolves.toBeUndefined();
+  });
 });

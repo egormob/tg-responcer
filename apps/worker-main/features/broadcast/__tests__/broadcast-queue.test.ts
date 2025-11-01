@@ -120,4 +120,37 @@ describe('createInMemoryBroadcastQueue', () => {
     expect(storedCleared?.lastError).toBeUndefined();
     expect(storedCleared).not.toBe(cleared);
   });
+
+  it('prevents claiming a job that is no longer pending', () => {
+    let nowIndex = 0;
+    const timestamps = [
+      new Date('2024-01-01T00:00:00.000Z'),
+      new Date('2024-01-01T00:01:00.000Z'),
+      new Date('2024-01-01T00:02:00.000Z'),
+    ];
+
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => timestamps[Math.min(nowIndex++, timestamps.length - 1)]!,
+    });
+
+    const job = queue.enqueue({ payload: basePayload });
+
+    const claimed = queue.updateJob(job.id, { status: 'processing', attempts: 1 });
+    expect(claimed?.status).toBe('processing');
+
+    const rejected = queue.updateJob(job.id, { status: 'processing', attempts: 2 });
+    expect(rejected).toBeUndefined();
+
+    const stored = queue.getJob(job.id);
+    expect(stored?.status).toBe('processing');
+    expect(stored?.attempts).toBe(1);
+
+    const reset = queue.updateJob(job.id, { status: 'pending' });
+    expect(reset?.status).toBe('pending');
+
+    const reclaimed = queue.updateJob(job.id, { status: 'processing', attempts: 2 });
+    expect(reclaimed?.status).toBe('processing');
+    expect(reclaimed?.attempts).toBe(2);
+  });
 });

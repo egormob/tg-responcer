@@ -80,7 +80,7 @@ export const createBroadcastScheduler = (options: BroadcastSchedulerOptions): Br
     });
 
     if (!claim) {
-      logger?.warn?.('broadcast job lost before processing', { jobId: job.id });
+      logger?.debug?.('broadcast job skipped because it was already claimed', { jobId: job.id });
       return;
     }
 
