@@ -32,6 +32,9 @@ jobs:
       - name: Test
         run: npm run test -- --run
 
+      - name: Check roadmap gate
+        run: npm run check:roadmap
+
       - name: Validate guards
         if: github.event_name == 'pull_request'
         env:

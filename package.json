@@ -8,7 +8,8 @@
     "test": "vitest",
     "test:core": "vitest run apps/worker-main/core/__tests__/DialogEngine.test.ts",
     "lint": "eslint .",
-    "validate-guards": "node scripts/validate-guards.mjs || exit 0"
+    "validate-guards": "node scripts/validate-guards.mjs || exit 0",
+    "check:roadmap": "node scripts/check-roadmap.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
