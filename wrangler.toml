@@ -4,3 +4,8 @@ compatibility_date = "2025-10-26"
 
 [vars]
 # Позднее добавим биндинги D1/KV
+
+[[d1_databases]]
+binding = "DB"
+database_id = "d9f40a7d-5f9f-4b8b-9e61-cf96a94d3b86"
+migrations_dir = "apps/worker-main/migrations"
