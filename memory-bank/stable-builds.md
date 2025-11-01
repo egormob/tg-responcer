@@ -1,5 +1,15 @@
 # Stable Production Snapshots
 
+- После подтверждения внешними проверками успешного завершения майлстоуна создаём аннотированный тег `prod-YYYY-MM-DD[-label]`, пушим его в `origin` и добавляем сюда запись со ссылкой и описанием.
+
+## prod-2025-11-02-stable
+- **Commit**: efe6573413f12ff24451eb89d5ea73b03bae3689
+- **Description**: Responses-only prod: Telegram-бот отвечает по промпту из OpenAI Responses, память отключена.
+- **Checks**:
+  - Ручной прогон через Telegram: ответы соответствуют сценариям промпта, задержек и ошибок не наблюдается.
+  - Подтверждена работоспособность без памяти: диалоги обрабатываются через Responses, состояние не сохраняется.
+- **Tag**: `prod-2025-11-02-stable`
+
 ## prod-2025-10-31-pr38
 - **Commit**: 3aaaf6fb081e131b56de2bc3b9a633fbb23ebaed
 - **Description**: Known-good prod. Workers Builds: PR #38 (lazy model retrieval).
