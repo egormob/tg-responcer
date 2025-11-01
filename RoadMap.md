@@ -326,9 +326,9 @@
    - **Шаг 4.1 — жёсткая проверка OpenAI env.**
      - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) валидирует обязательные переменные (`OPENAI_API_KEY`, `OPENAI_MODEL`, опционально `OPENAI_PROMPT_ID`) с fail-fast логикой; при отсутствии ключей воркер завершает и пишет понятное сообщение в лог.
      - **Проверка:** ревью кода подтверждает наличие проверки и fail-fast поведения; финальный чек `pnpm test --filter worker-main`.
-   - **Шаг 4.2 — жёсткая проверка Telegram токена.**
-     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) дополнительно проверяет `TELEGRAM_BOT_TOKEN` на непустое значение и корректный префикс `bot`, ошибки логируются и блокируют запуск.
-     - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена; финальный чек `pnpm test --filter worker-main`.
+  - **Шаг 4.2 — жёсткая проверка Telegram токена.**
+    - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) дополнительно проверяет, что `TELEGRAM_BOT_TOKEN` непустой (префикс `bot` добавляется адаптером [`apps/worker-main/adapters/telegram/index.ts`](apps/worker-main/adapters/telegram/index.ts)), ошибки логируются и блокируют запуск.
+    - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена на непустое значение; финальный чек `pnpm test --filter worker-main`.
    - **Шаг 4.3 — усиление `/admin/selftest`.**
      - **Результат:** [`apps/worker-main/features/admin-diagnostics/self-test-route.ts`](apps/worker-main/features/admin-diagnostics/self-test-route.ts) выполняет цепочку проверок (OpenAI → Telegram) и возвращает структурированный отчёт с полями `openAiOk`, `telegramOk`, `errors[]`.
      - **Проверка:** добавлены юнит-тесты для маршрута; финальный чек `pnpm test --filter worker-main` подтверждает корректность.
