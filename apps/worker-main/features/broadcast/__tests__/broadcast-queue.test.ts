@@ -76,4 +76,81 @@ describe('createInMemoryBroadcastQueue', () => {
 
     expect(ids).toEqual(['job-1', 'job-2']);
   });
+
+  it('updates job fields and returns cloned result', () => {
+    let call = 0;
+    const timestamps = [
+      new Date('2024-01-01T00:00:00.000Z'),
+      new Date('2024-01-01T00:10:00.000Z'),
+      new Date('2024-01-01T00:20:00.000Z'),
+    ];
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => timestamps[Math.min(call++, timestamps.length - 1)]!,
+    });
+
+    const original = queue.enqueue({ payload: basePayload, requestedBy: 'alice' });
+
+    const processing = queue.updateJob(original.id, {
+      status: 'processing',
+      attempts: 1,
+      lastError: 'temporary failure',
+    });
+
+    expect(processing?.status).toBe('processing');
+    expect(processing?.attempts).toBe(1);
+    expect(processing?.updatedAt.toISOString()).toBe('2024-01-01T00:10:00.000Z');
+
+    const storedProcessing = queue.getJob(original.id);
+    expect(storedProcessing?.status).toBe('processing');
+    expect(storedProcessing?.lastError).toBe('temporary failure');
+
+    const cleared = queue.updateJob(original.id, {
+      status: 'pending',
+      lastError: null,
+      requestedBy: null,
+    });
+
+    expect(cleared?.status).toBe('pending');
+    expect(cleared?.lastError).toBeUndefined();
+    expect(cleared?.requestedBy).toBeUndefined();
+    expect(cleared?.updatedAt.toISOString()).toBe('2024-01-01T00:20:00.000Z');
+
+    const storedCleared = queue.getJob(original.id);
+    expect(storedCleared?.lastError).toBeUndefined();
+    expect(storedCleared).not.toBe(cleared);
+  });
+
+  it('prevents claiming a job that is no longer pending', () => {
+    let nowIndex = 0;
+    const timestamps = [
+      new Date('2024-01-01T00:00:00.000Z'),
+      new Date('2024-01-01T00:01:00.000Z'),
+      new Date('2024-01-01T00:02:00.000Z'),
+    ];
+
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => timestamps[Math.min(nowIndex++, timestamps.length - 1)]!,
+    });
+
+    const job = queue.enqueue({ payload: basePayload });
+
+    const claimed = queue.updateJob(job.id, { status: 'processing', attempts: 1 });
+    expect(claimed?.status).toBe('processing');
+
+    const rejected = queue.updateJob(job.id, { status: 'processing', attempts: 2 });
+    expect(rejected).toBeUndefined();
+
+    const stored = queue.getJob(job.id);
+    expect(stored?.status).toBe('processing');
+    expect(stored?.attempts).toBe(1);
+
+    const reset = queue.updateJob(job.id, { status: 'pending' });
+    expect(reset?.status).toBe('pending');
+
+    const reclaimed = queue.updateJob(job.id, { status: 'processing', attempts: 2 });
+    expect(reclaimed?.status).toBe('processing');
+    expect(reclaimed?.attempts).toBe(2);
+  });
 });
