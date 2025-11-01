@@ -177,29 +177,59 @@ const parsePromptVariables = (value: unknown): Record<string, unknown> | undefin
   }
 };
 
-const createPortOverrides = (env: WorkerEnv): Partial<PortOverrides> => {
-  const overrides: Partial<PortOverrides> = {};
+interface RuntimeConfig {
+  readonly telegramBotToken: string;
+  readonly openAi: {
+    readonly apiKey: string;
+    readonly model: string;
+    readonly promptId?: string;
+    readonly promptVariables?: Record<string, unknown>;
+  };
+}
 
-  if (typeof env.TELEGRAM_BOT_TOKEN === 'string' && env.TELEGRAM_BOT_TOKEN.length > 0) {
-    overrides.messaging = createTelegramMessagingAdapter({
-      botToken: env.TELEGRAM_BOT_TOKEN,
-    });
+const validateRuntimeConfig = (env: WorkerEnv): RuntimeConfig => {
+  const apiKey = getTrimmedString(env.OPENAI_API_KEY);
+  if (!apiKey) {
+    console.error('[config] OPENAI_API_KEY is required');
+    throw new Error('Missing OPENAI_API_KEY environment variable');
   }
 
-  const apiKey = getTrimmedString(env.OPENAI_API_KEY);
   const model = getTrimmedString(env.OPENAI_MODEL);
+  if (!model) {
+    console.error('[config] OPENAI_MODEL is required');
+    throw new Error('Missing OPENAI_MODEL environment variable');
+  }
 
-  if (apiKey && model) {
-    const promptId = normalizePromptId(env.OPENAI_PROMPT_ID);
-    const promptVariables = parsePromptVariables(env.OPENAI_PROMPT_VARIABLES);
+  const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
+  if (!botToken) {
+    console.error('[config] TELEGRAM_BOT_TOKEN is required');
+    throw new Error('Missing TELEGRAM_BOT_TOKEN environment variable');
+  }
 
-    overrides.ai = createOpenAIResponsesAdapter({
+  const promptId = normalizePromptId(env.OPENAI_PROMPT_ID);
+  const promptVariables = parsePromptVariables(env.OPENAI_PROMPT_VARIABLES);
+
+  return {
+    telegramBotToken: botToken,
+    openAi: {
       apiKey,
       model,
       promptId,
       promptVariables,
-    });
-  }
+    },
+  };
+};
+
+const createPortOverrides = (
+  env: WorkerEnv,
+  runtime: RuntimeConfig,
+): Partial<PortOverrides> => {
+  const overrides: Partial<PortOverrides> = {
+    messaging: createTelegramMessagingAdapter({
+      botToken: runtime.telegramBotToken,
+    }),
+    ai: createOpenAIResponsesAdapter(runtime.openAi),
+  };
 
   if (env.DB) {
     overrides.storage = createD1StorageAdapter({ db: env.DB });
@@ -255,7 +285,10 @@ const createAdminRoutes = (
 
   const routes: RouterOptions['admin'] = {
     token: adminToken,
-    selfTest: createSelfTestRoute({ ai: composition.ports.ai }),
+    selfTest: createSelfTestRoute({
+      ai: composition.ports.ai,
+      messaging: composition.ports.messaging,
+    }),
     envz: createEnvzRoute({ env }),
   };
 
@@ -291,7 +324,8 @@ const createTransformPayload = (env: WorkerEnv) => (payload: unknown) =>
   });
 
 const createRequestHandler = (env: WorkerEnv) => {
-  const adapters = createPortOverrides(env);
+  const runtime = validateRuntimeConfig(env);
+  const adapters = createPortOverrides(env, runtime);
 
   const composition = composeWorker({
     env: {

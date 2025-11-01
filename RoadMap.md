@@ -323,16 +323,16 @@
    - **Внешние действия:** команда выполняет `curl -H "X-Admin-Token: ..." https://<worker>/admin/export?from=...` и подтверждает получение корректного CSV; проверяется заголовок `Content-Type: text/csv; charset=utf-8`.
    - **Статус:** ⏳ План внешней проверки подготовлен (`memory-bank/external-checks/admin-export-verification.md`), требуется выполнить ручную проверку после деплоя.
 4. Жёсткие проверки окружения и усиление self-test.
-   - **Шаг 4.1 — жёсткая проверка OpenAI env.**
-     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) валидирует обязательные переменные (`OPENAI_API_KEY`, `OPENAI_MODEL`, опционально `OPENAI_PROMPT_ID`) с fail-fast логикой; при отсутствии ключей воркер завершает и пишет понятное сообщение в лог.
-     - **Проверка:** ревью кода подтверждает наличие проверки и fail-fast поведения; финальный чек `pnpm test --filter worker-main`.
+  - **Шаг 4.1 — жёсткая проверка OpenAI env.**
+    - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) валидирует обязательные переменные (`OPENAI_API_KEY`, `OPENAI_MODEL`, опционально `OPENAI_PROMPT_ID`) с fail-fast логикой; при отсутствии ключей воркер завершает и пишет понятное сообщение в лог.
+    - **Проверка:** ревью кода подтверждает наличие проверки и fail-fast поведения; финальный чек `npm test -- --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts`.
   - **Шаг 4.2 — жёсткая проверка Telegram токена.**
     - **Результат:** [`apps/worker-main/index.ts`](apps/worker-main/index.ts) дополнительно проверяет, что `TELEGRAM_BOT_TOKEN` непустой (префикс `bot` добавляется адаптером [`apps/worker-main/adapters/telegram/index.ts`](apps/worker-main/adapters/telegram/index.ts)), ошибки логируются и блокируют запуск.
-    - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена на непустое значение; финальный чек `pnpm test --filter worker-main`.
-   - **Шаг 4.3 — усиление `/admin/selftest`.**
-     - **Результат:** [`apps/worker-main/features/admin-diagnostics/self-test-route.ts`](apps/worker-main/features/admin-diagnostics/self-test-route.ts) выполняет цепочку проверок (OpenAI → Telegram) и возвращает структурированный отчёт с полями `openAiOk`, `telegramOk`, `errors[]`.
-     - **Проверка:** добавлены юнит-тесты для маршрута; финальный чек `pnpm test --filter worker-main` подтверждает корректность.
-   - **Статус:** ⏳ Шаги не начаты; команда готова к исполнению по команде «Следуй дорожной карте».
+    - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена на непустое значение; финальный чек `npm test -- --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts`.
+  - **Шаг 4.3 — усиление `/admin/selftest`.**
+    - **Результат:** [`apps/worker-main/features/admin-diagnostics/self-test-route.ts`](apps/worker-main/features/admin-diagnostics/self-test-route.ts) выполняет цепочку проверок (OpenAI → Telegram) и возвращает структурированный отчёт с полями `openAiOk`, `telegramOk`, `errors[]` и метриками задержек.
+    - **Проверка:** добавлены юнит-тесты для маршрута; финальный чек `npm test -- --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts` подтверждает корректность.
+  - **Статус:** ✅ Маршрут `/admin/selftest` усилен: воркер падает без обязательных env (`OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`), self-test запускает проверки OpenAI и Telegram, возвращает отчёт с ошибками и задержками, добавлены модульные тесты.
 
 **Риски и предохранители:** ограничение выгрузки пагинацией и валидацией диапазонов; токен не логируется; большая выгрузка переводится в очередь.
 
@@ -417,6 +417,7 @@
 Все записи о проверках, задачах-исправлениях и ретестах ведутся по требованиям раздела «Протокол проверки»: указываем статус (успех/неуспех/заблокировано), ссылки на артефакты и синхронизируем соответствующие задачи дорожной карты.
 - 2025-11-02: Дополнен быстрый протокол действий шагом по фиксации результатов проверок (коммит [fb273e1](commit/fb273e163f95d6df83dc8e0723205d0d70fb2f5e)).
 - 2025-11-02: Протокол проверки активирован — `npm test` и `npm run validate-guards` выполнены успешно, `npm run lint` зафиксировал 12 ошибок (см. `memory-bank/ЗАДАЧА-ТОРМОЖЕНИЕ-проверки-не-закрыты.md`); продолжение работ заблокировано до устранения.
+- 2025-11-03: Закрыт шаг М7.Ш4 — добавлены жёсткие проверки env (`OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`) и расширенный self-test с проверками OpenAI/Telegram, создан модульный тест `self-test-route.test.ts`.
 - 2025-11-01: Прогнан `npm test` для подтверждения стабильности активной связки (М1, проверки активного стека); лог сохранён в `logs/test-2025-11-01.txt`, задача-торможение по проверкам остаётся открытой до полного комплекта запусков.
 - 2025-10-28: Закрыт шаг М4.Ш1 — подтверждена миграция адаптера Responses, RoadMap обновлена статусом, сверены тесты `openai-responses.test.ts`.
 - 2025-10-29: Закрыт шаг М8.Ш1 — реализованы очередь рассылок и админ-роут под флагом `BROADCAST_ENABLED`, добавлены тесты `admin-broadcast-route.test.ts` и обновлён HTTP-роутер.
