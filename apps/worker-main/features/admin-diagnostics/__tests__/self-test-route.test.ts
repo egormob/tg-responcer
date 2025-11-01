@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createSelfTestRoute } from '../self-test-route';
 import type { AiPort, MessagingPort } from '../../../ports';
+import { createNoopAiPort } from '../../../adapters-noop';
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/selftest${query}`);
 
@@ -61,7 +62,7 @@ describe('createSelfTestRoute', () => {
 
   it('fails Telegram check when chatId is missing', async () => {
     const ai: AiPort = {
-      reply: vi.fn().mockResolvedValue({ text: 'pong' }),
+      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
     };
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),
@@ -83,7 +84,7 @@ describe('createSelfTestRoute', () => {
 
   it('captures Telegram errors', async () => {
     const ai: AiPort = {
-      reply: vi.fn().mockResolvedValue({ text: 'pong' }),
+      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
     };
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
@@ -99,5 +100,22 @@ describe('createSelfTestRoute', () => {
     expect(payload.openAiOk).toBe(true);
     expect(payload.telegramOk).toBe(false);
     expect(payload.errors).toContain('telegram: telegram failure');
+  });
+
+  it('treats noop AI response as OpenAI failure', async () => {
+    const ai = createNoopAiPort();
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'noop-ignored' }),
+    };
+
+    const route = createSelfTestRoute({ ai, messaging, now: () => 9000 });
+    const response = await route(createRequest('?chatId=123'));
+
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+
+    expect(payload.openAiOk).toBe(false);
+    expect(payload.errors).toContain('openai: noop adapter response');
   });
 });
