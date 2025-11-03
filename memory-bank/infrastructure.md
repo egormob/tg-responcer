@@ -3,6 +3,7 @@
 ## Текущее состояние
 - База Cloudflare D1 `tg-responcer-db` создана и должна быть привязана к воркеру под биндингом `DB` (database_id `d9f40a7d-5f9f-4b8b-9e61-cf96a94d3b86`). Cloudflare блокирует деплой, если база отсутствует в целевом аккаунте.
 - KV namespace для лимитов создаётся как `RATE_LIMIT`, привязывается к воркеру под `RATE_LIMIT_KV`.
+- Актуальный Namespace ID для `RATE_LIMIT_KV`: `d03442f14f7e4a64bb1d7896244a0d3f` (проверено в [Cloudflare Dashboard → Workers → tg-responcer → Settings → KV Namespaces](https://dash.cloudflare.com/?to=/:account/workers-and-pages/view/tg-responcer/settings#kv-namespaces)).
 - Модуль `DialogEngine` и контракты портов работают на заглушках, внешние ресурсы не требуются для локальных тестов.
 - Подготовлена миграция D1 `apps/worker-main/migrations/0001_init_dialog_tables.sql` для таблиц `users` и `messages`.
 

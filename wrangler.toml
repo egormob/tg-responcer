@@ -9,8 +9,7 @@ migrations_dir = "apps/worker-main/migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-# Replace with the actual namespace identifier for the RATE_LIMIT store before running wrangler deploy.
-id = "RATE_LIMIT"
+id = "d03442f14f7e4a64bb1d7896244a0d3f"
 
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
