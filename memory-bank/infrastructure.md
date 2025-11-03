@@ -19,8 +19,9 @@ _Обновлено: 2025-11-12_
   - `RATE_LIMIT_KV` — требуется `createKvRateLimitAdapter` и `createRateLimitNotifier` для подсчёта и уведомлений о лимитах. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/kv-rate-limit`.
 
 ### Процедура проверки наличия значений
-1. После раскатки секретов выполните `GET /admin/envz` с валидным `x-admin-token`: маршрут `createEnvzRoute` отображает факты наличия (`true/false`) для ключевых переменных и биндингов, в том числе `telegram_bot_token`, `openai_model`, `db_bound`, `rate_limit_kv_bound`.
-2. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB` и `RATE_LIMIT_KV` с ожидаемыми ресурсами.
+1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`.
+2. После раскатки секретов выполните `GET /admin/envz` с валидным `x-admin-token`: маршрут `createEnvzRoute` отображает факты наличия (`true/false`) для ключевых переменных и биндингов, в том числе `telegram_bot_token`, `openai_model`, `db_bound`, `rate_limit_kv_bound`.
+3. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB` и `RATE_LIMIT_KV` с ожидаемыми ресурсами.
 
 ### Диагностика отказа
 - Если `OPENAI_API_KEY`, `OPENAI_MODEL` или `TELEGRAM_BOT_TOKEN` отсутствуют либо содержат пустые строки, `validateRuntimeConfig` логирует `[config] ... is required` и выбрасывает `Missing ... environment variable`. Из-за этого `createRequestHandler` не доходит до `createTypingIndicator`, а вызов `/webhook/...` завершится `500 Internal Error` ещё до попытки отправки `typing` в Telegram. Проверяйте логи воркера: `console.error('[config] OPENAI_API_KEY is required')`, `console.error('[config] OPENAI_MODEL is required')`, `console.error('[config] TELEGRAM_BOT_TOKEN is required')`.
@@ -56,6 +57,7 @@ _Обновлено: 2025-11-12_
 ## Журнал секретов
 - 2025-11-04 — попытка добавить `OPENAI_MODEL` и `OPENAI_PROMPT_VARIABLES` через `wrangler secret put` (ответственный: gpt-5-codex). Заблокировано политикой npm (`403 Forbidden` на пакет `wrangler`), секреты не созданы; требуется доступ к Cloudflare окружению и разрешение на установку `wrangler`.
 - 2025-11-09 — `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` введены через Cloudflare Dashboard → Workers → Settings → Variables (секция **Secrets**). Проверено отображение значений после сохранения, скриншот подтверждения хранится вне репозитория (доступ по запросу, ссылка зафиксирована в журнале деплоя команды).
+- 2025-11-12 — `OPENAI_MODEL` перемещён из раздела plaintext в секцию **Secrets** через Cloudflare Dashboard, чтобы исключить очистку значения при деплоях из Dashboard. Проведён smoke-тест `/healthz` (`{"status":"ok"}`) и проверена работоспособность Telegram/OpenAI контура.
 
 ## Журнал Cloudflare D1
 - 2025-11-05 — создана база `tg-responcer-db` (database_id `7669db41-69ee-4c29-995a-418d71cd81c0`), привязана к воркеру как binding `DB` (ответственный: gpt-5-codex). Проверка доступности `wrangler d1 execute DB --command "SELECT 1"` не выполнена: отсутствуют учётные данные Cloudflare в изолированной среде, требуется повторить команду в рабочем окружении.
