@@ -38,7 +38,7 @@ interface WorkerBindings {
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   OPENAI_PROMPT_ID?: string;
-  OPENAI_PROMPT_VARIABLES?: string;
+  OPENAI_PROMPT_VARIABLES?: unknown;
   ADMIN_EXPORT_TOKEN?: string;
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
@@ -158,6 +158,13 @@ const normalizePromptId = (value: unknown): string | undefined => {
 const parsePromptVariables = (value: unknown): Record<string, unknown> | undefined => {
   if (value === undefined) {
     return undefined;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === null || prototype === Object.prototype) {
+      return value as Record<string, unknown>;
+    }
   }
 
   const raw = getTrimmedString(value);
@@ -400,4 +407,8 @@ export default {
 
     return response;
   },
+};
+
+export const __internal = {
+  parsePromptVariables,
 };
