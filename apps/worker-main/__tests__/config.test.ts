@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { __internal } from '../index';
-
-const { parsePromptVariables } = __internal;
+import { parsePromptVariables } from '../shared/prompt-variables';
 
 describe('parsePromptVariables', () => {
   it('returns plain object values as-is', () => {

@@ -6,7 +6,7 @@
 
 ## Диагностика
 1. В `wrangler.toml` находился пустой блок `[vars]`, который Wrangler трактует как явное указание очистить все plaintext-переменные. После удаления блока значения перестали пропадать.
-2. `OPENAI_PROMPT_VARIABLES` в воркере ожидались строкой, поэтому значения из Cloudflare UI (JSON-объект) игнорировались. Функция `parsePromptVariables` обновлена для поддержки объектов.
+2. `OPENAI_PROMPT_VARIABLES` в воркере ожидались строкой, поэтому значения из Cloudflare UI (JSON-объект) игнорировались. Функция `parsePromptVariables` и диагностика `/admin/envz` обновлены для поддержки объектов.
 3. Ошибка деплоя Cloudflare возникла, когда биндинг `DB` ссылался на D1, которая ещё не создана в целевой среде. Wrangler останавливает публикацию, если база отсутствует.
 
 ## Решение
@@ -19,7 +19,7 @@
 1. До деплоя открыть Cloudflare Workers → `tg-responcer` → Settings → Variables и зафиксировать значения `OPENAI_MODEL`, `OPENAI_PROMPT_VARIABLES`.
 2. Выполнить `npx wrangler versions upload`. Убедиться, что предупреждение об изменениях подтверждено автоматически.
 3. После деплоя снова проверить Variables (plaintext и JSON) и раздел Bindings (`DB`, `RATE_LIMIT_KV`). Значения должны сохраниться.
-4. Зайти на `/admin/envz` с `ADMIN_TOKEN` и убедиться, что `OPENAI_*`, `DB`, `RATE_LIMIT_KV` отмечены как `OK`.
+4. Зайти на `/admin/envz` с `ADMIN_TOKEN` и убедиться, что `OPENAI_*`, `DB`, `RATE_LIMIT_KV` отмечены как `OK`, а пункт `openai_prompt_variables` показывает `true` даже при хранении значения в Cloudflare как JSON-объекта.
 5. Задокументировать результат в журнале RoadMap и приложить вывод команд к verification-протоколу.
 
 ## Статус

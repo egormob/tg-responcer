@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createEnvzRoute } from '../envz-route';
 import { createSelfTestRoute } from '../self-test-route';
 import type { AiPort, MessagingPort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
@@ -117,5 +118,24 @@ describe('createSelfTestRoute', () => {
 
     expect(payload.openAiOk).toBe(false);
     expect(payload.errors).toContain('openai: noop adapter response');
+  });
+});
+
+describe('createEnvzRoute', () => {
+  it('marks Cloudflare object prompt variables as valid', async () => {
+    const env = {
+      OPENAI_PROMPT_VARIABLES: { tone: 'calm' },
+    } as const;
+
+    const route = createEnvzRoute({ env });
+    const response = await route(new Request('https://example.com/admin/envz'));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+
+    expect(payload).toMatchObject({
+      ok: true,
+      env: { openai_prompt_variables: true },
+    });
   });
 });
