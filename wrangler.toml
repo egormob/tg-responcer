@@ -4,5 +4,5 @@ compatibility_date = "2025-10-26"
 
 [[d1_databases]]
 binding = "DB"
-database_id = "d9f40a7d-5f9f-4b8b-9e61-cf96a94d3b86"
+database_id = "7669db41-69ee-4c29-995a-418d71cd81c0"
 migrations_dir = "apps/worker-main/migrations"
