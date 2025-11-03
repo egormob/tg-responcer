@@ -1,0 +1,6 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> tg-responcer@0.1.0 deploy
+> wrangler deploy
+
+sh: 1: wrangler: not found
