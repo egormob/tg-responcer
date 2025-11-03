@@ -1,0 +1,11 @@
+> tg-responcer@0.1.0 test
+> vitest --run
+
+ RUN  v1.6.1 /workspace/tg-responcer
+
+ ✓ apps/worker-main/adapters-noop/__tests__/adapters-noop.test.ts (5)
+
+ Test Files  20 passed (20)
+      Tests  120 passed (120)
+   Start at  08:00:09
+   Duration  6.89s (transform 1.10s, setup 3ms, collect 1.85s, tests 746ms, environment 4ms, prepare 3.36s)
