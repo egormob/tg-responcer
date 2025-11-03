@@ -47,10 +47,22 @@ const DEFAULT_REFRESH_INTERVAL_MS = 4_000;
 export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIndicator => {
   const activeChats = new Map<string, ActiveChatEntry>();
   const warn = options.logger?.warn;
-  const refreshInterval = Math.max(
-    1,
-    Math.floor(options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS),
-  );
+  const requestedRefreshInterval = options.refreshIntervalMs;
+  let refreshInterval = DEFAULT_REFRESH_INTERVAL_MS;
+
+  if (typeof requestedRefreshInterval === 'number') {
+    if (Number.isFinite(requestedRefreshInterval) && requestedRefreshInterval > 0) {
+      refreshInterval = requestedRefreshInterval;
+    } else {
+      warn?.('typing-indicator invalid refresh interval, using default', {
+        refreshIntervalMs: requestedRefreshInterval,
+      });
+    }
+  } else if (requestedRefreshInterval !== undefined) {
+    warn?.('typing-indicator invalid refresh interval, using default', {
+      refreshIntervalMs: requestedRefreshInterval,
+    });
+  }
 
   const sendTyping = async (context: TypingIndicatorContext) => {
     try {
