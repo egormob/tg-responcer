@@ -46,11 +46,16 @@ describe('adapters-noop', () => {
   it('ai adapter returns fallback response and logs warning', async () => {
     const ai = createNoopAiPort();
 
-    await expect(
-      ai.reply({ userId: 'user-1', text: 'hi', context: [] }),
-    ).resolves.toEqual({
+    const replyPromise = ai.reply({ userId: 'user-1', text: 'hi', context: [] });
+
+    await expect(replyPromise).resolves.toEqual({
       text: 'Ассистент временно недоступен. Пожалуйста, попробуйте позже.',
+      metadata: { selfTestNoop: true, usedOutputText: false },
     });
+
+    const reply = await replyPromise;
+    expect(reply.metadata.selfTestNoop).toBe(true);
+    expect(reply.metadata.usedOutputText).toBe(false);
 
     expect(
       warnSpy.mock.calls.some(([message]) =>
@@ -100,9 +105,16 @@ describe('adapters-noop', () => {
   it('createNoopPorts shares the same fallback text across adapters', async () => {
     const ports = createNoopPorts({ fallbackText: 'custom fallback' });
 
-    await expect(
-      ports.ai.reply({ userId: 'user-4', text: 'test', context: [] }),
-    ).resolves.toEqual({ text: 'custom fallback' });
+    const replyPromise = ports.ai.reply({ userId: 'user-4', text: 'test', context: [] });
+
+    await expect(replyPromise).resolves.toEqual({
+      text: 'custom fallback',
+      metadata: { selfTestNoop: true, usedOutputText: false },
+    });
+
+    const reply = await replyPromise;
+    expect(reply.metadata.selfTestNoop).toBe(true);
+    expect(reply.metadata.usedOutputText).toBe(false);
 
     await ports.messaging.sendText({ chatId: 'chat-4', text: 'ignored' });
 
