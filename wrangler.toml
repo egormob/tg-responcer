@@ -6,3 +6,13 @@ compatibility_date = "2025-10-26"
 binding = "DB"
 database_id = "7669db41-69ee-4c29-995a-418d71cd81c0"
 migrations_dir = "apps/worker-main/migrations"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+# Replace with the actual namespace identifier for the RATE_LIMIT store before running wrangler deploy.
+id = "RATE_LIMIT"
+
+[vars]
+# Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
+# values are managed as secrets (see `scripts/bootstrap-cloudflare-secrets.sh`).
+CONFIG_REQUIRED_SECRETS = "OPENAI_API_KEY,OPENAI_MODEL,OPENAI_PROMPT_ID,OPENAI_PROMPT_VARIABLES,TELEGRAM_BOT_TOKEN,TELEGRAM_WEBHOOK_SECRET,ADMIN_TOKEN"

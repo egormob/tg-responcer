@@ -13,6 +13,7 @@
 - Хранить значения `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` только в Cloudflare UI/Secrets и не переопределять их через `[vars]` в `wrangler.toml`.
 - В `apps/worker-main/index.ts` принимать `OPENAI_PROMPT_VARIABLES` как `unknown` и обрабатывать уже распарсенный объект (Cloudflare JSON), сохраняя поддержку строк.
 - Перед каждым деплоем проверять, что D1 `tg-responcer-db` создана и привязана как `DB`; при необходимости выполнить `wrangler d1 create` и `wrangler d1 migrations apply`.
+- Публикация воркера выполняется только через CLI (`wrangler deploy`/`npx wrangler deploy`). Ручные загрузки через Cloudflare Workers Dashboard запрещены, чтобы избежать очистки переменных и отвязки биндингов.
 
 ## Процедура ретеста
 1. До деплоя открыть Cloudflare Workers → `tg-responcer` → Settings → Variables и зафиксировать значения `OPENAI_MODEL`, `OPENAI_PROMPT_VARIABLES`.
@@ -39,5 +40,5 @@
 
 ## Следующие шаги
 1. Оцифровать конфигурацию воркера: добавить объявление `kv_namespaces`/`vars` в `wrangler.toml` и вынести значения в GitOps-процесс деплоя.
-2. Запретить ручной деплой через Dashboard до внедрения автоматического применения конфигурации.
+2. Запретить ручной деплой через Dashboard: использовать только `wrangler deploy` (или `npx wrangler deploy`) из репозитория, чтобы конфигурация применялась атомарно.
 3. После обновления процесса выполнить ретест по процедуре из раздела «Процедура ретеста» и зафиксировать сохранность переменных через `/admin/envz`.

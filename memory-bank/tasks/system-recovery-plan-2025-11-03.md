@@ -13,6 +13,7 @@
    - На странице Settings → Variables убедиться, что заполнены `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ADMIN_TOKEN` и другие обязательные параметры.
    - Сохранить скриншот/экспорт значений и приложить ссылку в журнал проверки (`verification-protocol.md`).
    - Убедиться, что `OPENAI_PROMPT_VARIABLES` хранится как JSON-объект (Cloudflare UI) и что воркер его принимает (см. `apps/worker-main/index.ts`).
+   - Для автоматизации загрузки секретов использовать `scripts/bootstrap-cloudflare-secrets.sh`. Скрипт читает значения из переменных окружения `CF_SECRET_<NAME>` (если заданы) либо поочередно вызывает `wrangler secret put <NAME>` в интерактивном режиме для `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ADMIN_TOKEN`.
 
 3. **Применение миграций на чистой базе**
    - Выполнить `wrangler d1 migrations apply DB` в рабочем окружении, убедиться в успешном создании таблиц `users` и `messages`.
