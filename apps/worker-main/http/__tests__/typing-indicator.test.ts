@@ -147,4 +147,47 @@ describe('typing indicator', () => {
       vi.useRealTimers();
     }
   });
+
+  it('falls back to default refresh interval when provided value is invalid', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const messaging = createMessagingPort();
+      messaging.sendTyping.mockResolvedValue(undefined);
+      const warn = vi.fn();
+      const invalidRefreshInterval = '4s';
+
+      const indicator = createTypingIndicator({
+        messaging,
+        // @ts-expect-error - testing runtime handling of invalid configuration
+        refreshIntervalMs: invalidRefreshInterval,
+        logger: { warn },
+      });
+
+      let releaseHandler: (() => void) | undefined;
+      const runPromise = indicator.runWithTyping({ chatId: 'chat-7' }, async () => {
+        await new Promise<void>((resolve) => {
+          releaseHandler = resolve;
+        });
+      });
+
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(2);
+
+      releaseHandler?.();
+      await runPromise;
+
+      expect(warn).toHaveBeenCalledWith(
+        'typing-indicator invalid refresh interval, using default',
+        { refreshIntervalMs: invalidRefreshInterval },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
