@@ -38,7 +38,8 @@ describe('safeWebhookHandler', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.text()).resolves.toBe('ok');
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    await expect(response.json()).resolves.toEqual({ status: 'ok' });
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-2',
       threadId: undefined,
