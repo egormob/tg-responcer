@@ -14,6 +14,7 @@ export interface TypingIndicatorOptions {
   logger?: {
     warn?: (message: string, details?: Record<string, unknown>) => void;
   };
+  refreshIntervalMs?: number;
 }
 
 export interface TypingIndicator {
@@ -34,13 +35,24 @@ const toErrorDetails = (error: unknown): Record<string, unknown> => {
   return { message: 'Unknown error' };
 };
 
+interface ActiveChatEntry {
+  count: number;
+  stopRefresh: () => void;
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const DEFAULT_REFRESH_INTERVAL_MS = 4_000;
+
 export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIndicator => {
-  const activeChats = new Map<string, number>();
+  const activeChats = new Map<string, ActiveChatEntry>();
   const warn = options.logger?.warn;
+  const refreshInterval = Math.max(
+    1,
+    Math.floor(options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS),
+  );
 
-  const startTyping = async (context: TypingIndicatorContext, key: string) => {
-    activeChats.set(key, 1);
-
+  const sendTyping = async (context: TypingIndicatorContext) => {
     try {
       await options.messaging.sendTyping({
         chatId: context.chatId,
@@ -55,35 +67,69 @@ export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIn
     }
   };
 
-  const incrementRefCount = (key: string) => {
-    const current = activeChats.get(key) ?? 0;
-    activeChats.set(key, current + 1);
+  const startRefreshLoop = (context: TypingIndicatorContext) => {
+    let cancelled = false;
+
+    const loop = async () => {
+      while (!cancelled) {
+        await wait(refreshInterval);
+
+        if (cancelled) {
+          return;
+        }
+
+        await sendTyping(context);
+      }
+    };
+
+    void loop();
+
+    return () => {
+      cancelled = true;
+    };
   };
 
-  const releaseChat = (key: string) => {
-    const current = activeChats.get(key);
-    if (current === undefined) {
+  const ensureActiveEntry = async (context: TypingIndicatorContext, key: string) => {
+    const existing = activeChats.get(key);
+
+    if (existing) {
+      existing.count += 1;
       return;
     }
 
-    if (current <= 1) {
+    const entry: ActiveChatEntry = {
+      count: 1,
+      stopRefresh: () => {
+        /* noop until loop starts */
+      },
+    };
+
+    activeChats.set(key, entry);
+
+    await sendTyping(context);
+
+    entry.stopRefresh = startRefreshLoop(context);
+  };
+
+  const releaseChat = (key: string) => {
+    const entry = activeChats.get(key);
+    if (!entry) {
+      return;
+    }
+
+    if (entry.count <= 1) {
+      entry.stopRefresh();
       activeChats.delete(key);
       return;
     }
 
-    activeChats.set(key, current - 1);
+    entry.count -= 1;
   };
 
   return {
     async runWithTyping<T>(context: TypingIndicatorContext, run: TypingIndicatorRun<T>): Promise<T> {
       const key = createChatKey(context);
-      const isActive = activeChats.has(key);
-
-      if (isActive) {
-        incrementRefCount(key);
-      } else {
-        await startTyping(context, key);
-      }
+      await ensureActiveEntry(context, key);
 
       try {
         return await run();

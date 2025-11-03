@@ -46,7 +46,7 @@ describe('typing indicator', () => {
     const secondRun = indicator.runWithTyping({ chatId: 'chat-2' }, secondHandler);
 
     expect(messaging.sendTyping).toHaveBeenCalledTimes(1);
-    expect(secondHandler).toHaveBeenCalledTimes(1);
+    await vi.waitUntil(() => secondHandler.mock.calls.length === 1);
 
     releaseFirst?.();
     await Promise.all([firstRun, secondRun]);
@@ -78,5 +78,73 @@ describe('typing indicator', () => {
 
     await indicator.runWithTyping({ chatId: 'chat-4' }, async () => undefined);
     expect(messaging.sendTyping).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes typing indicator while handler is running', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const messaging = createMessagingPort();
+      messaging.sendTyping.mockResolvedValue(undefined);
+
+      const indicator = createTypingIndicator({
+        messaging,
+        refreshIntervalMs: 1_000,
+      });
+
+      let releaseHandler: (() => void) | undefined;
+      const runPromise = indicator.runWithTyping({ chatId: 'chat-5' }, async () => {
+        await new Promise<void>((resolve) => {
+          releaseHandler = resolve;
+        });
+        return 'done';
+      });
+
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(3);
+
+      releaseHandler?.();
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops refreshing typing indicator after completion', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const messaging = createMessagingPort();
+      messaging.sendTyping.mockResolvedValue(undefined);
+
+      const indicator = createTypingIndicator({
+        messaging,
+        refreshIntervalMs: 500,
+      });
+
+      let releaseHandler: (() => void) | undefined;
+      const runPromise = indicator.runWithTyping({ chatId: 'chat-6' }, async () => {
+        await new Promise<void>((resolve) => {
+          releaseHandler = resolve;
+        });
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const callCount = messaging.sendTyping.mock.calls.length;
+
+      releaseHandler?.();
+      await runPromise;
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(messaging.sendTyping).toHaveBeenCalledTimes(callCount);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
