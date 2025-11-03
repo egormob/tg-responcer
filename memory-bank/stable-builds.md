@@ -28,3 +28,8 @@ Use this tag as the baseline for future recoveries and production deploys.
 - `features/broadcast` — завершить троттлинг и внешние проверки (М8.Ш3), подтвердить, что флаг `BROADCAST_ENABLED` управляет доступом к маршруту.
 - `features/observability`/`http/admin/*` — добавить requestId в логи и убедиться, что метрики не зависят от legacy-полей.
 - Памятки деплоя — обновить `memory-bank/openai-responses-prompt.md`, `memory-bank/operations.md` перед включением Responses-only.
+
+## 2025-11-09 — IaC конфигурация Cloudflare (неуспешно)
+- **Status**: блокировано политикой npm — установка `wrangler` из `npx` завершилась ошибкой `403 Forbidden`, поэтому деплой и проверка `/admin/envz` не выполнены.
+- **Command log**: см. попытку `npx wrangler deploy` с ошибкой доступа к пакету Wrangler.【a079f5†L1-L7】
+- **Screenshots**: отсутствуют (деплой не запускался, раздел `/admin/envz` недоступен).
