@@ -1,7 +1,9 @@
 # Cloudflare Resources Checklist
 
+_Обновлено: 2025-11-12_
+
 ## Текущее состояние
-- База Cloudflare D1 `tg-responcer-db` создана и должна быть привязана к воркеру под биндингом `DB` (database_id `d9f40a7d-5f9f-4b8b-9e61-cf96a94d3b86`). Cloudflare блокирует деплой, если база отсутствует в целевом аккаунте.
+- База Cloudflare D1 `tg-responcer-db` создана и должна быть привязана к воркеру под биндингом `DB` (database_id `7669db41-69ee-4c29-995a-418d71cd81c0`). Cloudflare блокирует деплой, если база отсутствует в целевом аккаунте.
 - KV namespace для лимитов создаётся как `RATE_LIMIT`, привязывается к воркеру под `RATE_LIMIT_KV`.
 - Актуальный Namespace ID для `RATE_LIMIT_KV`: `d03442f14f7e4a64bb1d7896244a0d3f` (проверено в [Cloudflare Dashboard → Workers → tg-responcer → Settings → KV Namespaces](https://dash.cloudflare.com/?to=/:account/workers-and-pages/view/tg-responcer/settings#kv-namespaces)).
 - Модуль `DialogEngine` и контракты портов работают на заглушках, внешние ресурсы не требуются для локальных тестов.
@@ -56,6 +58,6 @@
 - 2025-11-09 — `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` введены через Cloudflare Dashboard → Workers → Settings → Variables (секция **Secrets**). Проверено отображение значений после сохранения, скриншот подтверждения хранится вне репозитория (доступ по запросу, ссылка зафиксирована в журнале деплоя команды).
 
 ## Журнал Cloudflare D1
-- 2025-11-05 — создана база `tg-responcer-db` (database_id `d9f40a7d-5f9f-4b8b-9e61-cf96a94d3b86`), привязана к воркеру как binding `DB` (ответственный: gpt-5-codex). Проверка доступности `wrangler d1 execute DB --command "SELECT 1"` не выполнена: отсутствуют учётные данные Cloudflare в изолированной среде, требуется повторить команду в рабочем окружении.
+- 2025-11-05 — создана база `tg-responcer-db` (database_id `7669db41-69ee-4c29-995a-418d71cd81c0`), привязана к воркеру как binding `DB` (ответственный: gpt-5-codex). Проверка доступности `wrangler d1 execute DB --command "SELECT 1"` не выполнена: отсутствуют учётные данные Cloudflare в изолированной среде, требуется повторить команду в рабочем окружении.
 - 2025-11-05 — при деплое через `wrangler versions upload` получена ошибка `binding DB of type d1 must have a database that already exists`. Решение: создать или подтвердить существование `tg-responcer-db` в целевой среде перед публикацией (см. `memory-bank/issues/cloudflare-env-reset.md`).
 - 2025-11-10 — подтверждён боевой биндинг `DB` и выборки из таблицы `messages`: `wrangler d1 execute DB --command "SELECT user_id, role, content FROM messages ORDER BY created_at DESC LIMIT 3"` возвращает записи без ошибок, `/admin/envz` отражает `db_bound: true`. Детали и скриншот: `memory-bank/tests/2025-11-10-d1-context-restore.md`.
