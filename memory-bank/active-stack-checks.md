@@ -26,8 +26,8 @@
 - Тесты: `apps/worker-main/composition/__tests__/compose.test.ts`, `apps/worker-main/http/__tests__/typing-indicator.test.ts`.
 
 ### Конфигурация окружения
-- `apps/worker-main/index.ts` триммит `OPENAI_MODEL`, проверяет `OPENAI_PROMPT_ID` на префикс `pmpt_` и валидирует JSON-переменные.
-- Создание адаптеров зависит от наличия соответствующих биндингов (Telegram, D1, KV), что предотвращает частичную конфигурацию.
+- `apps/worker-main/index.ts` триммит `OPENAI_MODEL`, проверяет `OPENAI_PROMPT_ID` на префикс `pmpt_` и валидирует JSON-переменные, включая значения, которые Cloudflare отдаёт уже распарсенным объектом.
+- Создание адаптеров зависит от наличия соответствующих биндингов (Telegram, D1, KV); перед деплоем обязательно проверяем в Cloudflare UI, что `DB` и `RATE_LIMIT_KV` привязаны и значения `OPENAI_*` не очищены (см. `memory-bank/issues/cloudflare-env-reset.md`).
 - Тесты: покрытие через интеграционные тесты роутера и композиции (`npm test`).
 
 ## Команда для повторения проверки
