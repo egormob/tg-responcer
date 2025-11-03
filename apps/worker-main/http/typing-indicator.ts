@@ -40,8 +40,6 @@ interface ActiveChatEntry {
   stopRefresh: () => void;
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const DEFAULT_REFRESH_INTERVAL_MS = 4_000;
 
 export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIndicator => {
@@ -81,10 +79,22 @@ export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIn
 
   const startRefreshLoop = (context: TypingIndicatorContext) => {
     let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let releaseWait: (() => void) | undefined;
+
+    const waitForNextTick = () =>
+      new Promise<void>((resolve) => {
+        releaseWait = resolve;
+        timeoutId = setTimeout(() => {
+          timeoutId = undefined;
+          releaseWait = undefined;
+          resolve();
+        }, refreshInterval);
+      });
 
     const loop = async () => {
       while (!cancelled) {
-        await wait(refreshInterval);
+        await waitForNextTick();
 
         if (cancelled) {
           return;
@@ -97,7 +107,18 @@ export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIn
     void loop();
 
     return () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+
       cancelled = true;
+
+      if (releaseWait) {
+        const resolve = releaseWait;
+        releaseWait = undefined;
+        resolve();
+      }
     };
   };
 
