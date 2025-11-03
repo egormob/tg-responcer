@@ -137,11 +137,14 @@ describe('typing indicator', () => {
       await vi.advanceTimersByTimeAsync(1_500);
       const callCount = messaging.sendTyping.mock.calls.length;
 
+      const completionSpy = vi.fn();
+      const completionPromise = runPromise.then(completionSpy);
+
       releaseHandler?.();
-      await runPromise;
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await Promise.all([completionPromise, vi.advanceTimersByTimeAsync(2_000)]);
 
+      expect(completionSpy).toHaveBeenCalledTimes(1);
       expect(messaging.sendTyping).toHaveBeenCalledTimes(callCount);
     } finally {
       vi.useRealTimers();
