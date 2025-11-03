@@ -1,11 +1,13 @@
 # Cloudflare Resources Checklist
 
-_Обновлено: 2025-11-12_
+_Обновлено: 2025-11-13_
 
 ## Текущее состояние
 - База Cloudflare D1 `tg-responcer-db` создана и должна быть привязана к воркеру под биндингом `DB` (database_id `7669db41-69ee-4c29-995a-418d71cd81c0`). Cloudflare блокирует деплой, если база отсутствует в целевом аккаунте.
 - KV namespace для лимитов создаётся как `RATE_LIMIT`, привязывается к воркеру под `RATE_LIMIT_KV`.
 - Актуальный Namespace ID для `RATE_LIMIT_KV`: `d03442f14f7e4a64bb1d7896244a0d3f` (проверено в [Cloudflare Dashboard → Workers → tg-responcer → Settings → KV Namespaces](https://dash.cloudflare.com/?to=/:account/workers-and-pages/view/tg-responcer/settings#kv-namespaces)).
+- `CONFIG_REQUIRED_SECRETS` и другие plaintext-переменные, которые должны переживать деплой, синхронизируются через Git: значение хранится в `wrangler.toml` и автоматически подтягивается в Dashboard после публикации. Такие переменные не слетают и не должны редактироваться вручную в UI.
+- Секреты (`OPENAI_API_KEY`, `OPENAI_MODEL` и др.) управляются только через раздел **Secrets** в Dashboard — ручные правки не перетирают их при деплое.
 - Модуль `DialogEngine` и контракты портов работают на заглушках, внешние ресурсы не требуются для локальных тестов.
 - Подготовлена миграция D1 `apps/worker-main/migrations/0001_init_dialog_tables.sql` для таблиц `users` и `messages`.
 
@@ -19,9 +21,10 @@ _Обновлено: 2025-11-12_
   - `RATE_LIMIT_KV` — требуется `createKvRateLimitAdapter` и `createRateLimitNotifier` для подсчёта и уведомлений о лимитах. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/kv-rate-limit`.
 
 ### Процедура проверки наличия значений
-1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`.
-2. После раскатки секретов выполните `GET /admin/envz` с валидным `x-admin-token`: маршрут `createEnvzRoute` отображает факты наличия (`true/false`) для ключевых переменных и биндингов, в том числе `telegram_bot_token`, `openai_model`, `db_bound`, `rate_limit_kv_bound`.
-3. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB` и `RATE_LIMIT_KV` с ожидаемыми ресурсами.
+1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`. Plaintext-переменные (например, `CONFIG_REQUIRED_SECRETS`) подтягиваются из `wrangler.toml`; редактировать их нужно через Git, а не вручную в UI.
+2. Если появляется необходимость в новой plaintext или JSON переменной, сначала добавьте её в `wrangler.toml` (секция `[vars]`) и задокументируйте коммит. После деплоя проверьте, что значение появилось в Dashboard. Добавление напрямую через UI приведёт к очистке переменной при следующем деплое.
+3. После раскатки секретов выполните `GET /admin/envz` с валидным `x-admin-token`: маршрут `createEnvzRoute` отображает факты наличия (`true/false`) для ключевых переменных и биндингов, в том числе `telegram_bot_token`, `openai_model`, `db_bound`, `rate_limit_kv_bound`.
+4. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB` и `RATE_LIMIT_KV` с ожидаемыми ресурсами.
 
 ### Диагностика отказа
 - Если `OPENAI_API_KEY`, `OPENAI_MODEL` или `TELEGRAM_BOT_TOKEN` отсутствуют либо содержат пустые строки, `validateRuntimeConfig` логирует `[config] ... is required` и выбрасывает `Missing ... environment variable`. Из-за этого `createRequestHandler` не доходит до `createTypingIndicator`, а вызов `/webhook/...` завершится `500 Internal Error` ещё до попытки отправки `typing` в Telegram. Проверяйте логи воркера: `console.error('[config] OPENAI_API_KEY is required')`, `console.error('[config] OPENAI_MODEL is required')`, `console.error('[config] TELEGRAM_BOT_TOKEN is required')`.
@@ -58,6 +61,8 @@ _Обновлено: 2025-11-12_
 - 2025-11-04 — попытка добавить `OPENAI_MODEL` и `OPENAI_PROMPT_VARIABLES` через `wrangler secret put` (ответственный: gpt-5-codex). Заблокировано политикой npm (`403 Forbidden` на пакет `wrangler`), секреты не созданы; требуется доступ к Cloudflare окружению и разрешение на установку `wrangler`.
 - 2025-11-09 — `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` введены через Cloudflare Dashboard → Workers → Settings → Variables (секция **Secrets**). Проверено отображение значений после сохранения, скриншот подтверждения хранится вне репозитория (доступ по запросу, ссылка зафиксирована в журнале деплоя команды).
 - 2025-11-12 — `OPENAI_MODEL` перемещён из раздела plaintext в секцию **Secrets** через Cloudflare Dashboard, чтобы исключить очистку значения при деплоях из Dashboard. Проведён smoke-тест `/healthz` (`{"status":"ok"}`) и проверена работоспособность Telegram/OpenAI контура.
+- 2025-11-13 — После переноса `OPENAI_MODEL` в Secrets выполнен деплой через Dashboard: `/admin/envz` показывает `openai_model: true`, воркер отвечает без ручного вмешательства. Секрет не сбрасывается; подтверждение сохранено в `memory-bank/tests/2025-11-13-envz-after-secret.md`.
+
 
 ## Журнал Cloudflare D1
 - 2025-11-05 — создана база `tg-responcer-db` (database_id `7669db41-69ee-4c29-995a-418d71cd81c0`), привязана к воркеру как binding `DB` (ответственный: gpt-5-codex). Проверка доступности `wrangler d1 execute DB --command "SELECT 1"` не выполнена: отсутствуют учётные данные Cloudflare в изолированной среде, требуется повторить команду в рабочем окружении.

@@ -10,23 +10,25 @@
 3. Ошибка деплоя Cloudflare возникла, когда биндинг `DB` ссылался на D1, которая ещё не создана в целевой среде. Wrangler останавливает публикацию, если база отсутствует.
 
 ## Решение
-- Хранить значения `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` только в Cloudflare UI/Secrets и не переопределять их через `[vars]` в `wrangler.toml`. `OPENAI_MODEL` перенесён из plaintext в Secrets 2025-11-12, чтобы деплои через Dashboard не очищали модель.
-- В `apps/worker-main/index.ts` принимать `OPENAI_PROMPT_VARIABLES` как `unknown` и обрабатывать уже распарсенный объект (Cloudflare JSON), сохраняя поддержку строк.
+- Plaintext-переменные (включая `CONFIG_REQUIRED_SECRETS`) управляются из Git: значение фиксируется в `wrangler.toml`, деплой подтягивает его в Dashboard автоматически. Dashboard используем только для секретов, чтобы переменные не исчезали при публикации.
+- Хранить значения `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES` только в Cloudflare UI/Secrets и не переопределять их через `[vars]` в `wrangler.toml`. `OPENAI_MODEL` перенесён из plaintext в Secrets 2025-11-12, чтобы деплои через Dashboard не очищали модель. 2025-11-13 подтверждено, что секрет сохраняется после деплоя (`/admin/envz` → `openai_model: true`).
+- В `apps/worker-main/index.ts` принимать `OPENAI_PROMPT_VARIABLES` как `unknown` и обрабатывать уже распарсенный объект (Cloudflare JSON), сохраняя поддержку строк. Если переменная понадобится повторно, добавляем её в `[vars]` репозитория и деплоим через Git — прямое добавление через Dashboard приведёт к сбросу при следующей публикации.
 - Перед каждым деплоем проверять, что D1 `tg-responcer-db` создана и привязана как `DB`; при необходимости выполнить `wrangler d1 create` и `wrangler d1 migrations apply`.
 - Публикация воркера выполняется только через CLI (`wrangler deploy`/`npx wrangler deploy`). Ручные загрузки через Cloudflare Workers Dashboard запрещены, чтобы избежать очистки переменных и отвязки биндингов.
 
 ## Процедура ретеста
-1. До деплоя открыть Cloudflare Workers → `tg-responcer` → Settings → Variables, убедиться, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext), и зафиксировать значения `OPENAI_MODEL`, `OPENAI_PROMPT_VARIABLES`.
+1. До деплоя открыть Cloudflare Workers → `tg-responcer` → Settings → Variables, убедиться, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext). Plaintext-переменные (`CONFIG_REQUIRED_SECRETS` и т.п.) сверяем с `wrangler.toml` — изменения вносим через Git и деплой.
 2. Выполнить `npx wrangler versions upload`. Убедиться, что предупреждение об изменениях подтверждено автоматически.
-3. После деплоя снова проверить Variables (plaintext и JSON) и раздел Bindings (`DB`, `RATE_LIMIT_KV`). Значения должны сохраниться.
+3. После деплоя снова проверить Variables (plaintext и JSON) и раздел Bindings (`DB`, `RATE_LIMIT_KV`). Значения должны сохраниться; если нужна новая plaintext/JSON переменная, проверяем, что она добавлена коммитом и подтянулась из Git.
 4. Зайти на `/admin/envz` с `ADMIN_TOKEN` и убедиться, что `OPENAI_*`, `DB`, `RATE_LIMIT_KV` отмечены как `OK`, а пункт `openai_prompt_variables` показывает `true` даже при хранении значения в Cloudflare как JSON-объекта.
 5. Задокументировать результат в журнале RoadMap и приложить вывод команд к verification-протоколу.
 
 ## Статус
 - Обновление конфигурации и кода выполнено.
-- Ретест ожидает запуска в боевой среде Cloudflare.
+- Ретест выполнен 2025-11-13: деплой из Dashboard сохранил `OPENAI_MODEL` в секции Secrets, `/admin/envz` подтвердил `openai_model: true`.
 
 ## Журнал повторений
+- 2025-11-13 — Переменная `OPENAI_MODEL` переведена в Secrets; после деплоя через Dashboard значение сохранилось, `/admin/envz` подтвердил `openai_model: true`. Plaintext-переменные подтягиваются из Git, ручного вмешательства не требуется.
 - 2025-11-09 — при деплое рабочей версии через Cloudflare Workers Dashboard исчезли plaintext-переменные `OPENAI_MODEL` и `OPENAI_PROMPT_VARIABLES`, а также отвязался биндинг `RATE_LIMIT_KV`. Параметры вручную восстановлены через UI без изменений в репозитории. Лог инцидента задокументирован в RoadMap (см. раздел «Релизы и текущий фокус»).
 
 ## Анализ системной связи (2025-11-09)
