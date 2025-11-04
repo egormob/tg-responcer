@@ -43,7 +43,7 @@ describe('safeWebhookHandler', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-2',
       threadId: undefined,
-      text: expect.stringContaining('Повторите'),
+      text: '⚠️ → 🔁💬',
     });
 
     expect(errorSpy).toHaveBeenCalledWith('[safe][error]', { err: 'Error: boom' });
