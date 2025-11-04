@@ -44,30 +44,27 @@ const formatDuration = (ms: number): string => {
   const seconds = totalSeconds % 60;
 
   if (hours > 0 && minutes > 0) {
-    return `${hours} ч ${minutes} мин`;
+    return `${hours}h ${minutes}m`;
   }
 
   if (hours > 0) {
-    return `${hours} ч`;
+    return `${hours}h`;
   }
 
   if (minutes > 0) {
-    return `${minutes} мин`;
+    return `${minutes}m`;
   }
 
   if (seconds > 0) {
-    return `${seconds} сек`;
+    return `${seconds}s`;
   }
 
-  return 'несколько секунд';
+  return '0s';
 };
 
 const defaultMessage = (details: RateLimitNotificationDetails): string => {
   const readableTtl = formatDuration(details.ttlMs);
-  return (
-    'Дневной лимит ответов исчерпан. '
-    + `Попробуйте снова через ${readableTtl}.`
-  );
+  return `🥶⌛️ ${readableTtl}`;
 };
 
 const createLogger = (logger?: RateLimitNotifierLogger) => {
