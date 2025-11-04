@@ -172,6 +172,82 @@ describe('http router', () => {
     expect(response.status).toBe(400);
   });
 
+  it('sends reminder for voice-only webhook results and skips dialog', async () => {
+    const messaging = createMessagingMock();
+    const handleMessage = vi.fn();
+    const transformPayload = vi
+      .fn()
+      .mockResolvedValue({
+        kind: 'non_text',
+        chat: { id: 'chat-voice', threadId: 'thread-1' },
+        reply: 'voice',
+      });
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(transformPayload).toHaveBeenCalledTimes(1);
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-voice',
+      threadId: 'thread-1',
+      text: '🔇  👉📝',
+    });
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ignored' });
+  });
+
+  it('sends reminder for media-only webhook results and skips dialog', async () => {
+    const messaging = createMessagingMock();
+    const handleMessage = vi.fn();
+    const transformPayload = vi
+      .fn()
+      .mockResolvedValue({
+        kind: 'non_text',
+        chat: { id: 'chat-media' },
+        reply: 'media',
+      });
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(transformPayload).toHaveBeenCalledTimes(1);
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-media',
+      threadId: undefined,
+      text: '🖼️❌  👉📝',
+    });
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ignored' });
+  });
+
   it('routes admin broadcast requests when handler is provided', async () => {
     const broadcast = vi.fn().mockResolvedValue(new Response('queued', { status: 202 }));
     const router = createRouter({

@@ -141,10 +141,16 @@ export interface TelegramMessage {
   message_id: number | string | bigint;
   date?: number;
   text?: string;
+  caption?: string;
   from?: TelegramUser;
   chat: TelegramChat;
   message_thread_id?: number | string | bigint;
   entities?: TelegramMessageEntity[];
+  voice?: unknown;
+  video?: unknown;
+  photo?: unknown;
+  document?: unknown;
+  video_note?: unknown;
 }
 
 export interface TelegramUpdate {
@@ -202,18 +208,13 @@ const toHandledResult = (response?: Response): HandledWebhookResult => ({
 const buildIncomingMessage = (
   message: TelegramMessage,
   from: TelegramUser,
+  text: string,
 ): IncomingMessage | undefined => {
   const userId = toIdString(from.id);
   const chatId = toIdString(message.chat?.id);
   const messageId = toIdString(message.message_id);
 
   if (!userId || !chatId || !messageId) {
-    return undefined;
-  }
-
-  const text = typeof message.text === 'string' ? message.text : undefined;
-
-  if (!text || text.trim().length === 0) {
     return undefined;
   }
 
@@ -276,7 +277,36 @@ export const transformTelegramUpdate = async (
     return handledIgnored();
   }
 
-  const incoming = buildIncomingMessage(message, from);
+  const chatId = toIdString(message.chat?.id);
+  const threadId = toIdString(message.message_thread_id);
+
+  const rawText = typeof message.text === 'string' ? message.text : undefined;
+  const caption = typeof message.caption === 'string' ? message.caption : undefined;
+  const content = rawText ?? caption;
+
+  if (!content || content.trim().length === 0) {
+    if (chatId) {
+      if (message.voice || message.video_note) {
+        return {
+          kind: 'non_text',
+          chat: { id: chatId, threadId },
+          reply: 'voice',
+        };
+      }
+
+      if (message.video || message.photo || message.document) {
+        return {
+          kind: 'non_text',
+          chat: { id: chatId, threadId },
+          reply: 'media',
+        };
+      }
+    }
+
+    return handledIgnored();
+  }
+
+  const incoming = buildIncomingMessage(message, from, content);
   if (!incoming) {
     return handledIgnored();
   }
