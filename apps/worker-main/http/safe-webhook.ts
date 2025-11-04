@@ -1,7 +1,6 @@
 import type { MessagingPort } from '../ports';
 
-const DEFAULT_FALLBACK_TEXT =
-  '🤖 Я на секунду задумался. Повторите, пожалуйста, вопрос одним предложением.';
+const DEFAULT_FALLBACK_TEXT = '⚠️ → 🔁💬';
 
 interface SafeWebhookHandlerOptions<T> {
   chat: {
