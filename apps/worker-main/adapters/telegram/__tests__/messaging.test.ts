@@ -20,12 +20,15 @@ describe('createTelegramMessagingAdapter', () => {
     waitMock = createWaitMock();
   });
 
-  const createAdapter = (): MessagingPort =>
+  const createAdapter = (
+    overrides: Partial<Parameters<typeof createTelegramMessagingAdapter>[0]> = {},
+  ): MessagingPort =>
     createTelegramMessagingAdapter({
       botToken,
       fetchApi: fetchMock,
       wait: waitMock,
       random: () => 0,
+      ...overrides,
     });
 
   it('sends typing indicator and swallows errors', async () => {
@@ -162,5 +165,43 @@ describe('createTelegramMessagingAdapter', () => {
 
     expect(waitMock).toHaveBeenCalledWith(3000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('splits long messages into chunks and logs a warning', async () => {
+    const warnMock = vi.fn();
+    const adapter = createAdapter({
+      logger: {
+        warn: warnMock,
+      },
+    });
+
+    const longText = 'a'.repeat(4096) + 'b'.repeat(10);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: { message_id: 102 } }), { status: 200 }),
+      );
+
+    const result = await adapter.sendText({ chatId: 'chat', text: longText });
+
+    expect(result).toEqual({ messageId: '101' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const firstBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    const secondBody = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+
+    expect(firstBody.text).toHaveLength(4096);
+    expect(secondBody.text).toHaveLength(10);
+
+    expect(warnMock).toHaveBeenCalledWith(
+      'telegram-adapter splitting long message into chunks',
+      expect.objectContaining({
+        originalLength: longText.length,
+        chunkCount: 2,
+      }),
+    );
   });
 });
