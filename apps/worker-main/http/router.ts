@@ -44,10 +44,17 @@ export interface MessageWebhookResult {
   message: IncomingMessage;
 }
 
+export interface NonTextWebhookResult {
+  kind: 'non_text';
+  chat: { id: string; threadId?: string };
+  reply: 'media' | 'voice';
+}
+
 export type TransformPayloadResult =
   | IncomingMessage
   | HandledWebhookResult
-  | MessageWebhookResult;
+  | MessageWebhookResult
+  | NonTextWebhookResult;
 
 export type TransformPayload = (
   payload: unknown,
@@ -58,6 +65,14 @@ const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =
 
 const isMessageWebhookResult = (value: unknown): value is MessageWebhookResult =>
   isRecord(value) && value.kind === 'message' && isIncomingMessageCandidate(value.message);
+
+const isNonTextWebhookResult = (value: unknown): value is NonTextWebhookResult =>
+  isRecord(value) &&
+  value.kind === 'non_text' &&
+  isRecord(value.chat) &&
+  typeof value.chat.id === 'string' &&
+  (value.chat.threadId === undefined || typeof value.chat.threadId === 'string') &&
+  (value.reply === 'media' || value.reply === 'voice');
 
 const toOptionalString = (value: unknown): string | undefined =>
   (typeof value === 'string' && value.length > 0 ? value : undefined);
@@ -241,6 +256,16 @@ export const createRouter = (options: RouterOptions) => {
         return (
           transformed.response ?? jsonResponse({ status: 'ignored' }, { status: 200 })
         );
+      }
+
+      if (isNonTextWebhookResult(transformed)) {
+        const text = transformed.reply === 'voice' ? '🔇  👉📝' : '🖼️❌  👉📝';
+        await options.messaging.sendText({
+          chatId: transformed.chat.id,
+          threadId: transformed.chat.threadId,
+          text,
+        });
+        return jsonResponse({ status: 'ignored' }, { status: 200 });
       }
 
       if (isMessageWebhookResult(transformed)) {

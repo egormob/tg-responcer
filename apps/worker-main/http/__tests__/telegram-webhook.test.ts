@@ -107,18 +107,40 @@ describe('transformTelegramUpdate', () => {
     await expect(result.response?.json()).resolves.toEqual({ status: 'ok' });
   });
 
-  it('returns handled ignored result for non-text messages', async () => {
+  it('returns non-text result for voice messages without text', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
       throw new Error('message is required for test');
     }
 
     delete update.message.text;
+    update.message.voice = { duration: 5 };
 
     const result = await transformTelegramUpdate(update);
 
-    expect(result.kind).toBe('handled');
-    await expect(result.response?.json()).resolves.toEqual({ status: 'ignored' });
+    expect(result).toEqual({
+      kind: 'non_text',
+      chat: { id: '555', threadId: undefined },
+      reply: 'voice',
+    });
+  });
+
+  it('returns non-text result for media messages without captions', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    delete update.message.text;
+    update.message.photo = [{ file_id: 'photo' }];
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result).toEqual({
+      kind: 'non_text',
+      chat: { id: '555', threadId: undefined },
+      reply: 'media',
+    });
   });
 
   it('returns handled ignored result when no message present', async () => {
