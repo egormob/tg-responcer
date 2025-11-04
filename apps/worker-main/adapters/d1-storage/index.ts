@@ -24,10 +24,68 @@ export interface D1StorageAdapterOptions {
   };
 }
 
-const NOOP_LOGGER = {
+type Logger = Required<NonNullable<D1StorageAdapterOptions['logger']>>;
+
+const NOOP_LOGGER: Logger = {
   warn: (message: string, details?: Record<string, unknown>) => {
     console.warn(message, details);
   },
+};
+
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 100;
+const RETRY_BACKOFF_FACTOR = 2;
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+interface RetryContext {
+  operation: string;
+  details?: Record<string, unknown>;
+}
+
+const runWithRetry = async <T>(
+  logger: Logger,
+  context: RetryContext,
+  action: () => Promise<T>,
+): Promise<T | undefined> => {
+  let attempt = 0;
+  let delay = RETRY_BASE_DELAY_MS;
+  let lastErrorDetails: Record<string, unknown> | undefined;
+
+  while (attempt < MAX_RETRY_ATTEMPTS) {
+    attempt += 1;
+
+    try {
+      return await action();
+    } catch (error) {
+      const errorDetails: Record<string, unknown> = {
+        ...context.details,
+        attempt,
+        maxAttempts: MAX_RETRY_ATTEMPTS,
+        error: error instanceof Error ? error.message : String(error),
+      };
+
+      lastErrorDetails = errorDetails;
+
+      if (attempt >= MAX_RETRY_ATTEMPTS) {
+        break;
+      }
+
+      logger.warn(`[d1-storage] ${context.operation} failed, retrying`, {
+        ...errorDetails,
+        nextDelayMs: delay,
+      });
+
+      await wait(delay);
+      delay *= RETRY_BACKOFF_FACTOR;
+    }
+  }
+
+  if (lastErrorDetails) {
+    logger.warn(`[d1-storage] ${context.operation} exhausted retries`, lastErrorDetails);
+  }
+
+  return undefined;
 };
 
 const UPSERT_USER_SQL = `
@@ -200,52 +258,67 @@ const mapRowToStoredMessage = (row: MessageRow): StoredMessage => ({
 });
 
 export const createD1StorageAdapter = (options: D1StorageAdapterOptions): StoragePort => {
-  const logger = options.logger ?? NOOP_LOGGER;
+  const logger: Logger = options.logger ?? NOOP_LOGGER;
 
   return {
     async saveUser(input: UserProfile & { updatedAt: Date }) {
       const metadataText = serializeMetadata(input.metadata);
 
-      await options.db
-        .prepare(UPSERT_USER_SQL)
-        .bind(
-          input.userId,
-          toNullableString(input.username),
-          toNullableString(input.firstName),
-          toNullableString(input.lastName),
-          toNullableString(input.languageCode),
-          metadataText,
-          toIsoString(input.updatedAt),
-        )
-        .run();
+      await runWithRetry(logger, { operation: 'saveUser', details: { userId: input.userId } }, async () => {
+        await options.db
+          .prepare(UPSERT_USER_SQL)
+          .bind(
+            input.userId,
+            toNullableString(input.username),
+            toNullableString(input.firstName),
+            toNullableString(input.lastName),
+            toNullableString(input.languageCode),
+            metadataText,
+            toIsoString(input.updatedAt),
+          )
+          .run();
+      });
     },
 
     async appendMessage(message) {
       const metadataText = serializeMetadata(message.metadata);
 
-      if (metadataText) {
-        const existing = await options.db
-          .prepare(CHECK_MESSAGE_DUPLICATE_SQL)
-          .bind(message.userId, metadataText)
-          .first<{ id: number }>();
+      await runWithRetry(
+        logger,
+        {
+          operation: 'appendMessage',
+          details: {
+            userId: message.userId,
+            chatId: message.chatId,
+            threadId: toNullableString(message.threadId) ?? undefined,
+          },
+        },
+        async () => {
+          if (metadataText) {
+            const existing = await options.db
+              .prepare(CHECK_MESSAGE_DUPLICATE_SQL)
+              .bind(message.userId, metadataText)
+              .first<{ id: number }>();
 
-        if (existing) {
-          return;
-        }
-      }
+            if (existing) {
+              return;
+            }
+          }
 
-      await options.db
-        .prepare(INSERT_MESSAGE_SQL)
-        .bind(
-          message.userId,
-          message.chatId,
-          toNullableString(message.threadId),
-          message.role,
-          message.text,
-          toIsoString(message.timestamp),
-          metadataText,
-        )
-        .run();
+          await options.db
+            .prepare(INSERT_MESSAGE_SQL)
+            .bind(
+              message.userId,
+              message.chatId,
+              toNullableString(message.threadId),
+              message.role,
+              message.text,
+              toIsoString(message.timestamp),
+              metadataText,
+            )
+            .run();
+        },
+      );
     },
 
     async getRecentMessages({ userId, limit }) {

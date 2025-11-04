@@ -355,4 +355,94 @@ describe('createD1StorageAdapter', () => {
       expect.objectContaining({ userId: 'user-3', limit: 5 }),
     );
   });
+
+  it('retries saveUser when the statement fails once', async () => {
+    vi.useFakeTimers();
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValue({ success: true });
+
+    const statement: any = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.saveUser({
+        userId: 'user-retry',
+        updatedAt: baseDate,
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenLastCalledWith(
+        '[d1-storage] saveUser failed, retrying',
+        expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('logs a warning without throwing when appendMessage exhausts retries', async () => {
+    vi.useFakeTimers();
+
+    const run = vi.fn().mockRejectedValue(new Error('d1 down'));
+
+    const statement: any = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.appendMessage({
+        userId: 'user-retry',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'hello',
+        timestamp: baseDate,
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenLastCalledWith(
+        '[d1-storage] appendMessage exhausted retries',
+        expect.objectContaining({ attempt: 3, maxAttempts: 3, error: 'd1 down' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
