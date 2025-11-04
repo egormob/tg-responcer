@@ -54,7 +54,22 @@ class TelegramApiError extends Error {
   }
 }
 
+const MAX_MESSAGE_LENGTH = 4096;
+
 const sanitizeText = (text: string): string => stripControlCharacters(text);
+
+const splitTextIntoChunks = (text: string): string[] => {
+  if (text.length === 0) {
+    return [''];
+  }
+
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += MAX_MESSAGE_LENGTH) {
+    chunks.push(text.slice(index, index + MAX_MESSAGE_LENGTH));
+  }
+
+  return chunks;
+};
 
 const isRetryableStatus = (status: number): boolean => status === 429 || status >= 500;
 
@@ -215,21 +230,40 @@ export const createTelegramMessagingAdapter = (
     },
 
     async sendText(input) {
-      const body: Record<string, unknown> = {
-        chat_id: input.chatId,
-        text: sanitizeText(input.text),
-      };
+      const sanitizedText = sanitizeText(input.text);
+      const chunks = splitTextIntoChunks(sanitizedText);
 
-      if (input.threadId) {
-        body.message_thread_id = input.threadId;
+      if (chunks.length > 1) {
+        logger?.warn?.('telegram-adapter splitting long message into chunks', {
+          originalLength: sanitizedText.length,
+          chunkCount: chunks.length,
+        });
       }
 
-      const result = await executeWithRetries<{
-        message_id?: number;
-      }>('sendMessage', body, false);
+      let firstMessageId: number | undefined;
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        const body: Record<string, unknown> = {
+          chat_id: input.chatId,
+          text: chunk,
+        };
+
+        if (input.threadId) {
+          body.message_thread_id = input.threadId;
+        }
+
+        const result = await executeWithRetries<{
+          message_id?: number;
+        }>('sendMessage', body, false);
+
+        if (index === 0) {
+          firstMessageId = result?.message_id;
+        }
+      }
 
       return {
-        messageId: result?.message_id ? String(result.message_id) : undefined,
+        messageId: firstMessageId ? String(firstMessageId) : undefined,
       };
     },
   };
