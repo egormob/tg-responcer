@@ -25,7 +25,7 @@ describe('rate limit notifier', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: undefined,
-      text: expect.stringContaining('30 мин'),
+      text: '🥶⌛️ 30m',
     });
     expect(logger.info).toHaveBeenCalledWith('rate limit notification sent', {
       userId: 'user-1',
@@ -86,6 +86,24 @@ describe('rate limit notifier', () => {
       chatId: 'chat-x',
       threadId: 'thread-x',
       text: 'custom message',
+    });
+  });
+
+  it('formats sub-second ttl as 0 seconds', async () => {
+    const messaging = createMessagingPort();
+    const notifier = createRateLimitNotifier({
+      messaging,
+      limit: 2,
+      windowMs: 1000,
+      now: () => 999,
+    });
+
+    await notifier.notify({ userId: 'user-0', chatId: 'chat-0' });
+
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-0',
+      threadId: undefined,
+      text: '🥶⌛️ 0s',
     });
   });
 });
