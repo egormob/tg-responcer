@@ -260,11 +260,16 @@ export const createRouter = (options: RouterOptions) => {
 
       if (isNonTextWebhookResult(transformed)) {
         const text = transformed.reply === 'voice' ? '🔇  👉📝' : '🖼️❌  👉📝';
-        await options.messaging.sendText({
-          chatId: transformed.chat.id,
-          threadId: transformed.chat.threadId,
-          text,
-        });
+        try {
+          await options.messaging.sendText({
+            chatId: transformed.chat.id,
+            threadId: transformed.chat.threadId,
+            text,
+          });
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn('[router] failed to send non-text reminder', error);
+        }
         return jsonResponse({ status: 'ignored' }, { status: 200 });
       }
 
