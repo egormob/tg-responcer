@@ -66,7 +66,7 @@ interface WorkerExecutionContext {
 const broadcastQueue = createInMemoryBroadcastQueue();
 const broadcastProgressStore = createInMemoryBroadcastProgressStore();
 
-const DEFAULT_RATE_LIMIT = 20;
+const DEFAULT_RATE_LIMIT = 50;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const toPositiveInteger = (value: string | number | undefined): number | undefined => {
