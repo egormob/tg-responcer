@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTelegramExportCommandHandler } from '../telegram-export-command';
-import type { AdminExportRateLimitKvNamespace } from '../telegram-export-command';
+import type {
+  AdminExportLogKvNamespace,
+  AdminExportRateLimitKvNamespace,
+} from '../telegram-export-command';
 import type { TelegramAdminCommandContext } from '../../../http';
 
 const createContext = (argument?: string): TelegramAdminCommandContext => ({
@@ -61,23 +64,37 @@ describe('createTelegramExportCommandHandler', () => {
     vi.restoreAllMocks();
   });
 
-  const createHandler = () => {
-    const handleExport = vi.fn().mockResolvedValue(
-      new Response('id,text\n1,hello\n', {
-        status: 200,
-        headers: { 'content-type': 'text/csv' },
-      }),
-    );
+  const createHandler = (
+    options?: {
+      handleExport?: ReturnType<typeof vi.fn>;
+      adminAccess?: { isAdmin: ReturnType<typeof vi.fn> };
+      rateLimit?: { checkAndIncrement: ReturnType<typeof vi.fn> };
+      cooldownKv?: AdminExportRateLimitKvNamespace;
+      exportLogKv?: AdminExportLogKvNamespace;
+      now?: () => Date;
+    },
+  ) => {
+    const handleExport =
+      options?.handleExport
+        ?? vi.fn().mockResolvedValue(
+          new Response('id,text\n1,hello\n', {
+            status: 200,
+            headers: { 'content-type': 'text/csv' },
+          }),
+        );
 
-    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
-    const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
+    const adminAccess = options?.adminAccess ?? { isAdmin: vi.fn().mockResolvedValue(true) };
+    const rateLimit =
+      options?.rateLimit ?? { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
 
     const handler = createTelegramExportCommandHandler({
       botToken,
       handleExport,
       adminAccess,
       rateLimit,
-      now: () => new Date('2024-02-01T00:00:00Z'),
+      now: options?.now ?? (() => new Date('2024-02-01T00:00:00Z')),
+      cooldownKv: options?.cooldownKv,
+      exportLogKv: options?.exportLogKv,
     });
 
     return { handler, handleExport, adminAccess, rateLimit };
@@ -201,6 +218,7 @@ describe('createTelegramExportCommandHandler', () => {
       now: () => new Date('2024-02-01T00:00:00Z'),
     });
 
+
     const firstResponse = await handler(createContext('export 2024-01-01'));
     expect(firstResponse?.status).toBe(200);
     expect(cooldownKv.store.get('rate-limit:42')).toEqual({
@@ -218,5 +236,29 @@ describe('createTelegramExportCommandHandler', () => {
     });
     expect(handleExport).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('writes export metadata to kv after successful upload', async () => {
+    const putMock = vi.fn().mockResolvedValue(undefined);
+    const exportLogKv: AdminExportLogKvNamespace = {
+      put: putMock,
+    };
+
+    const { handler } = createHandler({ exportLogKv });
+
+    const response = await handler(createContext('export'));
+
+    expect(response?.status).toBe(200);
+    expect(putMock).toHaveBeenCalledTimes(1);
+    const [key, value, options] = putMock.mock.calls[0];
+    expect(key).toBe('log:2024-02-01T00:00:00.000Z:42');
+    expect(options).toEqual({ expirationTtl: 60 * 60 * 24 * 30 });
+    expect(JSON.parse(value as string)).toEqual({
+      userId: '42',
+      chatId: '123',
+      from: null,
+      to: null,
+      rowCount: 1,
+    });
   });
 });
