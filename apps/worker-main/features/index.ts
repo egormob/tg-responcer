@@ -1,4 +1,10 @@
 export {
+  createAdminAccess,
+  type AdminAccess,
+  type AdminAccessKvNamespace,
+  type CreateAdminAccessOptions,
+} from './admin-access';
+export {
   createRateLimitNotifier,
   createRateLimitToggle,
   type CreateRateLimitNotifierOptions,
