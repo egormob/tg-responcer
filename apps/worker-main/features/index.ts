@@ -15,11 +15,16 @@ export {
   type RateLimitNotifierLogger,
   type RateLimitToggleLogger,
 } from './limits';
-export { createAdminExportRoute, createCsvExportHandler } from './export';
+export {
+  createAdminExportRoute,
+  createCsvExportHandler,
+  createTelegramExportCommandHandler,
+} from './export';
 export type {
   CreateAdminExportRouteOptions,
   AdminExportRequest,
   CsvExportHandlerOptions,
+  CreateTelegramExportCommandHandlerOptions,
 } from './export';
 export {
   createAdminBroadcastRoute,

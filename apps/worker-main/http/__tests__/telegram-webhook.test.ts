@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createTelegramExportCommandHandler } from '../../features/export/telegram-export-command';
 import { transformTelegramUpdate } from '../telegram-webhook';
 import type { TelegramUpdate } from '../telegram-webhook';
 
@@ -23,6 +24,11 @@ const createBaseUpdate = (): TelegramUpdate => ({
 });
 
 describe('transformTelegramUpdate', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it('returns dialog message for regular text update', async () => {
     const result = await transformTelegramUpdate(createBaseUpdate());
 
@@ -148,5 +154,87 @@ describe('transformTelegramUpdate', () => {
 
     expect(result.kind).toBe('handled');
     await expect(result.response?.json()).resolves.toEqual({ status: 'ignored' });
+  });
+
+  it('sends export file for /admin export command', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/admin export';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/admin'.length },
+    ];
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const handleExport = vi.fn().mockResolvedValue(new Response('message_id\n1\n', { status: 200 }));
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
+    const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
+
+    const exportHandler = createTelegramExportCommandHandler({
+      botToken: 'token',
+      handleExport,
+      adminAccess,
+      rateLimit,
+      now: () => new Date('2024-02-01T00:00:00Z'),
+    });
+
+    const result = await transformTelegramUpdate(update, {
+      features: {
+        handleAdminCommand: (context) => exportHandler(context),
+      },
+    });
+
+    expect(result.kind).toBe('handled');
+    expect(result.response?.status).toBe(200);
+    expect(handleExport).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const formData = fetchMock.mock.calls[0][1]?.body as FormData;
+    expect(formData.get('chat_id')).toBe('555');
+    const document = formData.get('document');
+    expect(document).toBeInstanceOf(Blob);
+    await expect((document as Blob).text()).resolves.toBe('message_id\n1\n');
+  });
+
+  it('returns forbidden for /admin export when user is not admin', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/admin export 2024-01-01';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/admin'.length },
+    ];
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const handleExport = vi.fn();
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
+    const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
+
+    const exportHandler = createTelegramExportCommandHandler({
+      botToken: 'token',
+      handleExport,
+      adminAccess,
+      rateLimit,
+    });
+
+    const result = await transformTelegramUpdate(update, {
+      features: {
+        handleAdminCommand: (context) => exportHandler(context),
+      },
+    });
+
+    expect(result.kind).toBe('handled');
+    expect(result.response?.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(handleExport).not.toHaveBeenCalled();
   });
 });

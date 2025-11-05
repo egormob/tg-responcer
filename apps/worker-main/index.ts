@@ -9,6 +9,7 @@ import {
 } from './adapters';
 import {
   type AdminAccessKvNamespace,
+  createAdminAccess,
   createAdminBroadcastRoute,
   createAdminExportRoute,
   createBroadcastScheduler,
@@ -18,6 +19,7 @@ import {
   createInMemoryBroadcastQueue,
   createRateLimitNotifier,
   createSelfTestRoute,
+  createTelegramExportCommandHandler,
   type BroadcastJob,
   type BroadcastScheduler,
   type LimitsFlagKvNamespace,
@@ -28,6 +30,7 @@ import {
   transformTelegramUpdate,
   type RouterOptions,
   type TypingIndicator,
+  type TelegramAdminCommandContext,
 } from './http';
 import type { MessagingPort } from './ports';
 import type { CompositionResult } from './composition';
@@ -318,10 +321,53 @@ const resolveBroadcastRecipientsFromJob = (job: BroadcastJob) => {
   return chatIds.map((chatId) => ({ chatId }));
 };
 
-const createTransformPayload = (env: WorkerEnv) => (payload: unknown) =>
-  transformTelegramUpdate(payload, {
-    botUsername: env.TELEGRAM_BOT_USERNAME,
-  });
+const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) => {
+  const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
+  const adminAccessKv = env.ADMIN_TG_IDS;
+  const adminAccess = adminAccessKv
+    ? createAdminAccess({ kv: adminAccessKv })
+    : undefined;
+
+  const csvExportHandler = env.DB
+    ? createCsvExportHandler({
+        db: env.DB,
+        filenamePrefix: env.ADMIN_EXPORT_FILENAME_PREFIX,
+      })
+    : undefined;
+
+  const exportCommandHandler = botToken && adminAccess && csvExportHandler
+    ? createTelegramExportCommandHandler({
+        botToken,
+        adminAccess,
+        handleExport: csvExportHandler,
+        rateLimit: composition.ports.rateLimit,
+        logger: console,
+        now: () => new Date(),
+      })
+    : undefined;
+
+  const handleAdminCommand = exportCommandHandler
+    ? (context: TelegramAdminCommandContext) => {
+        const argument = context.argument?.trim();
+        if (!argument) {
+          return undefined;
+        }
+
+        const firstToken = argument.split(/\s+/)[0]?.toLowerCase();
+        if (firstToken !== 'export') {
+          return undefined;
+        }
+
+        return exportCommandHandler(context);
+      }
+    : undefined;
+
+  return (payload: unknown) =>
+    transformTelegramUpdate(payload, {
+      botUsername: env.TELEGRAM_BOT_USERNAME,
+      features: handleAdminCommand ? { handleAdminCommand } : undefined,
+    });
+};
 
 interface RequestHandlerResult {
   router: ReturnType<typeof createRouter>;
@@ -350,7 +396,7 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
-    transformPayload: createTransformPayload(env),
+    transformPayload: createTransformPayload(env, composition),
     admin: adminRoutes,
   });
 
