@@ -1,6 +1,6 @@
 import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
-import type { RateLimitPort } from '../../ports';
+import type { MessagingPort, RateLimitPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
 import type { AdminExportRequest } from './admin-export-route';
 
@@ -22,6 +22,7 @@ export interface CreateTelegramExportCommandHandlerOptions {
   handleExport: (request: AdminExportRequest) => Promise<Response>;
   adminAccess: AdminAccess;
   rateLimit: RateLimitPort;
+  messaging: Pick<MessagingPort, 'sendText'>;
   cooldownKv?: AdminExportRateLimitKvNamespace;
   exportLogKv?: AdminExportLogKvNamespace;
   logger?: Logger;
@@ -128,10 +129,58 @@ export const createTelegramExportCommandHandler = (
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
 
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
+    const trimmedArgument = context.argument?.trim();
+
+    if (!trimmedArgument) {
+      return undefined;
+    }
+
+    if (trimmedArgument.toLowerCase() === 'status') {
+      const userId = context.from.userId;
+      const isAdmin = await options.adminAccess.isAdmin(userId);
+      const statusText = isAdmin ? 'admin-ok' : 'forbidden';
+
+      try {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: statusText,
+        });
+
+        if (isAdmin) {
+          logger.info('admin status confirmed', {
+            userId,
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+          });
+        } else {
+          logger.warn('admin status denied', {
+            userId,
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+          });
+        }
+      } catch (error) {
+        logger.error('failed to send admin status response', {
+          userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : String(error),
+        });
+
+        return json({ error: 'Failed to send admin status response' }, { status: 502 });
+      }
+
+      return json({ status: statusText }, { status: 200 });
+    }
+
     let args: ExportArguments | undefined;
 
     try {
-      args = parseExportArguments(context.argument);
+      args = parseExportArguments(trimmedArgument);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid arguments';
       logger.warn('invalid export arguments', { message, chatId: context.chat.id });

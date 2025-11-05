@@ -345,6 +345,7 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
         adminAccess,
         handleExport: csvExportHandler,
         rateLimit: composition.ports.rateLimit,
+        messaging: composition.ports.messaging,
         cooldownKv: adminExportKv,
         exportLogKv: env.ADMIN_EXPORT_LOG,
         logger: console,
@@ -360,7 +361,7 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
         }
 
         const firstToken = argument.split(/\s+/)[0]?.toLowerCase();
-        if (firstToken !== 'export') {
+        if (firstToken !== 'export' && firstToken !== 'status') {
           return undefined;
         }
 
