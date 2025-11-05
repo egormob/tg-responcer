@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTelegramExportCommandHandler } from '../telegram-export-command';
+import type { AdminExportRateLimitKvNamespace } from '../telegram-export-command';
 import type { TelegramAdminCommandContext } from '../../../http';
 
 const createContext = (argument?: string): TelegramAdminCommandContext => ({
@@ -30,6 +31,25 @@ const createContext = (argument?: string): TelegramAdminCommandContext => ({
 describe('createTelegramExportCommandHandler', () => {
   const botToken = 'TEST_TOKEN';
   let fetchMock: ReturnType<typeof vi.fn>;
+
+  const createFakeKv = () => {
+    const store = new Map<string, { value: string; expirationTtl?: number }>();
+
+    const kv: AdminExportRateLimitKvNamespace & {
+      store: Map<string, { value: string; expirationTtl?: number }>;
+    } = {
+      store,
+      async get(key: string, _type: 'text') {
+        const record = store.get(key);
+        return record ? record.value : null;
+      },
+      async put(key: string, value: string, options) {
+        store.set(key, { value, expirationTtl: options.expirationTtl });
+      },
+    };
+
+    return kv;
+  };
 
   beforeEach(() => {
     fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
@@ -166,6 +186,37 @@ describe('createTelegramExportCommandHandler', () => {
     const response = await handler(createContext('export'));
 
     expect(response?.status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('prevents repeated export requests within cooldown window', async () => {
+    const { handleExport, adminAccess, rateLimit } = createHandler();
+    const cooldownKv = createFakeKv();
+    const handler = createTelegramExportCommandHandler({
+      botToken,
+      handleExport,
+      adminAccess,
+      rateLimit,
+      cooldownKv,
+      now: () => new Date('2024-02-01T00:00:00Z'),
+    });
+
+    const firstResponse = await handler(createContext('export 2024-01-01'));
+    expect(firstResponse?.status).toBe(200);
+    expect(cooldownKv.store.get('rate-limit:42')).toEqual({
+      value: '1',
+      expirationTtl: 30,
+    });
+
+    fetchMock.mockClear();
+    handleExport.mockClear();
+
+    const secondResponse = await handler(createContext('export 2024-01-01'));
+    expect(secondResponse?.status).toBe(429);
+    await expect(secondResponse?.json()).resolves.toEqual({
+      error: 'Please wait up to 30 seconds before requesting another export.',
+    });
+    expect(handleExport).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

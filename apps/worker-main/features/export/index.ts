@@ -5,5 +5,8 @@ export type {
 } from './admin-export-route';
 export { createCsvExportHandler } from './csv-export';
 export type { CsvExportHandlerOptions } from './csv-export';
-export { createTelegramExportCommandHandler } from './telegram-export-command';
+export {
+  createTelegramExportCommandHandler,
+  type AdminExportRateLimitKvNamespace,
+} from './telegram-export-command';
 export type { CreateTelegramExportCommandHandlerOptions } from './telegram-export-command';
