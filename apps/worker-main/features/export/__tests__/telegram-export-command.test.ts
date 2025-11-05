@@ -5,6 +5,7 @@ import type {
   AdminExportLogKvNamespace,
   AdminExportRateLimitKvNamespace,
 } from '../telegram-export-command';
+import type { MessagingPort } from '../../../ports';
 import type { TelegramAdminCommandContext } from '../../../http';
 
 const createContext = (argument?: string): TelegramAdminCommandContext => ({
@@ -72,6 +73,7 @@ describe('createTelegramExportCommandHandler', () => {
       cooldownKv?: AdminExportRateLimitKvNamespace;
       exportLogKv?: AdminExportLogKvNamespace;
       now?: () => Date;
+      sendTextMock?: ReturnType<typeof vi.fn>;
     },
   ) => {
     const handleExport =
@@ -87,17 +89,23 @@ describe('createTelegramExportCommandHandler', () => {
     const rateLimit =
       options?.rateLimit ?? { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
 
+    const sendTextMock = options?.sendTextMock ?? vi.fn().mockResolvedValue({});
+    const messaging: Pick<MessagingPort, 'sendText'> = {
+      sendText: sendTextMock as unknown as MessagingPort['sendText'],
+    };
+
     const handler = createTelegramExportCommandHandler({
       botToken,
       handleExport,
       adminAccess,
       rateLimit,
+      messaging,
       now: options?.now ?? (() => new Date('2024-02-01T00:00:00Z')),
       cooldownKv: options?.cooldownKv,
       exportLogKv: options?.exportLogKv,
     });
 
-    return { handler, handleExport, adminAccess, rateLimit };
+    return { handler, handleExport, adminAccess, rateLimit, sendTextMock };
   };
 
   it('uploads CSV to Telegram without date filters', async () => {
@@ -163,6 +171,9 @@ describe('createTelegramExportCommandHandler', () => {
       handleExport,
       adminAccess,
       rateLimit,
+      messaging: {
+        sendText: vi.fn().mockResolvedValue({}) as unknown as MessagingPort['sendText'],
+      },
     });
 
     const response = await handler(createContext('export'));
@@ -179,6 +190,9 @@ describe('createTelegramExportCommandHandler', () => {
       handleExport,
       adminAccess,
       rateLimit,
+      messaging: {
+        sendText: vi.fn().mockResolvedValue({}) as unknown as MessagingPort['sendText'],
+      },
     });
 
     const response = await handler(createContext('export 2024-01-01'));
@@ -198,6 +212,9 @@ describe('createTelegramExportCommandHandler', () => {
       handleExport,
       adminAccess,
       rateLimit,
+      messaging: {
+        sendText: vi.fn().mockResolvedValue({}) as unknown as MessagingPort['sendText'],
+      },
     });
 
     const response = await handler(createContext('export'));
@@ -259,6 +276,40 @@ describe('createTelegramExportCommandHandler', () => {
       from: null,
       to: null,
       rowCount: 1,
+    });
+  });
+
+  it('sends admin-ok for status command when user is whitelisted', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, adminAccess } = createHandler({ sendTextMock });
+
+    adminAccess.isAdmin.mockResolvedValueOnce(true);
+
+    const response = await handler(createContext('status'));
+
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ status: 'admin-ok' });
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: 'admin-ok',
+    });
+  });
+
+  it('sends forbidden for status command when user is not in whitelist', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, adminAccess } = createHandler({ sendTextMock });
+
+    adminAccess.isAdmin.mockResolvedValueOnce(false);
+
+    const response = await handler(createContext('status'));
+
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ status: 'forbidden' });
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: 'forbidden',
     });
   });
 });

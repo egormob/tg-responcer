@@ -10,6 +10,11 @@
 * `GET /admin/envz` — отображает булевы флаги наличия ключевых переменных окружения
   (`TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `ADMIN_EXPORT_TOKEN`, `ADMIN_TOKEN`, `DB`, `RATE_LIMIT_KV`).
 
+## Админ-команды в Telegram
+
+* `/admin export [from] [to]` — выгружает CSV с диалогами. Даты передаются в формате `YYYY-MM-DD` и опциональны.
+* `/admin status` — проверяет whitelisting текущего пользователя и отправляет ответ `admin-ok` (если доступ есть) или `forbidden` в тот же чат.
+
 Остальные подробности по запуску и протоколу остаются в `Protocol.md`.
 
 ### Переменные окружения OpenAI

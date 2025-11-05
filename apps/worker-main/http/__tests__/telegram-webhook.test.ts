@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createTelegramExportCommandHandler } from '../../features/export/telegram-export-command';
+import type { MessagingPort } from '../../ports';
 import { transformTelegramUpdate } from '../telegram-webhook';
 import type { TelegramUpdate } from '../telegram-webhook';
 
@@ -175,12 +176,17 @@ describe('transformTelegramUpdate', () => {
     const handleExport = vi.fn().mockResolvedValue(new Response('message_id\n1\n', { status: 200 }));
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
     const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const messaging: Pick<MessagingPort, 'sendText'> = {
+      sendText: sendTextMock as unknown as MessagingPort['sendText'],
+    };
 
     const exportHandler = createTelegramExportCommandHandler({
       botToken: 'token',
       handleExport,
       adminAccess,
       rateLimit,
+      messaging,
       now: () => new Date('2024-02-01T00:00:00Z'),
     });
 
@@ -218,12 +224,16 @@ describe('transformTelegramUpdate', () => {
     const handleExport = vi.fn();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
     const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
+    const messaging: Pick<MessagingPort, 'sendText'> = {
+      sendText: vi.fn().mockResolvedValue({}) as unknown as MessagingPort['sendText'],
+    };
 
     const exportHandler = createTelegramExportCommandHandler({
       botToken: 'token',
       handleExport,
       adminAccess,
       rateLimit,
+      messaging,
     });
 
     const result = await transformTelegramUpdate(update, {
