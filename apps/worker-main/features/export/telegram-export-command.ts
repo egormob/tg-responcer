@@ -10,11 +10,17 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
+export interface AdminExportRateLimitKvNamespace {
+  get(key: string, type: 'text'): Promise<string | null>;
+  put(key: string, value: string, options: { expirationTtl: number }): Promise<void>;
+}
+
 export interface CreateTelegramExportCommandHandlerOptions {
   botToken: string;
   handleExport: (request: AdminExportRequest) => Promise<Response>;
   adminAccess: AdminAccess;
   rateLimit: RateLimitPort;
+  cooldownKv?: AdminExportRateLimitKvNamespace;
   logger?: Logger;
   now?: () => Date;
 }
@@ -101,6 +107,13 @@ const buildTelegramFormData = (
   return formData;
 };
 
+const EXPORT_COOLDOWN_KEY_PREFIX = 'rate-limit:';
+const EXPORT_COOLDOWN_TTL_SECONDS = 30;
+const EXPORT_COOLDOWN_VALUE = '1';
+const EXPORT_COOLDOWN_RESPONSE = {
+  error: 'Please wait up to 30 seconds before requesting another export.',
+};
+
 export const createTelegramExportCommandHandler = (
   options: CreateTelegramExportCommandHandlerOptions,
 ) => {
@@ -144,6 +157,32 @@ export const createTelegramExportCommandHandler = (
     if (rateLimitResult === 'limit') {
       logger.warn('admin export rate limited', { userId, chatId: context.chat.id });
       return json({ error: 'Too many export requests' }, { status: 429 });
+    }
+
+    if (options.cooldownKv) {
+      const cooldownKey = `${EXPORT_COOLDOWN_KEY_PREFIX}${userId}`;
+
+      try {
+        const existing = await options.cooldownKv.get(cooldownKey, 'text');
+
+        if (existing !== null) {
+          logger.warn('admin export cooldown active', {
+            userId,
+            chatId: context.chat.id,
+          });
+          return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
+        }
+
+        await options.cooldownKv.put(cooldownKey, EXPORT_COOLDOWN_VALUE, {
+          expirationTtl: EXPORT_COOLDOWN_TTL_SECONDS,
+        });
+      } catch (error) {
+        logger.warn('failed to update admin export cooldown kv', {
+          userId,
+          chatId: context.chat.id,
+          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+        });
+      }
     }
 
     const abortController = new AbortController();

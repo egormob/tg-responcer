@@ -20,6 +20,7 @@ import {
   createRateLimitNotifier,
   createSelfTestRoute,
   createTelegramExportCommandHandler,
+  type AdminExportRateLimitKvNamespace,
   type BroadcastJob,
   type BroadcastScheduler,
   type LimitsFlagKvNamespace,
@@ -48,7 +49,8 @@ interface WorkerBindings {
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
   ADMIN_BROADCAST_TOKEN?: string;
-  ADMIN_TG_IDS?: AdminAccessKvNamespace;
+  ADMIN_TG_IDS?: AdminAccessKvNamespace & AdminExportRateLimitKvNamespace;
+  ADMIN_EXPORT_KV?: AdminExportRateLimitKvNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
@@ -324,6 +326,7 @@ const resolveBroadcastRecipientsFromJob = (job: BroadcastJob) => {
 const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminAccessKv = env.ADMIN_TG_IDS;
+  const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
   const adminAccess = adminAccessKv
     ? createAdminAccess({ kv: adminAccessKv })
     : undefined;
@@ -341,6 +344,7 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
         adminAccess,
         handleExport: csvExportHandler,
         rateLimit: composition.ports.rateLimit,
+        cooldownKv: adminExportKv,
         logger: console,
         now: () => new Date(),
       })
