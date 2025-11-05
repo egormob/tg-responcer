@@ -8,6 +8,7 @@ import {
   type RateLimitKvNamespace,
 } from './adapters';
 import {
+  type AdminAccessKvNamespace,
   createAdminBroadcastRoute,
   createAdminExportRoute,
   createBroadcastScheduler,
@@ -44,6 +45,8 @@ interface WorkerBindings {
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
   ADMIN_BROADCAST_TOKEN?: string;
+  ADMIN_TG_IDS?: AdminAccessKvNamespace;
+  ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
   RATE_LIMIT_WINDOW_MS?: string | number;
