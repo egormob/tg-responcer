@@ -24,6 +24,7 @@ export type {
   CreateAdminExportRouteOptions,
   AdminExportRequest,
   CsvExportHandlerOptions,
+  AdminExportRateLimitKvNamespace,
   CreateTelegramExportCommandHandlerOptions,
 } from './export';
 export {
