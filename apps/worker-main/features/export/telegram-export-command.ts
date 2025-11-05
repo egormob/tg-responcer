@@ -187,10 +187,21 @@ export const createTelegramExportCommandHandler = (
       requestedAt: now().toISOString(),
     });
 
-    const telegramResponse = await fetch(apiUrl, {
-      method: 'POST',
-      body: formData,
-    });
+    let telegramResponse: Response;
+    try {
+      telegramResponse = await fetch(apiUrl, {
+        method: 'POST',
+        body: formData,
+      });
+    } catch (error) {
+      logger.error('failed to upload export to telegram', {
+        chatId: context.chat.id,
+        threadId: context.chat.threadId,
+        userId,
+        error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+      });
+      return json({ error: 'Failed to send export to Telegram' }, { status: 502 });
+    }
 
     if (!telegramResponse.ok) {
       logger.error('failed to upload export to telegram', {
