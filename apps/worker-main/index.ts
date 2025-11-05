@@ -51,6 +51,7 @@ interface WorkerBindings {
   ADMIN_BROADCAST_TOKEN?: string;
   ADMIN_TG_IDS?: AdminAccessKvNamespace & AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_KV?: AdminExportRateLimitKvNamespace;
+  ADMIN_EXPORT_LOG?: KVNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
@@ -345,6 +346,7 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
         handleExport: csvExportHandler,
         rateLimit: composition.ports.rateLimit,
         cooldownKv: adminExportKv,
+        exportLogKv: env.ADMIN_EXPORT_LOG,
         logger: console,
         now: () => new Date(),
       })

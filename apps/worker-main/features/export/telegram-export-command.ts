@@ -15,12 +15,15 @@ export interface AdminExportRateLimitKvNamespace {
   put(key: string, value: string, options: { expirationTtl: number }): Promise<void>;
 }
 
+export type AdminExportLogKvNamespace = Pick<KVNamespace, 'put'>;
+
 export interface CreateTelegramExportCommandHandlerOptions {
   botToken: string;
   handleExport: (request: AdminExportRequest) => Promise<Response>;
   adminAccess: AdminAccess;
   rateLimit: RateLimitPort;
   cooldownKv?: AdminExportRateLimitKvNamespace;
+  exportLogKv?: AdminExportLogKvNamespace;
   logger?: Logger;
   now?: () => Date;
 }
@@ -113,6 +116,9 @@ const EXPORT_COOLDOWN_VALUE = '1';
 const EXPORT_COOLDOWN_RESPONSE = {
   error: 'Please wait up to 30 seconds before requesting another export.',
 };
+const EXPORT_LOG_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+const textDecoder = new TextDecoder('utf-8');
 
 export const createTelegramExportCommandHandler = (
   options: CreateTelegramExportCommandHandlerOptions,
@@ -215,15 +221,19 @@ export const createTelegramExportCommandHandler = (
     }
 
     const data = new Uint8Array(await exportResponse.arrayBuffer());
+    const csvText = textDecoder.decode(data);
+    const newlineMatches = csvText.match(/\n/g) ?? [];
+    const rowCount = Math.max(newlineMatches.length - 1, 0);
     const formData = buildTelegramFormData(context.chat.id, context.chat.threadId, data);
 
+    const requestTimestamp = now();
     logger.info('sending export to telegram', {
       chatId: context.chat.id,
       threadId: context.chat.threadId,
       userId,
       from: from?.toISOString(),
       to: to?.toISOString(),
-      requestedAt: now().toISOString(),
+      requestedAt: requestTimestamp.toISOString(),
     });
 
     let telegramResponse: Response;
@@ -248,6 +258,32 @@ export const createTelegramExportCommandHandler = (
         statusText: telegramResponse.statusText,
       });
       return json({ error: 'Failed to send export to Telegram' }, { status: 502 });
+    }
+
+    if (options.exportLogKv) {
+      const completedAt = now();
+      const logKey = `log:${completedAt.toISOString()}:${userId}`;
+      const payload = JSON.stringify({
+        userId,
+        chatId: context.chat.id,
+        from: from ? from.toISOString() : null,
+        to: to ? to.toISOString() : null,
+        rowCount,
+      });
+
+      try {
+        await options.exportLogKv.put(logKey, payload, {
+          expirationTtl: EXPORT_LOG_TTL_SECONDS,
+        });
+      } catch (error) {
+        logger.warn('failed to write admin export log', {
+          userId,
+          chatId: context.chat.id,
+          error: error instanceof Error
+            ? { name: error.name, message: error.message }
+            : String(error),
+        });
+      }
     }
 
     return json({ status: 'ok' }, { status: 200 });

@@ -11,6 +11,10 @@ migrations_dir = "apps/worker-main/migrations"
 binding = "RATE_LIMIT_KV"
 id = "d03442f14f7e4a64bb1d7896244a0d3f"
 
+[[kv_namespaces]]
+binding = "ADMIN_EXPORT_LOG"
+id = "c1f1f219f9554f0a91ce0ed6f246d106"
+
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
 # values are managed as secrets (see `scripts/bootstrap-cloudflare-secrets.sh`).

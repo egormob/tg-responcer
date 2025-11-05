@@ -8,5 +8,6 @@ export type { CsvExportHandlerOptions } from './csv-export';
 export {
   createTelegramExportCommandHandler,
   type AdminExportRateLimitKvNamespace,
+  type AdminExportLogKvNamespace,
 } from './telegram-export-command';
 export type { CreateTelegramExportCommandHandlerOptions } from './telegram-export-command';
