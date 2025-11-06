@@ -19,12 +19,19 @@ _Обновлено: 2025-11-13_
 - **Обязательные биндинги:**
   - `DB` — подключается к `createD1StorageAdapter`; без привязки база не используется, а экспорт и хранение истории недоступны. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/d1-storage`.
   - `RATE_LIMIT_KV` — требуется `createKvRateLimitAdapter` и `createRateLimitNotifier` для подсчёта и уведомлений о лимитах. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/kv-rate-limit`.
+  - `ADMIN_TG_IDS` — KV-источник whitelist администраторов и хранилище cooldown для `/admin export`. Namespace ID выдаётся в Dashboard и должен быть записан в `wrangler.toml` (см. раздел ниже).
+  - `ADMIN_EXPORT_LOG` — KV-журнал выгрузок (TTL 30 дней). Namespace ID обязателен к фиксации в `wrangler.toml`; отсутствие корректного ID приводит к ошибке деплоя `KV namespace ... not found`.
+
+### KV Namespace IDs
+- Для каждого KV, используемого воркером (`RATE_LIMIT_KV`, `ADMIN_TG_IDS`, `ADMIN_EXPORT_LOG`), фиксируй Namespace ID из Cloudflare Dashboard → Workers → `tg-responcer` → **Settings** → **KV Namespaces**.
+- Перед коммитом, который добавляет новый KV или обновляет его конфигурацию, запроси у менеджера актуальные namespace ID и внеси их в `wrangler.toml`. При отсутствии значения используй заглушку `REPLACE_WITH_…` только временно и пометь задачу на обновление ID до деплоя.
+- После деплоя проверяй секцию `Bindings` в выводе `wrangler deploy`: если Cloudflare сообщает об ошибке `KV namespace ... not found`, немедленно обнови ID и повтори публикацию.
 
 ### Процедура проверки наличия значений
 1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`. Plaintext-переменные (например, `CONFIG_REQUIRED_SECRETS`) подтягиваются из `wrangler.toml`; редактировать их нужно через Git, а не вручную в UI.
 2. Если появляется необходимость в новой plaintext или JSON переменной, сначала добавьте её в `wrangler.toml` (секция `[vars]`) и задокументируйте коммит. После деплоя проверьте, что значение появилось в Dashboard. Добавление напрямую через UI приведёт к очистке переменной при следующем деплое.
 3. После раскатки секретов выполните `GET /admin/envz` с валидным `x-admin-token`: маршрут `createEnvzRoute` отображает факты наличия (`true/false`) для ключевых переменных и биндингов, в том числе `telegram_bot_token`, `openai_model`, `db_bound`, `rate_limit_kv_bound`.
-4. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB` и `RATE_LIMIT_KV` с ожидаемыми ресурсами.
+4. Сразу после `wrangler deploy` проверьте блок `Bindings:` в выводе CLI либо в разделе Cloudflare Workers → Settings → Variables, убеждаясь, что присутствуют `DB`, `RATE_LIMIT_KV`, `ADMIN_TG_IDS` и `ADMIN_EXPORT_LOG` с ожидаемыми namespace ID.
 
 ### Диагностика отказа
 - Если `OPENAI_API_KEY`, `OPENAI_MODEL` или `TELEGRAM_BOT_TOKEN` отсутствуют либо содержат пустые строки, `validateRuntimeConfig` логирует `[config] ... is required` и выбрасывает `Missing ... environment variable`. Из-за этого `createRequestHandler` не доходит до `createTypingIndicator`, а вызов `/webhook/...` завершится `500 Internal Error` ещё до попытки отправки `typing` в Telegram. Проверяйте логи воркера: `console.error('[config] OPENAI_API_KEY is required')`, `console.error('[config] OPENAI_MODEL is required')`, `console.error('[config] TELEGRAM_BOT_TOKEN is required')`.
