@@ -13,11 +13,11 @@ id = "d03442f14f7e4a64bb1d7896244a0d3f"
 
 [[kv_namespaces]]
 binding = "ADMIN_EXPORT_LOG"
-id = "c1f1f219f9554f0a91ce0ed6f246d106"
+id = "3da8d75b18b548ceb528fac891f6bb24"
 
 [[kv_namespaces]]
 binding = "ADMIN_TG_IDS"
-id = "REPLACE_WITH_ADMIN_TG_IDS_NAMESPACE_ID"
+id = "6e0669bae62c48d5a8d64d11602e9d6d"
 
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
