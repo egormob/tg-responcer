@@ -11,6 +11,16 @@ _Обновлено: 2025-11-13_
 - Модуль `DialogEngine` и контракты портов работают на заглушках, внешние ресурсы не требуются для локальных тестов.
 - Подготовлена миграция D1 `apps/worker-main/migrations/0001_init_dialog_tables.sql` для таблиц `users` и `messages`.
 
+## KV Namespace ID — обязательная фиксация
+
+- Все KV биндинги воркера публикуются только с заполненным `namespace_id` в `wrangler.toml`. Placeholder `REPLACE_WITH_…` недопустим перед деплоем.
+- Namespace ID берём в [Cloudflare Dashboard → Workers → tg-responcer → Settings → KV Namespaces](https://dash.cloudflare.com/?to=/:account/workers-and-pages/view/tg-responcer/settings#kv-namespaces). Если биндинг создаёт менеджер, ID запрашиваем у него до старта задачи и фиксируем в репозитории.
+- Обязательные биндинги и статус фиксации ID:
+  - `RATE_LIMIT_KV` — namespace `RATE_LIMIT`; актуальный ID `d03442f14f7e4a64bb1d7896244a0d3f` (проверено 2025-11-13). Значение внесено в `wrangler.toml` и используется в продовых деплоях.
+  - `ADMIN_TG_IDS` — namespace для белого списка администраторов. Перед любыми задачами по админ-функционалу запрашиваем актуальный Namespace ID у менеджера и заменяем placeholder в `wrangler.toml` (`binding = "ADMIN_TG_IDS"`). Полученный ID фиксируем в этом разделе.
+  - `ADMIN_EXPORT_LOG` — namespace журнала выгрузок. ID запрашиваем и документируем вместе с `ADMIN_TG_IDS`; после получения обновляем `wrangler.toml` (`binding = "ADMIN_EXPORT_LOG"`) и этот список.
+- При ротации Namespace ID одновременно обновляем `wrangler.toml`, этот раздел и связанные чек-листы (см. протоколы проверки) и подтверждаем корректность биндингов через `wrangler deploy`/Dashboard.
+
 ## Минимальные требования к окружению воркера
 - **Обязательные переменные окружения:**
   - `OPENAI_MODEL` и `OPENAI_API_KEY` — используются при инициализации `createOpenAIResponsesAdapter`, их отсутствие приводит к немедленному завершению `validateRuntimeConfig` с ошибкой ещё до сборки портов. См. `apps/worker-main/index.ts`.
