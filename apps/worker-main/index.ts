@@ -355,6 +355,16 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
 
   const handleAdminCommand = exportCommandHandler
     ? (context: TelegramAdminCommandContext) => {
+        const command = context.command.toLowerCase();
+
+        if (command === '/export') {
+          return exportCommandHandler(context);
+        }
+
+        if (command !== '/admin') {
+          return undefined;
+        }
+
         const argument = context.argument?.trim();
         if (!argument) {
           return undefined;

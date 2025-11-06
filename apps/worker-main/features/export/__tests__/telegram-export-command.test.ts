@@ -8,29 +8,41 @@ import type {
 import type { MessagingPort } from '../../../ports';
 import type { TelegramAdminCommandContext } from '../../../http';
 
-const createContext = (argument?: string): TelegramAdminCommandContext => ({
-  command: '/admin',
-  rawCommand: '/admin',
+const createContext = ({
+  command = '/admin',
   argument,
-  text: `/admin ${argument ?? ''}`.trim(),
-  chat: { id: '123', threadId: '456', type: 'supergroup' },
-  from: { userId: '42' },
-  messageId: '789',
-  update: { update_id: 1 },
-  message: {
-    message_id: 789,
-    chat: { id: 123 },
-  } as unknown as TelegramAdminCommandContext['message'],
-  incomingMessage: {
-    chat: { id: '123', threadId: '456' },
+}: {
+  command?: '/admin' | '/export';
+  argument?: string;
+} = {}): TelegramAdminCommandContext => {
+  const trimmedArgument = argument?.trim();
+  const contextArgument = trimmedArgument && trimmedArgument.length > 0 ? trimmedArgument : undefined;
+  const text = [command, contextArgument].filter(Boolean).join(' ').trim();
+
+  return {
+    command,
+    rawCommand: command,
+    argument: contextArgument,
+    text,
+    chat: { id: '123', threadId: '456', type: 'supergroup' },
+    from: { userId: '42' },
     messageId: '789',
-    receivedAt: new Date('2024-01-01T00:00:00Z'),
-    text: `/admin ${argument ?? ''}`.trim(),
-    user: {
-      userId: '42',
+    update: { update_id: 1 },
+    message: {
+      message_id: 789,
+      chat: { id: 123 },
+    } as unknown as TelegramAdminCommandContext['message'],
+    incomingMessage: {
+      chat: { id: '123', threadId: '456' },
+      messageId: '789',
+      receivedAt: new Date('2024-01-01T00:00:00Z'),
+      text,
+      user: {
+        userId: '42',
+      },
     },
-  },
-});
+  };
+};
 
 describe('createTelegramExportCommandHandler', () => {
   const botToken = 'TEST_TOKEN';
@@ -111,7 +123,7 @@ describe('createTelegramExportCommandHandler', () => {
   it('uploads CSV to Telegram without date filters', async () => {
     const { handler, handleExport, rateLimit } = createHandler();
 
-    const response = await handler(createContext('export'));
+    const response = await handler(createContext({ command: '/export' }));
 
     expect(response?.status).toBe(200);
     expect(handleExport).toHaveBeenCalledWith({
@@ -142,7 +154,7 @@ describe('createTelegramExportCommandHandler', () => {
   it('parses date arguments and converts to UTC ISO', async () => {
     const { handler, handleExport } = createHandler();
 
-    await handler(createContext('export 2024-01-01 2024-02-01'));
+    await handler(createContext({ command: '/export', argument: '2024-01-01 2024-02-01' }));
 
     expect(handleExport).toHaveBeenCalledWith({
       from: new Date('2024-01-01T00:00:00Z'),
@@ -156,7 +168,7 @@ describe('createTelegramExportCommandHandler', () => {
   it('returns 400 for invalid date formats', async () => {
     const { handler, handleExport } = createHandler();
 
-    const response = await handler(createContext('export 2024-13-01'));
+    const response = await handler(createContext({ command: '/export', argument: '2024-13-01' }));
 
     expect(response?.status).toBe(400);
     expect(await response?.json()).toEqual({ error: 'from must be a valid date in YYYY-MM-DD format' });
@@ -176,7 +188,7 @@ describe('createTelegramExportCommandHandler', () => {
       },
     });
 
-    const response = await handler(createContext('export'));
+    const response = await handler(createContext({ command: '/export' }));
 
     expect(response?.status).toBe(403);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -195,7 +207,7 @@ describe('createTelegramExportCommandHandler', () => {
       },
     });
 
-    const response = await handler(createContext('export 2024-01-01'));
+    const response = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
 
     expect(response?.status).toBe(429);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -217,7 +229,7 @@ describe('createTelegramExportCommandHandler', () => {
       },
     });
 
-    const response = await handler(createContext('export'));
+    const response = await handler(createContext({ command: '/export' }));
 
     expect(response?.status).toBe(500);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -236,7 +248,7 @@ describe('createTelegramExportCommandHandler', () => {
     });
 
 
-    const firstResponse = await handler(createContext('export 2024-01-01'));
+    const firstResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
     expect(firstResponse?.status).toBe(200);
     expect(cooldownKv.store.get('rate-limit:42')).toEqual({
       value: '1',
@@ -246,7 +258,7 @@ describe('createTelegramExportCommandHandler', () => {
     fetchMock.mockClear();
     handleExport.mockClear();
 
-    const secondResponse = await handler(createContext('export 2024-01-01'));
+    const secondResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
     expect(secondResponse?.status).toBe(429);
     await expect(secondResponse?.json()).resolves.toEqual({
       error: 'Please wait up to 30 seconds before requesting another export.',
@@ -263,7 +275,7 @@ describe('createTelegramExportCommandHandler', () => {
 
     const { handler } = createHandler({ exportLogKv });
 
-    const response = await handler(createContext('export'));
+    const response = await handler(createContext({ command: '/export' }));
 
     expect(response?.status).toBe(200);
     expect(putMock).toHaveBeenCalledTimes(1);
@@ -285,7 +297,7 @@ describe('createTelegramExportCommandHandler', () => {
 
     adminAccess.isAdmin.mockResolvedValueOnce(true);
 
-    const response = await handler(createContext('status'));
+    const response = await handler(createContext({ command: '/admin', argument: 'status' }));
 
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'admin-ok' });
@@ -302,7 +314,7 @@ describe('createTelegramExportCommandHandler', () => {
 
     adminAccess.isAdmin.mockResolvedValueOnce(false);
 
-    const response = await handler(createContext('status'));
+    const response = await handler(createContext({ command: '/admin', argument: 'status' }));
 
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'forbidden' });
@@ -310,6 +322,21 @@ describe('createTelegramExportCommandHandler', () => {
       chatId: '123',
       threadId: '456',
       text: 'forbidden',
+    });
+  });
+
+  it('supports legacy /admin export command', async () => {
+    const { handler, handleExport } = createHandler();
+
+    const response = await handler(createContext({ command: '/admin', argument: 'export 2024-01-01' }));
+
+    expect(response?.status).toBe(200);
+    expect(handleExport).toHaveBeenCalledWith({
+      from: new Date('2024-01-01T00:00:00Z'),
+      to: undefined,
+      cursor: undefined,
+      limit: undefined,
+      signal: expect.any(AbortSignal),
     });
   });
 });

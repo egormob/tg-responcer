@@ -322,7 +322,7 @@ export const transformTelegramUpdate = async (
     if (rawCommand.length > 0 && isCommandForThisBot(rawCommand, options.botUsername)) {
       const normalizedCommand = normalizeCommand(rawCommand);
 
-      if (normalizedCommand.startsWith('/admin')) {
+      if (normalizedCommand === '/export' || normalizedCommand.startsWith('/admin')) {
         const argumentText = incoming.text
           .slice(commandEntity.offset + commandEntity.length)
           .trim();
