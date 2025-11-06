@@ -19,13 +19,13 @@ _Обновлено: 2025-11-13_
 - **Обязательные биндинги:**
   - `DB` — подключается к `createD1StorageAdapter`; без привязки база не используется, а экспорт и хранение истории недоступны. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/d1-storage`.
   - `RATE_LIMIT_KV` — требуется `createKvRateLimitAdapter` и `createRateLimitNotifier` для подсчёта и уведомлений о лимитах. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/kv-rate-limit`.
-  - `ADMIN_TG_IDS` — KV-источник whitelist администраторов и хранилище cooldown для `/admin export`. Namespace ID выдаётся в Dashboard и должен быть записан в `wrangler.toml` (см. раздел ниже).
-  - `ADMIN_EXPORT_LOG` — KV-журнал выгрузок (TTL 30 дней). Namespace ID обязателен к фиксации в `wrangler.toml`; отсутствие корректного ID приводит к ошибке деплоя `KV namespace ... not found`.
+  - `ADMIN_TG_IDS` — KV-источник whitelist администраторов и 30‑секундного cooldown для `/admin export`. Namespace ID берём из Cloudflare Dashboard и фиксируем в `wrangler.toml`.
+  - `ADMIN_EXPORT_LOG` — KV-журнал выгрузок CSV (TTL 30 дней). Деплой падает с ошибкой `KV namespace ... not found`, если ID в `wrangler.toml` не совпадает с Dashboard.
 
 ### KV Namespace IDs
-- Для каждого KV, используемого воркером (`RATE_LIMIT_KV`, `ADMIN_TG_IDS`, `ADMIN_EXPORT_LOG`), фиксируй Namespace ID из Cloudflare Dashboard → Workers → `tg-responcer` → **Settings** → **KV Namespaces**.
-- Перед коммитом, который добавляет новый KV или обновляет его конфигурацию, запроси у менеджера актуальные namespace ID и внеси их в `wrangler.toml`. При отсутствии значения используй заглушку `REPLACE_WITH_…` только временно и пометь задачу на обновление ID до деплоя.
-- После деплоя проверяй секцию `Bindings` в выводе `wrangler deploy`: если Cloudflare сообщает об ошибке `KV namespace ... not found`, немедленно обнови ID и повтори публикацию.
+- Для каждого KV (`RATE_LIMIT_KV`, `ADMIN_TG_IDS`, `ADMIN_EXPORT_LOG`) сохраняй Namespace ID из Cloudflare Dashboard → Workers → `tg-responcer` → **Settings** → **KV Namespaces**. Храни значения в `wrangler.toml`.
+- Перед коммитом, добавляющим новый KV или обновляющим его конфигурацию, запроси у менеджера актуальные namespace ID. Если значения ещё нет, временно поставь заглушку `REPLACE_WITH_…` и создай задачу на подстановку реального ID до деплоя.
+- После `wrangler deploy` сверяй блок `Bindings` в выводе CLI. Сообщение `KV namespace '<id>' not found` означает, что ID устарел или биндинг не создан — деплой блокировать до исправления.
 
 ### Процедура проверки наличия значений
 1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`. Plaintext-переменные (например, `CONFIG_REQUIRED_SECRETS`) подтягиваются из `wrangler.toml`; редактировать их нужно через Git, а не вручную в UI.
