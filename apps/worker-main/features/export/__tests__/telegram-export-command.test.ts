@@ -120,6 +120,51 @@ describe('createTelegramExportCommandHandler', () => {
     return { handler, handleExport, adminAccess, rateLimit, sendTextMock };
   };
 
+  it('sends help message for /admin without arguments when user is admin', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, adminAccess } = createHandler({ sendTextMock });
+
+    const response = await handler(createContext({ command: '/admin' }));
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('42');
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: [
+        'Доступные команды администратора:',
+        '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
+        '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
+        '- /admin export [from] [to] — то же, что /export; поддержка старого синтаксиса.',
+      ].join('\n'),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ help: 'sent' });
+  });
+
+  it('skips help message for non-admin users', async () => {
+    const sendTextMock = vi.fn();
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
+    const { handler } = createHandler({ sendTextMock, adminAccess });
+
+    const response = await handler(createContext({ command: '/admin' }));
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('42');
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(response).toBeUndefined();
+  });
+
+  it('returns 502 when help message delivery fails', async () => {
+    const sendTextMock = vi.fn().mockRejectedValue(new Error('network'));
+    const { handler } = createHandler({ sendTextMock });
+
+    const response = await handler(createContext({ command: '/admin' }));
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+    expect(response?.status).toBe(502);
+    await expect(response?.json()).resolves.toEqual({ error: 'Failed to send admin help response' });
+  });
+
   it('uploads CSV to Telegram without date filters', async () => {
     const { handler, handleExport, rateLimit } = createHandler();
 

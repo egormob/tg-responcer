@@ -367,7 +367,7 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
 
         const argument = context.argument?.trim();
         if (!argument) {
-          return undefined;
+          return exportCommandHandler(context);
         }
 
         const firstToken = argument.split(/\s+/)[0]?.toLowerCase();
