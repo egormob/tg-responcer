@@ -157,15 +157,15 @@ describe('transformTelegramUpdate', () => {
     await expect(result.response?.json()).resolves.toEqual({ status: 'ignored' });
   });
 
-  it('sends export file for /admin export command', async () => {
+  it('sends export file for /export command', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
       throw new Error('message is required for test');
     }
 
-    update.message.text = '/admin export';
+    update.message.text = '/export';
     update.message.entities = [
-      { type: 'bot_command', offset: 0, length: '/admin'.length },
+      { type: 'bot_command', offset: 0, length: '/export'.length },
     ];
 
     const fetchMock = vi
@@ -207,15 +207,15 @@ describe('transformTelegramUpdate', () => {
     await expect((document as Blob).text()).resolves.toBe('message_id\n1\n');
   });
 
-  it('returns forbidden for /admin export when user is not admin', async () => {
+  it('returns forbidden for /export when user is not admin', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
       throw new Error('message is required for test');
     }
 
-    update.message.text = '/admin export 2024-01-01';
+    update.message.text = '/export 2024-01-01';
     update.message.entities = [
-      { type: 'bot_command', offset: 0, length: '/admin'.length },
+      { type: 'bot_command', offset: 0, length: '/export'.length },
     ];
 
     const fetchMock = vi.fn();

@@ -48,32 +48,23 @@ const parseDateArgument = (value: string, kind: 'from' | 'to'): Date => {
   return date;
 };
 
-const parseExportArguments = (argument: string | undefined): ExportArguments | undefined => {
+const parseExportRangeArguments = (argument: string | undefined): ExportArguments => {
   if (!argument) {
-    return undefined;
+    return {};
   }
 
   const trimmed = argument.trim();
   if (trimmed.length === 0) {
-    return undefined;
+    return {};
   }
 
   const parts = trimmed.split(/\s+/);
-  if (parts.length === 0) {
-    return undefined;
+  if (parts.length > 2) {
+    throw new Error('Too many arguments. Usage: /export [from] [to]');
   }
 
-  if (parts[0].toLowerCase() !== 'export') {
-    return undefined;
-  }
-
-  const args = parts.slice(1);
-  if (args.length > 2) {
-    throw new Error('Too many arguments. Usage: /admin export [from] [to]');
-  }
-
-  const from = args[0] ? parseDateArgument(args[0], 'from') : undefined;
-  const to = args[1] ? parseDateArgument(args[1], 'to') : undefined;
+  const from = parts[0] ? parseDateArgument(parts[0], 'from') : undefined;
+  const to = parts[1] ? parseDateArgument(parts[1], 'to') : undefined;
 
   if (from && to && from.getTime() > to.getTime()) {
     throw new Error('`from` must be earlier than or equal to `to`');
@@ -129,13 +120,10 @@ export const createTelegramExportCommandHandler = (
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
 
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
+    const command = context.command.toLowerCase();
     const trimmedArgument = context.argument?.trim();
 
-    if (!trimmedArgument) {
-      return undefined;
-    }
-
-    if (trimmedArgument.toLowerCase() === 'status') {
+    if (command === '/admin' && trimmedArgument?.toLowerCase() === 'status') {
       const userId = context.from.userId;
       const isAdmin = await options.adminAccess.isAdmin(userId);
       const statusText = isAdmin ? 'admin-ok' : 'forbidden';
@@ -177,18 +165,36 @@ export const createTelegramExportCommandHandler = (
       return json({ status: statusText }, { status: 200 });
     }
 
-    let args: ExportArguments | undefined;
+    let rangeArgument: string | undefined;
+
+    if (command === '/export') {
+      rangeArgument = trimmedArgument;
+    } else if (command === '/admin') {
+      if (!trimmedArgument) {
+        return undefined;
+      }
+
+      const [firstToken, ...restTokens] = trimmedArgument.split(/\s+/);
+      if (firstToken?.toLowerCase() !== 'export') {
+        return undefined;
+      }
+
+      rangeArgument = restTokens.join(' ').trim();
+      if (rangeArgument.length === 0) {
+        rangeArgument = undefined;
+      }
+    } else {
+      return undefined;
+    }
+
+    let args: ExportArguments;
 
     try {
-      args = parseExportArguments(trimmedArgument);
+      args = parseExportRangeArguments(rangeArgument);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid arguments';
       logger.warn('invalid export arguments', { message, chatId: context.chat.id });
       return json({ error: message }, { status: 400 });
-    }
-
-    if (!args) {
-      return undefined;
     }
 
     const { from, to } = args;
