@@ -112,6 +112,13 @@ const EXPORT_LOG_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 const textDecoder = new TextDecoder('utf-8');
 
+const ADMIN_HELP_MESSAGE = [
+  'Доступные команды администратора:',
+  '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
+  '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
+  '- /admin export [from] [to] — то же, что /export; поддержка старого синтаксиса.',
+].join('\n');
+
 export const createTelegramExportCommandHandler = (
   options: CreateTelegramExportCommandHandlerOptions,
 ) => {
@@ -122,6 +129,43 @@ export const createTelegramExportCommandHandler = (
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
     const command = context.command.toLowerCase();
     const trimmedArgument = context.argument?.trim();
+
+    if (command === '/admin' && (!trimmedArgument || trimmedArgument.length === 0)) {
+      const userId = context.from.userId;
+      const isAdmin = await options.adminAccess.isAdmin(userId);
+
+      if (!isAdmin) {
+        return undefined;
+      }
+
+      try {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: ADMIN_HELP_MESSAGE,
+        });
+
+        logger.info('admin help sent', {
+          userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+        });
+      } catch (error) {
+        logger.error('failed to send admin help response', {
+          userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : String(error),
+        });
+
+        return json({ error: 'Failed to send admin help response' }, { status: 502 });
+      }
+
+      return json({ help: 'sent' }, { status: 200 });
+    }
 
     if (command === '/admin' && trimmedArgument?.toLowerCase() === 'status') {
       const userId = context.from.userId;
