@@ -116,7 +116,6 @@ const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
   '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
   '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
-  '- /admin export [from] [to] — то же, что /export; поддержка старого синтаксиса.',
 ].join('\n');
 
 export const createTelegramExportCommandHandler = (
