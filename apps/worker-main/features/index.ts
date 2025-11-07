@@ -57,3 +57,7 @@ export {
   type CreateSelfTestRouteOptions,
   type CreateEnvzRouteOptions,
 } from './admin-diagnostics';
+export {
+  createTelegramWebhookHandler,
+  type CreateTelegramWebhookHandlerOptions,
+} from './utm-tracking/create-telegram-webhook-handler';

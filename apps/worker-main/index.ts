@@ -20,6 +20,7 @@ import {
   createRateLimitNotifier,
   createSelfTestRoute,
   createTelegramExportCommandHandler,
+  createTelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
   type BroadcastJob,
   type BroadcastScheduler,
@@ -379,11 +380,13 @@ const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) 
       }
     : undefined;
 
-  return (payload: unknown) =>
-    transformTelegramUpdate(payload, {
-      botUsername: env.TELEGRAM_BOT_USERNAME,
-      features: handleAdminCommand ? { handleAdminCommand } : undefined,
-    });
+  const telegramWebhookHandler = createTelegramWebhookHandler({
+    storage: composition.ports.storage,
+    botUsername: env.TELEGRAM_BOT_USERNAME,
+    features: handleAdminCommand ? { handleAdminCommand } : undefined,
+  });
+
+  return (payload: unknown) => telegramWebhookHandler(payload);
 };
 
 interface RequestHandlerResult {

@@ -104,7 +104,7 @@ const UPSERT_USER_SQL = `
     first_name = excluded.first_name,
     last_name = excluded.last_name,
     language_code = excluded.language_code,
-    utm_source = excluded.utm_source,
+    utm_source = coalesce(excluded.utm_source, users.utm_source),
     metadata = excluded.metadata,
     updated_at = excluded.updated_at;
 `;
