@@ -115,8 +115,11 @@ const textDecoder = new TextDecoder('utf-8');
 const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
   '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
-  '- /broadcast help — подсказка по рассылкам. Используйте /broadcast send для подготовки отправки.',
-  '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
+  '- /broadcast help — подсказка по рассылкам и HTTP POST /admin/broadcast.',
+  '- /broadcast status — напоминание про протокол HTTP /admin/broadcast и контроль активных рассылок.',
+  '- /broadcast preview <текст> — отправить пробное сообщение только вам перед запуском.',
+  '- /broadcast send [--chat=<id>] [--user=<id>] [--lang=<code>] <текст> — поставить рассылку в очередь. Требуется хотя бы один фильтр (--chat/--user/--lang).',
+  '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 30 секунд.',
 ].join('\n');
 
 const parseUtmSourcesHeader = (value: string | null): string[] | undefined => {

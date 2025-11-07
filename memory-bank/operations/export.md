@@ -18,6 +18,16 @@
 2. Проверь, что в KV хранится payload для новых пользователей (лог `ADMIN_EXPORT_LOG`).
 3. Для новых UTM-ссылок следуй памятке [`memory-bank/references/telegram-deeplink-utm.md`](../references/telegram-deeplink-utm.md).
 
+## Telegram-команды администратора
+В админ-чате доступны команды:
+
+- `/admin status` — проверка whitelisting (ожидай `admin-ok`).
+- `/broadcast help` — краткая справка по HTTP POST `/admin/broadcast`.
+- `/broadcast status` — напоминание о протоколе `/admin/broadcast` и контроле активных рассылок.
+- `/broadcast preview <текст>` — отправляет пробное сообщение только инициатору.
+- `/broadcast send [--chat=<id>] [--user=<id>] [--lang=<code>] <текст>` — подготавливает payload для HTTP POST. Требуется хотя бы один фильтр (`--chat`, `--user` или `--lang`).
+- `/export [from] [to]` — выгружает CSV за указанный период (формат `YYYY-MM-DD`). Команда ограничена cooldown'ом: не чаще одного раза в 30 секунд.
+
 ## Пошаговая выгрузка
 1. Выполни запрос: `curl -H "X-Admin-Token: $ADMIN_EXPORT_TOKEN" "https://<worker>/admin/export?from=YYYY-MM-DD&to=YYYY-MM-DD" -o export.csv`.
 2. Открой CSV и найди нужные сообщения по фильтрам `timestamp`/`chat_id`.
