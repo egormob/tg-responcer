@@ -118,6 +118,35 @@ const ADMIN_HELP_MESSAGE = [
   '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
 ].join('\n');
 
+const parseUtmSourcesHeader = (value: string | null): string[] | undefined => {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const normalized = parsed
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    if (normalized.length === 0) {
+      return undefined;
+    }
+
+    return Array.from(new Set(normalized));
+  } catch (error) {
+    console.warn('failed to parse x-utm-sources header', {
+      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+    });
+    return undefined;
+  }
+};
+
 export const createTelegramExportCommandHandler = (
   options: CreateTelegramExportCommandHandlerOptions,
 ) => {
@@ -318,6 +347,7 @@ export const createTelegramExportCommandHandler = (
       return exportResponse;
     }
 
+    const utmSources = parseUtmSourcesHeader(exportResponse.headers.get('x-utm-sources'));
     const data = new Uint8Array(await exportResponse.arrayBuffer());
     const csvText = textDecoder.decode(data);
     const newlineMatches = csvText.match(/\n/g) ?? [];
@@ -325,14 +355,18 @@ export const createTelegramExportCommandHandler = (
     const formData = buildTelegramFormData(context.chat.id, context.chat.threadId, data);
 
     const requestTimestamp = now();
-    logger.info('sending export to telegram', {
+    const exportLogDetails: Record<string, unknown> = {
       chatId: context.chat.id,
       threadId: context.chat.threadId,
       userId,
       from: from?.toISOString(),
       to: to?.toISOString(),
       requestedAt: requestTimestamp.toISOString(),
-    });
+    };
+    if (utmSources) {
+      exportLogDetails.utmSources = utmSources;
+    }
+    logger.info('sending export to telegram', exportLogDetails);
 
     let telegramResponse: Response;
     try {
@@ -361,16 +395,19 @@ export const createTelegramExportCommandHandler = (
     if (options.exportLogKv) {
       const completedAt = now();
       const logKey = `log:${completedAt.toISOString()}:${userId}`;
-      const payload = JSON.stringify({
+      const payload: Record<string, unknown> = {
         userId,
         chatId: context.chat.id,
         from: from ? from.toISOString() : null,
         to: to ? to.toISOString() : null,
         rowCount,
-      });
+      };
+      if (utmSources) {
+        payload.utmSources = utmSources;
+      }
 
       try {
-        await options.exportLogKv.put(logKey, payload, {
+        await options.exportLogKv.put(logKey, JSON.stringify(payload), {
           expirationTtl: EXPORT_LOG_TTL_SECONDS,
         });
       } catch (error) {

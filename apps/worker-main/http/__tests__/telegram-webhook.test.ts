@@ -236,7 +236,14 @@ describe('transformTelegramUpdate', () => {
       .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const handleExport = vi.fn().mockResolvedValue(new Response('message_id\n1\n', { status: 200 }));
+    const handleExport = vi
+      .fn()
+      .mockResolvedValue(
+        new Response('message_id,chat_id,utm_source\n1,chat-1,src_demo\n', {
+          status: 200,
+          headers: { 'x-utm-sources': JSON.stringify(['src_demo']) },
+        }),
+      );
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
     const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue<'ok' | 'limit'>('ok') };
     const sendTextMock = vi.fn().mockResolvedValue({});
@@ -267,7 +274,9 @@ describe('transformTelegramUpdate', () => {
     expect(formData.get('chat_id')).toBe('555');
     const document = formData.get('document');
     expect(document).toBeInstanceOf(Blob);
-    await expect((document as Blob).text()).resolves.toBe('message_id\n1\n');
+    await expect((document as Blob).text()).resolves.toBe(
+      'message_id,chat_id,utm_source\n1,chat-1,src_demo\n',
+    );
   });
 
   it('returns forbidden for /export when user is not admin', async () => {

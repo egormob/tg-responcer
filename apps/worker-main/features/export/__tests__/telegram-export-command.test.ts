@@ -91,9 +91,12 @@ describe('createTelegramExportCommandHandler', () => {
     const handleExport =
       options?.handleExport
         ?? vi.fn().mockResolvedValue(
-          new Response('id,text\n1,hello\n', {
+          new Response('message_id,chat_id,utm_source\n1,chat-1,src_demo\n', {
             status: 200,
-            headers: { 'content-type': 'text/csv' },
+            headers: {
+              'content-type': 'text/csv',
+              'x-utm-sources': JSON.stringify(['src_demo']),
+            },
           }),
         );
 
@@ -192,7 +195,7 @@ describe('createTelegramExportCommandHandler', () => {
     expect(body.get('message_thread_id')).toBe('456');
     const document = body.get('document');
     expect(document).toBeInstanceOf(Blob);
-    await expect((document as Blob).text()).resolves.toBe('id,text\n1,hello\n');
+    await expect((document as Blob).text()).resolves.toBe('message_id,chat_id,utm_source\n1,chat-1,src_demo\n');
   });
 
   it('parses date arguments and converts to UTC ISO', async () => {
@@ -332,6 +335,7 @@ describe('createTelegramExportCommandHandler', () => {
       from: null,
       to: null,
       rowCount: 1,
+      utmSources: ['src_demo'],
     });
   });
 

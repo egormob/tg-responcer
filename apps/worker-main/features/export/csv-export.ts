@@ -26,6 +26,7 @@ interface ExportRow {
   user_updated_at: string;
   user_metadata: string | null;
   chat_id: string;
+  utm_source: string | null;
   thread_id: string | null;
   role: string;
   text: string;
@@ -50,6 +51,7 @@ const SELECT_MESSAGES_SQL = `
     u.updated_at AS user_updated_at,
     u.metadata AS user_metadata,
     m.chat_id,
+    u.utm_source,
     m.thread_id,
     m.role,
     m.text,
@@ -115,6 +117,7 @@ const HEADER = [
   'user_updated_at',
   'user_metadata',
   'chat_id',
+  'utm_source',
   'thread_id',
   'role',
   'text',
@@ -188,6 +191,7 @@ const createCsvStream = (rows: ExportRow[]): ReadableStream<Uint8Array> =>
           formatValue(row.user_updated_at),
           formatValue(row.user_metadata),
           formatValue(row.chat_id),
+          formatValue(row.utm_source),
           formatValue(row.thread_id),
           formatValue(row.role),
           formatValue(row.text),
@@ -248,6 +252,14 @@ export const createCsvExportHandler = (options: CsvExportHandlerOptions) => {
       'cache-control': 'no-store',
       'content-disposition': `attachment; filename="${filenamePrefix}.csv"`,
     });
+
+    const utmSources = rows
+      .map((row) => row.utm_source?.trim())
+      .filter((value): value is string => Boolean(value && value.length > 0));
+    const uniqueUtmSources = Array.from(new Set(utmSources));
+    if (uniqueUtmSources.length > 0) {
+      headers.set('x-utm-sources', JSON.stringify(uniqueUtmSources));
+    }
 
     if (hasMore && rows.length > 0) {
       const nextCursor = createCursor(rows[rows.length - 1]);
