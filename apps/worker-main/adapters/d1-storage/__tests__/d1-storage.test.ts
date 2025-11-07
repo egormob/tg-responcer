@@ -8,6 +8,7 @@ interface StoredUserRow {
   firstName: string | null;
   lastName: string | null;
   languageCode: string | null;
+  utmSource: string | null;
   metadata: string | null;
   updatedAt: string;
 }
@@ -146,10 +147,12 @@ class InMemoryD1Database implements D1Database {
       firstName,
       lastName,
       languageCode,
+      utmSource,
       metadata,
       updatedAt,
     ] = params as [
       string,
+      string | null,
       string | null,
       string | null,
       string | null,
@@ -167,6 +170,7 @@ class InMemoryD1Database implements D1Database {
         firstName,
         lastName,
         languageCode,
+        utmSource,
         metadata,
         updatedAt,
       });
@@ -179,6 +183,7 @@ class InMemoryD1Database implements D1Database {
       firstName,
       lastName,
       languageCode,
+      utmSource,
       metadata,
       updatedAt,
     });
@@ -242,6 +247,7 @@ describe('createD1StorageAdapter', () => {
       firstName: 'Alice',
       lastName: 'Wonder',
       languageCode: 'en',
+      utmSource: 'spring-campaign',
       metadata: { tier: 'beta' },
       updatedAt: baseDate,
     });
@@ -252,6 +258,7 @@ describe('createD1StorageAdapter', () => {
       firstName: 'Alice',
       lastName: 'Wonderland',
       languageCode: 'en',
+      utmSource: 'spring-campaign-2',
       metadata: { tier: 'gold', nested: { score: 3 } },
       updatedAt: new Date('2024-01-02T12:00:00.000Z'),
     });
@@ -264,8 +271,22 @@ describe('createD1StorageAdapter', () => {
       firstName: 'Alice',
       lastName: 'Wonderland',
       languageCode: 'en',
+      utmSource: 'spring-campaign-2',
     });
     expect(stored?.metadata).toBe('{"nested":{"score":3},"tier":"gold"}');
+  });
+
+  it('stores utm source as nullable when missing', async () => {
+    const { adapter, db } = createTestDatabase();
+
+    await adapter.saveUser({
+      userId: 'user-2',
+      updatedAt: baseDate,
+    });
+
+    const stored = db.getUser('user-2');
+    expect(stored).toBeDefined();
+    expect(stored?.utmSource).toBeNull();
   });
 
   it('appends messages and avoids duplicates for the same metadata payload', async () => {
