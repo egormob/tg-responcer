@@ -5,6 +5,7 @@ import type {
   MessageWebhookResult,
   TransformPayloadResult,
 } from './router';
+import { parseStartPayload } from '../features/utm-tracking/parse-start-payload';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -312,6 +313,7 @@ export const transformTelegramUpdate = async (
   }
 
   const commandEntity = extractCommandEntity(message);
+  let startPayload: string | undefined;
 
   if (commandEntity) {
     const rawCommand = incoming.text.slice(
@@ -321,6 +323,11 @@ export const transformTelegramUpdate = async (
 
     if (rawCommand.length > 0 && isCommandForThisBot(rawCommand, options.botUsername)) {
       const normalizedCommand = normalizeCommand(rawCommand);
+
+      if (normalizedCommand === '/start') {
+        const payloadText = incoming.text.slice(commandEntity.offset + commandEntity.length);
+        startPayload = parseStartPayload(payloadText);
+      }
 
       if (normalizedCommand === '/export' || normalizedCommand.startsWith('/admin')) {
         const argumentText = incoming.text
@@ -359,7 +366,15 @@ export const transformTelegramUpdate = async (
 
   const result: MessageWebhookResult = {
     kind: 'message',
-    message: incoming,
+    message: startPayload
+      ? {
+          ...incoming,
+          user: {
+            ...incoming.user,
+            utmSource: startPayload,
+          },
+        }
+      : incoming,
   };
 
   return result;

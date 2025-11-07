@@ -45,6 +45,69 @@ describe('transformTelegramUpdate', () => {
     expect(result.message.messageId).toBe('456');
   });
 
+  it('attaches utmSource when /start payload matches expected pattern', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/start src_SPRING-Launch';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/start'.length },
+    ];
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBe('src_spring-launch');
+  });
+
+  it('does not set utmSource when /start command has no payload', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/start';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/start'.length },
+    ];
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBeUndefined();
+  });
+
+  it('ignores invalid /start payloads', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/start referral=42';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/start'.length },
+    ];
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBeUndefined();
+  });
+
   it('invokes admin command handler for /admin command', async () => {
     const update = createBaseUpdate();
     if (!update.message) {

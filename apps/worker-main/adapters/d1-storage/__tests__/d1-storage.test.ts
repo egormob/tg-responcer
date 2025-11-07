@@ -177,13 +177,15 @@ class InMemoryD1Database implements D1Database {
       return;
     }
 
+    const nextUtmSource = utmSource ?? existing.utmSource ?? null;
+
     this.users.set(userId, {
       ...existing,
       username,
       firstName,
       lastName,
       languageCode,
-      utmSource,
+      utmSource: nextUtmSource,
       metadata,
       updatedAt,
     });
@@ -287,6 +289,27 @@ describe('createD1StorageAdapter', () => {
     const stored = db.getUser('user-2');
     expect(stored).toBeDefined();
     expect(stored?.utmSource).toBeNull();
+  });
+
+  it('preserves existing utm source when subsequent updates omit the value', async () => {
+    const { adapter, db } = createTestDatabase();
+
+    await adapter.saveUser({
+      userId: 'user-3',
+      utmSource: 'spring-campaign',
+      updatedAt: baseDate,
+    });
+
+    await adapter.saveUser({
+      userId: 'user-3',
+      username: 'charlie',
+      updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+    });
+
+    const stored = db.getUser('user-3');
+    expect(stored).toBeDefined();
+    expect(stored?.utmSource).toBe('spring-campaign');
+    expect(stored?.username).toBe('charlie');
   });
 
   it('appends messages and avoids duplicates for the same metadata payload', async () => {
