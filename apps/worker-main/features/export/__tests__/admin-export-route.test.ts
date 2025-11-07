@@ -4,7 +4,15 @@ import { createAdminExportRoute } from '../admin-export-route';
 
 const createRequest = (url: string, init?: RequestInit) => new Request(url, init);
 
-const createHandler = () => vi.fn().mockResolvedValue(new Response('ok'));
+const createHandler = () =>
+  vi.fn().mockResolvedValue(
+    new Response('ok', {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'x-utm-sources': JSON.stringify(['demo']),
+      },
+    }),
+  );
 
 describe('createAdminExportRoute', () => {
   it('rejects non-GET methods', async () => {
@@ -56,6 +64,7 @@ describe('createAdminExportRoute', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('ok');
+    expect(response.headers.get('x-utm-sources')).toBe(JSON.stringify(['demo']));
     expect(handleExport).toHaveBeenCalledTimes(1);
     const args = handleExport.mock.calls[0][0];
     expect(args.from).toBeInstanceOf(Date);

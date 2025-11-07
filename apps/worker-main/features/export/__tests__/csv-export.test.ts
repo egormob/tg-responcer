@@ -34,6 +34,7 @@ describe('createCsvExportHandler', () => {
       user_updated_at: '2024-01-01T00:00:00.000Z',
       user_metadata: null,
       chat_id: `chat-${index + 1}`,
+      utm_source: `source-${index + 1}`,
       thread_id: null,
       role: index % 2 === 0 ? 'user' : 'assistant',
       text: `message ${index + 1}`,
@@ -47,6 +48,9 @@ describe('createCsvExportHandler', () => {
     const response = await handler(baseRequest);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/csv; charset=utf-8');
+    expect(response.headers.get('x-utm-sources')).toBe(
+      JSON.stringify(['source-1', 'source-2', 'source-3']),
+    );
 
     const buffer = await response.arrayBuffer();
     const bytes = new Uint8Array(buffer.slice(0, 3));
@@ -54,6 +58,8 @@ describe('createCsvExportHandler', () => {
 
     const text = new TextDecoder().decode(buffer);
     expect(text.startsWith('"message_id"')).toBe(true);
+    const headerColumns = text.split('\r\n')[0]?.split(',');
+    expect(headerColumns?.at(10)).toBe('"utm_source"');
     expect(text.split('\r\n').length).toBe(5); // header + 3 rows + trailing empty
   });
 
@@ -69,6 +75,7 @@ describe('createCsvExportHandler', () => {
       user_updated_at: '2024-01-01T00:00:00.000Z',
       user_metadata: null,
       chat_id: 'chat',
+      utm_source: 'campaign',
       thread_id: null,
       role: 'user',
       text: `row-${index + 1}`,
@@ -82,6 +89,7 @@ describe('createCsvExportHandler', () => {
     const response = await handler({ ...baseRequest, limit: 5 });
 
     expect(response.headers.get('x-next-cursor')).not.toBeNull();
+    expect(response.headers.get('x-utm-sources')).toBe(JSON.stringify(['campaign']));
     const text = await response.text();
     const lines = text.trim().split('\r\n');
     expect(lines).toHaveLength(6); // header + 5 rows
@@ -101,6 +109,7 @@ describe('createCsvExportHandler', () => {
         user_updated_at: '2024-01-01T00:00:00.000Z',
         user_metadata: null,
         chat_id: 'chat',
+        utm_source: null,
         thread_id: null,
         role: 'user',
         text: '=cmd',
@@ -116,6 +125,7 @@ describe('createCsvExportHandler', () => {
     const text = await response.text();
 
     expect(text).toContain("'" + '=cmd');
+    expect(response.headers.get('x-utm-sources')).toBeNull();
   });
 
   it('returns 400 for invalid cursor', async () => {
