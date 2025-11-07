@@ -22,6 +22,7 @@ import {
   createRateLimitNotifier,
   createSelfTestRoute,
   createTelegramExportCommandHandler,
+  createTelegramBroadcastCommandHandler,
   createTelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
   type BroadcastJob,
@@ -428,29 +429,61 @@ const createTransformPayload = (
       })
     : undefined;
 
-  const handleAdminCommand = exportCommandHandler
-    ? (context: TelegramAdminCommandContext) => {
-        const command = context.command.toLowerCase();
+  const broadcastCommandHandler = adminAccess
+    ? createTelegramBroadcastCommandHandler({
+        adminAccess,
+        messaging: composition.ports.messaging,
+      })
+    : undefined;
 
-        if (command === '/export') {
-          return exportCommandHandler(context);
-        }
+  type AdminCommandHandler = (
+    context: TelegramAdminCommandContext,
+  ) => Promise<Response | void> | Response | void;
 
-        if (command !== '/admin') {
-          return undefined;
-        }
+  const adminCommandHandlers: AdminCommandHandler[] = [];
 
-        const argument = context.argument?.trim();
-        if (!argument) {
-          return exportCommandHandler(context);
-        }
+  if (exportCommandHandler) {
+    const handler: AdminCommandHandler = (context) => {
+      const command = context.command.toLowerCase();
 
-        const firstToken = argument.split(/\s+/)[0]?.toLowerCase();
-        if (firstToken !== 'export' && firstToken !== 'status') {
-          return undefined;
-        }
-
+      if (command === '/export') {
         return exportCommandHandler(context);
+      }
+
+      if (command !== '/admin') {
+        return undefined;
+      }
+
+      const argument = context.argument?.trim();
+      if (!argument) {
+        return exportCommandHandler(context);
+      }
+
+      const firstToken = argument.split(/\s+/)[0]?.toLowerCase();
+      if (firstToken !== 'export' && firstToken !== 'status') {
+        return undefined;
+      }
+
+      return exportCommandHandler(context);
+    };
+
+    adminCommandHandlers.push(handler);
+  }
+
+  if (broadcastCommandHandler) {
+    adminCommandHandlers.push(broadcastCommandHandler);
+  }
+
+  const handleAdminCommand = adminCommandHandlers.length > 0
+    ? async (context: TelegramAdminCommandContext) => {
+        for (const handler of adminCommandHandlers) {
+          const result = await handler(context);
+          if (result !== undefined) {
+            return result;
+          }
+        }
+
+        return undefined;
       }
     : undefined;
 

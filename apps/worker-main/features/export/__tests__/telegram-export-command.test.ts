@@ -136,6 +136,7 @@ describe('createTelegramExportCommandHandler', () => {
       text: [
         'Доступные команды администратора:',
         '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
+        '- /broadcast help — подсказка по рассылкам. Используйте /broadcast send для подготовки отправки.',
         '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD.',
       ].join('\n'),
     });
