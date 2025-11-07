@@ -26,3 +26,7 @@ export {
   type BroadcastProgressStore,
   type BroadcastJobProgress,
 } from './broadcast-progress-store';
+export {
+  createTelegramBroadcastCommandHandler,
+  type CreateTelegramBroadcastCommandHandlerOptions,
+} from './telegram-broadcast-command';
