@@ -74,6 +74,7 @@ export interface UserProfile {
   firstName?: string;
   lastName?: string;
   languageCode?: string;
+  utmSource?: string;
   metadata?: Record<string, unknown>;
 }
 

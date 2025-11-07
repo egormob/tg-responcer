@@ -95,14 +95,16 @@ const UPSERT_USER_SQL = `
     first_name,
     last_name,
     language_code,
+    utm_source,
     metadata,
     updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(user_id) DO UPDATE SET
     username = excluded.username,
     first_name = excluded.first_name,
     last_name = excluded.last_name,
     language_code = excluded.language_code,
+    utm_source = excluded.utm_source,
     metadata = excluded.metadata,
     updated_at = excluded.updated_at;
 `;
@@ -273,6 +275,7 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
             toNullableString(input.firstName),
             toNullableString(input.lastName),
             toNullableString(input.languageCode),
+            toNullableString(input.utmSource),
             metadataText,
             toIsoString(input.updatedAt),
           )
