@@ -150,21 +150,24 @@ export const createBroadcastScheduler = (options: BroadcastSchedulerOptions): Br
 
     const pendingRecipients = recipients.filter((recipient) => !delivered.has(toRecipientKey(recipient)));
 
-    const sendWithRetries = async (recipient: BroadcastRecipient) => {
+    const sendWithRetries = async (recipient: BroadcastRecipient): Promise<string | undefined> => {
       let attempt = 0;
+      let lastError: unknown;
+
       while (attempt < recipientMaxAttempts) {
         try {
-          await options.messaging.sendText({
+          const result = await options.messaging.sendText({
             chatId: recipient.chatId,
             threadId: recipient.threadId,
             text: claim.payload.text,
           });
-          return;
+          return result?.messageId;
         } catch (error) {
+          lastError = error;
           attempt += 1;
           const retryAfterMs = extractRetryAfterMs(error) ?? perRecipientDelayMs;
           if (attempt >= recipientMaxAttempts) {
-            throw error;
+            throw error instanceof Error ? error : lastError instanceof Error ? lastError : new Error(String(error));
           }
 
           if (retryAfterMs > 0) {
@@ -172,15 +175,27 @@ export const createBroadcastScheduler = (options: BroadcastSchedulerOptions): Br
           }
         }
       }
+
+      if (lastError instanceof Error) {
+        throw lastError;
+      }
+
+      throw new Error('broadcast message delivery failed without explicit error');
     };
 
     try {
       for (let index = 0; index < pendingRecipients.length; index += 1) {
         const recipient = pendingRecipients[index];
         const key = toRecipientKey(recipient);
-        await sendWithRetries(recipient);
+        const messageId = await sendWithRetries(recipient);
         delivered.add(key);
         await persistProgress({ delivered: Array.from(delivered) });
+
+        const recipientLogDetails: Record<string, unknown> = { jobId: claim.id, recipient: key };
+        if (messageId) {
+          recipientLogDetails.messageId = messageId;
+        }
+        logger?.debug?.('broadcast recipient delivered', recipientLogDetails);
 
         if (perRecipientDelayMs > 0 && index < pendingRecipients.length - 1) {
           await wait(perRecipientDelayMs);

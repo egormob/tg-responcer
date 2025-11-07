@@ -26,6 +26,7 @@ import {
   type AdminExportRateLimitKvNamespace,
   type BroadcastJob,
   type BroadcastScheduler,
+  type BroadcastSchedulerLogger,
   type LimitsFlagKvNamespace,
 } from './features';
 import {
@@ -77,6 +78,36 @@ interface WorkerExecutionContext {
 
 const broadcastQueue = createInMemoryBroadcastQueue();
 const broadcastProgressStore = createInMemoryBroadcastProgressStore();
+
+const createBroadcastSchedulerLogger = (): BroadcastSchedulerLogger => {
+  const log = (
+    level: 'debug' | 'info' | 'warn' | 'error',
+    message: string,
+    details?: Record<string, unknown>,
+  ) => {
+    const consoleMethod = (console as Record<string, ((...args: unknown[]) => void) | undefined>)[level] ?? console.log;
+    if (details) {
+      consoleMethod(`[broadcast] ${message}`, details);
+    } else {
+      consoleMethod(`[broadcast] ${message}`);
+    }
+  };
+
+  return {
+    debug(message, details) {
+      log('debug', message, details);
+    },
+    info(message, details) {
+      log('info', message, details);
+    },
+    warn(message, details) {
+      log('warn', message, details);
+    },
+    error(message, details) {
+      log('error', message, details);
+    },
+  } satisfies BroadcastSchedulerLogger;
+};
 
 const DEFAULT_RATE_LIMIT = 50;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -470,6 +501,7 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
         messaging: composition.ports.messaging,
         progressStore: broadcastProgressStore,
         resolveRecipients: resolveBroadcastRecipientsFromJob,
+        logger: createBroadcastSchedulerLogger(),
       })
     : undefined;
 
@@ -482,7 +514,15 @@ export default {
     const response = await router.handle(request);
 
     if (scheduler && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(scheduler.processPendingJobs());
+      ctx.waitUntil(
+        scheduler.processPendingJobs().catch((error) => {
+          const details =
+            error instanceof Error
+              ? { message: error.message, stack: error.stack }
+              : { error: String(error) };
+          console.error('[broadcast] scheduler task failed', details);
+        }),
+      );
     }
 
     return response;
