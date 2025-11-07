@@ -264,7 +264,7 @@ describe('http router', () => {
     const response = await router.handle(
       new Request('https://example.com/admin/broadcast', {
         method: 'POST',
-        headers: { 'x-admin-token': 'broadcast-token' },
+        headers: { 'x-admin-token': 'broadcast-token', 'x-admin-actor': 'ops' },
       }),
     );
 
@@ -272,6 +272,34 @@ describe('http router', () => {
     expect(broadcast).toHaveBeenCalledTimes(1);
     const passedRequest = broadcast.mock.calls[0][0];
     expect(passedRequest.headers.get('x-admin-token')).toBe('broadcast-token');
+    expect(passedRequest.headers.get('x-admin-actor')).toBe('ops');
+  });
+
+  it('injects broadcast token from query string while preserving actor header', async () => {
+    const broadcast = vi.fn().mockResolvedValue(new Response('queued', { status: 202 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'admin-token',
+        broadcastToken: 'broadcast-token',
+        broadcast,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/broadcast?token=broadcast-token', {
+        method: 'POST',
+        headers: { 'x-admin-actor': 'ops' },
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const passedRequest = broadcast.mock.calls[0][0];
+    expect(passedRequest.headers.get('x-admin-token')).toBe('broadcast-token');
+    expect(passedRequest.headers.get('x-admin-actor')).toBe('ops');
   });
 
   it('returns 404 for broadcast route when handler is missing', async () => {
@@ -287,7 +315,7 @@ describe('http router', () => {
     const response = await router.handle(
       new Request('https://example.com/admin/broadcast', {
         method: 'POST',
-        headers: { 'x-admin-token': 'admin-token' },
+        headers: { 'x-admin-token': 'admin-token', 'x-admin-actor': 'ops' },
       }),
     );
 

@@ -8,7 +8,9 @@ import {
   type RateLimitKvNamespace,
 } from './adapters';
 import {
+  type AdminAccess,
   type AdminAccessKvNamespace,
+  type CreateAdminAccessOptions,
   createAdminAccess,
   createAdminBroadcastRoute,
   createAdminExportRoute,
@@ -95,6 +97,29 @@ const toPositiveInteger = (value: string | number | undefined): number | undefin
 
     const parsed = Number.parseInt(trimmed, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+};
+
+const toNonNegativeInteger = (value: string | number | undefined): number | undefined => {
+  if (typeof value === 'number') {
+    if (Number.isFinite(value) && value >= 0) {
+      return Math.floor(value);
+    }
+    return undefined;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+
+    const parsed = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed;
     }
   }
@@ -263,9 +288,26 @@ const createRateLimitNotifierIfConfigured = (
   });
 };
 
+const createAdminAccessIfConfigured = (env: WorkerEnv): AdminAccess | undefined => {
+  const adminAccessKv = env.ADMIN_TG_IDS;
+  if (!adminAccessKv) {
+    return undefined;
+  }
+
+  const cacheTtlMs = toNonNegativeInteger(env.ADMIN_ACCESS_CACHE_TTL_MS);
+  const options: CreateAdminAccessOptions = { kv: adminAccessKv };
+
+  if (cacheTtlMs !== undefined) {
+    options.cacheTtlMs = cacheTtlMs;
+  }
+
+  return createAdminAccess(options);
+};
+
 const createAdminRoutes = (
   env: WorkerEnv,
   composition: CompositionResult,
+  adminAccess: AdminAccess | undefined,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -300,6 +342,7 @@ const createAdminRoutes = (
     routes.broadcast = createAdminBroadcastRoute({
       adminToken: broadcastToken,
       queue: broadcastQueue,
+      adminAccess,
     });
     routes.broadcastToken = broadcastToken;
   }
@@ -325,13 +368,13 @@ const resolveBroadcastRecipientsFromJob = (job: BroadcastJob) => {
   return chatIds.map((chatId) => ({ chatId }));
 };
 
-const createTransformPayload = (env: WorkerEnv, composition: CompositionResult) => {
+const createTransformPayload = (
+  env: WorkerEnv,
+  composition: CompositionResult,
+  adminAccess: AdminAccess | undefined,
+) => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
-  const adminAccessKv = env.ADMIN_TG_IDS;
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
-  const adminAccess = adminAccessKv
-    ? createAdminAccess({ kv: adminAccessKv })
-    : undefined;
 
   const csvExportHandler = env.DB
     ? createCsvExportHandler({
@@ -408,7 +451,8 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
 
   const typingIndicator = createTypingIndicatorIfAvailable(composition.ports.messaging);
 
-  const adminRoutes = createAdminRoutes(env, composition);
+  const adminAccess = createAdminAccessIfConfigured(env);
+  const adminRoutes = createAdminRoutes(env, composition, adminAccess);
 
   const router = createRouter({
     dialogEngine: composition.dialogEngine,
@@ -416,7 +460,7 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
-    transformPayload: createTransformPayload(env, composition),
+    transformPayload: createTransformPayload(env, composition, adminAccess),
     admin: adminRoutes,
   });
 
