@@ -1,5 +1,6 @@
 node_modules/
-logs/
+logs/*
+!logs/check-roadmap.log
 snapshot/
 .DS_Store
 
