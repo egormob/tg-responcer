@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBroadcastScheduler } from '../broadcast-scheduler';
 import { createInMemoryBroadcastQueue } from '../broadcast-queue';
 import { createInMemoryBroadcastProgressStore } from '../broadcast-progress-store';
-import type { BroadcastRecipient } from '../broadcast-scheduler';
+import type { BroadcastRecipient, BroadcastSchedulerLogger } from '../broadcast-scheduler';
 import type { MessagingPort } from '../../../ports';
 
 const createMessagingPort = () => ({
@@ -224,5 +224,43 @@ describe('createBroadcastScheduler', () => {
     expect(stored?.status).toBe('processing');
     expect(stored?.attempts).toBe(1);
     await expect(progressStore.read(job.id)).resolves.toBeUndefined();
+  });
+
+  it('logs delivered recipients with message identifier when available', async () => {
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => new Date('2024-01-01T00:00:00.000Z'),
+    });
+    const progressStore = createInMemoryBroadcastProgressStore();
+    const messaging = {
+      sendText: vi.fn().mockResolvedValue({ messageId: '42' }),
+      sendTyping: vi.fn(),
+    } as unknown as MessagingPort;
+
+    const logger: BroadcastSchedulerLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+    };
+
+    const job = queue.enqueue({ payload: basePayload });
+
+    const scheduler = createBroadcastScheduler({
+      queue,
+      messaging,
+      progressStore,
+      resolveRecipients: () => [{ chatId: '100' }],
+      logger,
+      wait: vi.fn().mockResolvedValue(undefined),
+      perRecipientDelayMs: 0,
+      now: () => new Date('2024-01-01T00:00:10.000Z'),
+    });
+
+    await scheduler.processPendingJobs();
+
+    expect(logger.debug).toHaveBeenCalledWith('broadcast recipient delivered', {
+      jobId: job.id,
+      recipient: '100',
+      messageId: '42',
+    });
   });
 });

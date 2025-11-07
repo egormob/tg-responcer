@@ -48,6 +48,27 @@ describe('createInMemoryBroadcastQueue', () => {
     expect(snapshot.jobs[0].payload.filters?.chatIds).toEqual(['1', '2']);
   });
 
+  it('returns new date instances when reading jobs', () => {
+    const firstDate = new Date('2024-01-01T00:00:00.000Z');
+    const laterDate = new Date('2024-01-01T00:05:00.000Z');
+    let nowCall = 0;
+    const queue = createInMemoryBroadcastQueue({
+      generateId: () => 'job-1',
+      now: () => (nowCall++ === 0 ? firstDate : laterDate),
+    });
+
+    const created = queue.enqueue({ payload: basePayload });
+    const fetched = queue.getJob(created.id);
+
+    expect(fetched).toBeDefined();
+    expect(fetched?.createdAt).not.toBe(firstDate);
+    expect(fetched?.updatedAt).not.toBe(firstDate);
+
+    queue.updateJob(created.id, { status: 'processing' });
+    const updated = queue.getJob(created.id);
+    expect(updated?.updatedAt).not.toBe(laterDate);
+  });
+
   it('enforces maxPending limit when provided', () => {
     const queue = createInMemoryBroadcastQueue({
       generateId: () => 'job-1',
