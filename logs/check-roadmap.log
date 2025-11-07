@@ -1,0 +1,3 @@
+# 2025-11-07T12:29:05Z
+> tg-responcer@0.1.0 check:roadmap
+> node scripts/check-roadmap.mjs
