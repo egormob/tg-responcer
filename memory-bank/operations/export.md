@@ -11,7 +11,7 @@
 - `user_*` — данные телеграм-пользователя на момент выгрузки.
 - `chat_id`/`thread_id` — контекст, из которого пришло сообщение.
 - `role` и `text` — содержимое сообщения (бот/пользователь).
-- `message_metadata` — дополнительная информация в JSON (`content_type`, `payload`, `parts` и т. п.).
+- `message_metadata` — дополнительная информация в JSON (`messageId`, служебные теги AI-ответа и т. п.).
 
 ## Подготовка
 1. Убедись, что токен администратора активен (`ADMIN_EXPORT_TOKEN`) и ты в whitelist (`ADMIN_TG_IDS`).
@@ -21,8 +21,8 @@
 ## Пошаговая выгрузка
 1. Выполни запрос: `curl -H "X-Admin-Token: $ADMIN_EXPORT_TOKEN" "https://<worker>/admin/export?from=YYYY-MM-DD&to=YYYY-MM-DD" -o export.csv`.
 2. Открой CSV и найди нужные сообщения по фильтрам `timestamp`/`chat_id`.
-3. Payload из deeplink хранится в `message_metadata.payload` (JSON). Проверь, что новые пользователи несут ожидаемое значение `utm_label` и что оно парсится на стороне BI.
-4. Если `message_metadata.payload` пустой, проверь процесс регистрации пользователя и наличие payload в логах.
+3. Для новых UTM-ссылок убедись, что первый запрос пользователя записал источник в колонку `utm_source` таблицы `users`. Выполни `wrangler d1 execute $DB --command "SELECT user_id, utm_source FROM users WHERE utm_source IS NOT NULL ORDER BY updated_at DESC LIMIT 5"` и проверь, что нужный `user_id` присутствует.
+4. Экспорт сейчас не содержит отдельных колонок `utm_*`. Чтобы BI увидела UTM-значения, используй выгрузку `users.utm_source` или добавь их вручную в копию CSV перед импортом.
 5. Зафиксируй результат проверки в журнале прогресса с ссылкой на файл экспорта.
 
 ## Контрольные проверки
