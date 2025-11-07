@@ -32,6 +32,7 @@ export {
   createInMemoryBroadcastQueue,
   createBroadcastScheduler,
   createInMemoryBroadcastProgressStore,
+  createTelegramBroadcastJobCommandHandler,
 } from './broadcast';
 export type {
   AdminBroadcastRequest,
@@ -50,6 +51,7 @@ export type {
   BroadcastProgressStore,
   BroadcastJobProgress,
   UpdateBroadcastJobOptions,
+  CreateTelegramBroadcastJobCommandHandlerOptions,
 } from './broadcast';
 export {
   createSelfTestRoute,

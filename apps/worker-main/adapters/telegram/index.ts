@@ -266,6 +266,39 @@ export const createTelegramMessagingAdapter = (
         messageId: firstMessageId ? String(firstMessageId) : undefined,
       };
     },
+
+    async editMessageText(input) {
+      const sanitizedText = sanitizeText(input.text);
+
+      if (sanitizedText.length > MAX_MESSAGE_LENGTH) {
+        throw new Error('Telegram editMessageText payload exceeds maximum length');
+      }
+
+      const body: Record<string, unknown> = {
+        chat_id: input.chatId,
+        message_id: input.messageId,
+        text: sanitizedText,
+      };
+
+      if (input.threadId) {
+        body.message_thread_id = input.threadId;
+      }
+
+      await executeWithRetries('editMessageText', body, false);
+    },
+
+    async deleteMessage(input) {
+      const body: Record<string, unknown> = {
+        chat_id: input.chatId,
+        message_id: input.messageId,
+      };
+
+      if (input.threadId) {
+        body.message_thread_id = input.threadId;
+      }
+
+      await executeWithRetries('deleteMessage', body, false);
+    },
   };
 };
 

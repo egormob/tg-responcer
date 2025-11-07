@@ -16,6 +16,8 @@ describe('createSelfTestRoute', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockResolvedValue({ messageId: '42' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
 
     const route = createSelfTestRoute({ ai, messaging, now: () => 1000 });
@@ -48,6 +50,8 @@ describe('createSelfTestRoute', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockResolvedValue({}),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
 
     const route = createSelfTestRoute({ ai, messaging, now: () => 2000 });
@@ -68,6 +72,8 @@ describe('createSelfTestRoute', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),
       sendText: vi.fn(),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
     };
 
     const route = createSelfTestRoute({ ai, messaging, now: () => 0 });
@@ -90,6 +96,8 @@ describe('createSelfTestRoute', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockRejectedValue(new Error('telegram failure')),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
 
     const route = createSelfTestRoute({ ai, messaging, now: () => 5000 });
@@ -108,6 +116,8 @@ describe('createSelfTestRoute', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockResolvedValue({ messageId: 'noop-ignored' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
 
     const route = createSelfTestRoute({ ai, messaging, now: () => 9000 });

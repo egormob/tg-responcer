@@ -24,6 +24,8 @@ describe('DialogEngine', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockResolvedValue({ messageId: 'outgoing-1' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
     const ai: AiPort = {
       reply: vi.fn().mockResolvedValue({ text: 'Здравствуйте!', metadata: { tokens: 123 } }),
@@ -137,6 +139,8 @@ describe('DialogEngine', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
       sendText: vi.fn().mockResolvedValue(undefined),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
     };
 
     const ai: AiPort = {
@@ -197,6 +201,8 @@ describe('DialogEngine', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),
       sendText: vi.fn(),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
     };
     const ai: AiPort = {
       reply: vi.fn(),

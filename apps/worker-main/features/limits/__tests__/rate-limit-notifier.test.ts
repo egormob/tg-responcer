@@ -6,6 +6,8 @@ import { createRateLimitNotifier } from '../rate-limit-notifier';
 const createMessagingPort = () => ({
   sendTyping: vi.fn(),
   sendText: vi.fn().mockResolvedValue({ messageId: 'mid-1' }),
+  editMessageText: vi.fn(),
+  deleteMessage: vi.fn(),
 }) satisfies MessagingPort;
 
 describe('rate limit notifier', () => {
@@ -40,6 +42,8 @@ describe('rate limit notifier', () => {
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),
       sendText: vi.fn().mockRejectedValue(new Error('network error')),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
     };
     const logger = { info: vi.fn(), error: vi.fn() };
 
