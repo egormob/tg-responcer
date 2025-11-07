@@ -204,4 +204,69 @@ describe('createTelegramMessagingAdapter', () => {
       }),
     );
   });
+
+  it('edits message text with sanitized payload', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, result: true }), { status: 200 }),
+    );
+
+    const adapter = createAdapter();
+
+    await expect(
+      adapter.editMessageText({
+        chatId: 'chat-1',
+        messageId: '42',
+        threadId: '900',
+        text: 'updated\u0007text',
+      }),
+    ).resolves.toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe(`${baseUrl}/bottest-token/editMessageText`);
+    expect(JSON.parse(((init as RequestInit)?.body ?? '{}') as string)).toEqual({
+      chat_id: 'chat-1',
+      message_id: '42',
+      message_thread_id: '900',
+      text: 'updatedtext',
+    });
+  });
+
+  it('throws when editMessageText exceeds Telegram limit', async () => {
+    const adapter = createAdapter();
+
+    await expect(
+      adapter.editMessageText({
+        chatId: 'chat-1',
+        messageId: '42',
+        text: 'x'.repeat(4097),
+      }),
+    ).rejects.toThrow(/exceeds maximum length/i);
+  });
+
+  it('deletes message with retries', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, description: 'try again' }), {
+          status: 500,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const adapter = createAdapter();
+
+    await expect(
+      adapter.deleteMessage({
+        chatId: 'chat-1',
+        messageId: '100',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe(`${baseUrl}/bottest-token/deleteMessage`);
+    expect(JSON.parse(((init as RequestInit)?.body ?? '{}') as string)).toEqual({
+      chat_id: 'chat-1',
+      message_id: '100',
+    });
+  });
 });

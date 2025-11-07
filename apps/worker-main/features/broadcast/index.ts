@@ -30,3 +30,7 @@ export {
   createTelegramBroadcastCommandHandler,
   type CreateTelegramBroadcastCommandHandlerOptions,
 } from './telegram-broadcast-command';
+export {
+  createTelegramBroadcastJobCommandHandler,
+  type CreateTelegramBroadcastJobCommandHandlerOptions,
+} from './telegram-broadcast-job-command';

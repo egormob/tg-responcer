@@ -23,6 +23,7 @@ import {
   createSelfTestRoute,
   createTelegramExportCommandHandler,
   createTelegramBroadcastCommandHandler,
+  createTelegramBroadcastJobCommandHandler,
   createTelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
   type BroadcastJob,
@@ -435,6 +436,15 @@ const createTransformPayload = (
         messaging: composition.ports.messaging,
       })
     : undefined;
+  const broadcastJobCommandHandler = adminAccess
+    ? createTelegramBroadcastJobCommandHandler({
+        adminAccess,
+        queue: broadcastQueue,
+        messaging: composition.ports.messaging,
+        logger: console,
+        now: () => new Date(),
+      })
+    : undefined;
 
   type AdminCommandHandler = (
     context: TelegramAdminCommandContext,
@@ -472,6 +482,10 @@ const createTransformPayload = (
 
   if (broadcastCommandHandler) {
     adminCommandHandlers.push(broadcastCommandHandler);
+  }
+
+  if (broadcastJobCommandHandler) {
+    adminCommandHandlers.push(broadcastJobCommandHandler);
   }
 
   const handleAdminCommand = adminCommandHandlers.length > 0

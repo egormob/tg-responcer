@@ -73,6 +73,12 @@ export const createNoopMessagingPort = (
       });
       return { messageId: undefined };
     },
+    async editMessageText(input) {
+      warn('messaging.editMessageText', 'pretend to edit message', input);
+    },
+    async deleteMessage(input) {
+      warn('messaging.deleteMessage', 'pretend to delete message', input);
+    },
   };
 };
 

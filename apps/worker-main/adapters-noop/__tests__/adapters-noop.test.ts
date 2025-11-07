@@ -30,6 +30,12 @@ describe('adapters-noop', () => {
     await expect(
       messaging.sendText({ chatId: 'chat-1', text: 'ignored' }),
     ).resolves.toEqual({ messageId: undefined });
+    await expect(
+      messaging.editMessageText({ chatId: 'chat-1', messageId: 'mid-1', text: 'ignored' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      messaging.deleteMessage({ chatId: 'chat-1', messageId: 'mid-1' }),
+    ).resolves.toBeUndefined();
 
     expect(warnSpy).toHaveBeenCalled();
     const typingCall = warnSpy.mock.calls.find(([message]) =>
@@ -41,6 +47,16 @@ describe('adapters-noop', () => {
       typeof message === 'string' && message.includes('messaging.sendText'),
     );
     expect(textCall).toBeDefined();
+
+    const editCall = warnSpy.mock.calls.find(([message]) =>
+      typeof message === 'string' && message.includes('messaging.editMessageText'),
+    );
+    expect(editCall).toBeDefined();
+
+    const deleteCall = warnSpy.mock.calls.find(([message]) =>
+      typeof message === 'string' && message.includes('messaging.deleteMessage'),
+    );
+    expect(deleteCall).toBeDefined();
   });
 
   it('ai adapter returns fallback response and logs warning', async () => {

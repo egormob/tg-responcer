@@ -11,6 +11,12 @@ const createMessagingPort = (): MessagingPort => ({
   sendText: vi
     .fn<Parameters<MessagingPort['sendText']>, ReturnType<MessagingPort['sendText']>>()
     .mockResolvedValue({ messageId: '42' }),
+  editMessageText: vi
+    .fn<Parameters<MessagingPort['editMessageText']>, ReturnType<MessagingPort['editMessageText']>>()
+    .mockResolvedValue(undefined),
+  deleteMessage: vi
+    .fn<Parameters<MessagingPort['deleteMessage']>, ReturnType<MessagingPort['deleteMessage']>>()
+    .mockResolvedValue(undefined),
 });
 
 const createAiPort = (): AiPort => ({

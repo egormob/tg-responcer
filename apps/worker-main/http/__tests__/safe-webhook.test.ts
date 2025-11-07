@@ -7,6 +7,8 @@ describe('safeWebhookHandler', () => {
   const createMessagingMock = () => ({
     sendTyping: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({}),
+    editMessageText: vi.fn().mockResolvedValue(undefined),
+    deleteMessage: vi.fn().mockResolvedValue(undefined),
   }) as unknown as MessagingPort;
 
   it('returns success response when run completes without errors', async () => {
