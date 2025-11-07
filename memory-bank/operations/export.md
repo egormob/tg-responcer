@@ -1,14 +1,17 @@
 # Операционная памятка: выгрузка диалогов с UTM-метками
 
 ## Назначение
-Инструкция описывает, как выгружать CSV из `/admin/export` так, чтобы каждая запись содержала источник трафика (payload deeplink). Документ синхронизирован с шагом М7.Ш8 дорожной карты.
+Инструкция описывает, как выгружать CSV из `/admin/export` с построчной выгрузкой сообщений и базовым набором полей. Документ синхронизирован с шагом М7.Ш8 дорожной карты.
 
 ## Формат CSV
 Экспорт по умолчанию возвращает заголовки:
-`dialog_id,user_id,started_at,finished_at,message_count,utm_label,utm_source,utm_medium,utm_campaign,utm_content`
+`message_id,user_id,username,first_name,last_name,language_code,user_created_at,user_updated_at,user_metadata,chat_id,thread_id,role,text,timestamp,message_metadata`
 
-- `utm_label` — исходный payload, полученный из deeplink (`start`/`startapp`).
-- `utm_source`, `utm_medium`, `utm_campaign`, `utm_content` — разбивка `utm_label` по сегментам (`src.medium.campaign[.content]`). Пустые значения оставляем пустыми.
+- `message_id` — идентификатор сообщения в таблице `messages`.
+- `user_*` — данные телеграм-пользователя на момент выгрузки.
+- `chat_id`/`thread_id` — контекст, из которого пришло сообщение.
+- `role` и `text` — содержимое сообщения (бот/пользователь).
+- `message_metadata` — дополнительная информация в JSON (`content_type`, `payload`, `parts` и т. п.).
 
 ## Подготовка
 1. Убедись, что токен администратора активен (`ADMIN_EXPORT_TOKEN`) и ты в whitelist (`ADMIN_TG_IDS`).
@@ -17,10 +20,9 @@
 
 ## Пошаговая выгрузка
 1. Выполни запрос: `curl -H "X-Admin-Token: $ADMIN_EXPORT_TOKEN" "https://<worker>/admin/export?from=YYYY-MM-DD&to=YYYY-MM-DD" -o export.csv`.
-2. Открой CSV и проверь наличие колонок `utm_*`.
-3. Убедись, что `utm_label` заполнен для новых пользователей, а производные поля соответствуют разбиению:
-   - `ads.meta.black-friday+retargeting` → `utm_source=ads`, `utm_medium=meta`, `utm_campaign=black-friday`, `utm_content=retargeting`.
-4. Если `utm_label` пустой, проверь процесс регистрации пользователя и наличие payload в логах.
+2. Открой CSV и найди нужные сообщения по фильтрам `timestamp`/`chat_id`.
+3. Payload из deeplink хранится в `message_metadata.payload` (JSON). Проверь, что новые пользователи несут ожидаемое значение `utm_label` и что оно парсится на стороне BI.
+4. Если `message_metadata.payload` пустой, проверь процесс регистрации пользователя и наличие payload в логах.
 5. Зафиксируй результат проверки в журнале прогресса с ссылкой на файл экспорта.
 
 ## Контрольные проверки
