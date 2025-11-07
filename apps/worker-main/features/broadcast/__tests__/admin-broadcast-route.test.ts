@@ -13,6 +13,7 @@ const createRequest = (body: unknown, init: RequestInit = {}) =>
     headers: {
       'content-type': 'application/json',
       'x-admin-token': 'secret',
+      'x-admin-actor': 'ops',
       ...init.headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -37,7 +38,7 @@ describe('createAdminBroadcastRoute', () => {
     const response = await route(
       new Request('https://example.com/admin/broadcast', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-admin-actor': 'ops' },
         body: JSON.stringify({ text: 'hello' }),
       }),
     );
@@ -101,7 +102,7 @@ describe('createAdminBroadcastRoute', () => {
     });
     expect(queue.enqueue).toHaveBeenCalledWith({
       payload: { text: 'hello', filters: { chatIds: ['1'] }, metadata: undefined },
-      requestedBy: undefined,
+      requestedBy: 'ops',
     });
   });
 
@@ -146,5 +147,62 @@ describe('createAdminBroadcastRoute', () => {
     const response = await route(createRequest({ text: 'hello' }));
 
     expect(response.status).toBe(503);
+  });
+
+  it('requires admin actor header', async () => {
+    const queue = createQueue();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
+
+    const response = await route(
+      new Request('https://example.com/admin/broadcast', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-admin-token': 'secret',
+        },
+        body: JSON.stringify({ text: 'hello' }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects admin actor not present in whitelist', async () => {
+    const queue = createQueue();
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, adminAccess });
+
+    const response = await route(createRequest({ text: 'hello' }));
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('ops');
+    expect(response.status).toBe(403);
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('accepts admin actor present in whitelist', async () => {
+    const queue = createQueue();
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
+    const enqueuedJob = {
+      id: 'job-1',
+      status: 'pending',
+      createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+      attempts: 0,
+      payload: { text: 'hello' },
+    } satisfies BroadcastJob;
+
+    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
+
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, adminAccess });
+
+    const response = await route(createRequest({ text: 'hello' }));
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('ops');
+    expect(response.status).toBe(202);
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      payload: { text: 'hello', filters: undefined, metadata: undefined },
+      requestedBy: 'ops',
+    });
   });
 });

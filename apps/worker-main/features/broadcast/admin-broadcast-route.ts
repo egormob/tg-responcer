@@ -1,4 +1,5 @@
 import { json } from '../../shared/json-response';
+import type { AdminAccess } from '../admin-access';
 import type {
   BroadcastAudienceFilter,
   BroadcastMessagePayload,
@@ -10,6 +11,7 @@ export interface CreateAdminBroadcastRouteOptions {
   readonly queue: BroadcastQueue;
   readonly maxTextLength?: number;
   readonly now?: () => Date;
+  readonly adminAccess?: AdminAccess;
 }
 
 export interface AdminBroadcastRequest {
@@ -156,6 +158,15 @@ export const createAdminBroadcastRoute = (options: CreateAdminBroadcastRouteOpti
       return toErrorResponse('Invalid admin token', 403);
     }
 
+    const actor = extractRequestedBy(request);
+    if (!actor) {
+      return toErrorResponse('Missing X-Admin-Actor header', 401);
+    }
+
+    if (options.adminAccess && !(await options.adminAccess.isAdmin(actor))) {
+      return toErrorResponse('Forbidden admin actor', 403);
+    }
+
     let payload: AdminBroadcastRequest;
     try {
       const body = await ensureJson(request);
@@ -185,7 +196,7 @@ export const createAdminBroadcastRoute = (options: CreateAdminBroadcastRouteOpti
     try {
       job = options.queue.enqueue({
         payload: messagePayload,
-        requestedBy: extractRequestedBy(request),
+        requestedBy: actor,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to enqueue broadcast';
