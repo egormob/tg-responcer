@@ -12,6 +12,11 @@ export interface AdminAccess {
   isAdmin(userId: string | number | bigint): Promise<boolean>;
 }
 
+export interface AdminWhitelistSnapshot {
+  ids: string[];
+  raw: string | null;
+}
+
 const DEFAULT_CACHE_TTL_MS = 30_000;
 const ADMIN_ACCESS_KEY = 'whitelist';
 
@@ -87,13 +92,13 @@ export const createAdminAccess = (options: CreateAdminAccessOptions): AdminAcces
     }
 
     try {
-      const raw = await options.kv.get(ADMIN_ACCESS_KEY, 'text');
-      const ids = new Set(parseWhitelist(raw));
+      const { ids } = await readAdminWhitelist(options.kv);
+      const normalized = new Set(ids);
       cachedWhitelist = {
-        ids,
+        ids: normalized,
         expiresAt: toCacheExpiry(ttl, currentTime),
       };
-      return ids;
+      return normalized;
     } catch (error) {
       console.warn('[admin-access] failed to read whitelist from KV', {
         error: error instanceof Error ? { name: error.name, message: error.message } : undefined,
@@ -117,4 +122,24 @@ export const createAdminAccess = (options: CreateAdminAccessOptions): AdminAcces
       return whitelist.has(normalizedUserId);
     },
   };
+};
+
+export const readAdminWhitelist = async (
+  kv: AdminAccessKvNamespace,
+): Promise<AdminWhitelistSnapshot> => {
+  try {
+    const raw = await kv.get(ADMIN_ACCESS_KEY, 'text');
+    return {
+      ids: parseWhitelist(raw),
+      raw,
+    };
+  } catch (error) {
+    console.warn('[admin-access] failed to read whitelist from KV', {
+      error: error instanceof Error ? { name: error.name, message: error.message } : undefined,
+    });
+    return {
+      ids: [],
+      raw: null,
+    };
+  }
 };

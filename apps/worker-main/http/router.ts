@@ -149,6 +149,7 @@ export interface RouterOptions {
     export?: (request: Request) => Promise<Response>;
     selfTest?: (request: Request) => Promise<Response>;
     envz?: (request: Request) => Promise<Response>;
+    accessDiagnostics?: (request: Request) => Promise<Response>;
     broadcastToken?: string;
     broadcast?: (request: Request) => Promise<Response>;
   };
@@ -392,6 +393,19 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         return options.admin.selfTest(auth.request);
+      }
+
+      if (pathname === '/admin/access') {
+        if (!options.admin?.accessDiagnostics) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.accessDiagnostics(auth.request);
       }
 
       if (pathname === '/admin/envz') {

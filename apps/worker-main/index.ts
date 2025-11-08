@@ -12,6 +12,7 @@ import {
   type AdminAccessKvNamespace,
   type CreateAdminAccessOptions,
   createAdminAccess,
+  createAccessDiagnosticsRoute,
   createAdminExportRoute,
   createCsvExportHandler,
   createEnvzRoute,
@@ -387,6 +388,11 @@ const createAdminRoutes = (
       messaging: composition.ports.messaging,
     }),
     envz: createEnvzRoute({ env }),
+    accessDiagnostics: createAccessDiagnosticsRoute({
+      env,
+      composition,
+      adminAccess,
+    }),
   };
 
   const exportToken = getTrimmedString(env.ADMIN_EXPORT_TOKEN);
