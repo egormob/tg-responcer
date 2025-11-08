@@ -15,6 +15,7 @@
 
 ## Подготовка
 1. Убедись, что токен администратора активен (`ADMIN_EXPORT_TOKEN`) и ты в whitelist (`ADMIN_TG_IDS`).
+   - Проверка whitelisting: `curl -H "X-Admin-Token: $ADMIN_TOKEN" https://<worker>/admin/access` — убедись, что твой `userId` попадает в `whitelist`, а `health` показывает `status: "ok"`.
 2. Проверь, что в KV хранится payload для новых пользователей (лог `ADMIN_EXPORT_LOG`).
 3. Для новых UTM-ссылок следуй памятке [`memory-bank/references/telegram-deeplink-utm.md`](../references/telegram-deeplink-utm.md).
 

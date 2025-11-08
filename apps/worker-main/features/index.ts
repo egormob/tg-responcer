@@ -1,8 +1,12 @@
 export {
   createAdminAccess,
+  createAccessDiagnosticsRoute,
   type AdminAccess,
   type AdminAccessKvNamespace,
   type CreateAdminAccessOptions,
+  type CreateAccessDiagnosticsRouteOptions,
+  type AdminWhitelistSnapshot,
+  readAdminWhitelist,
 } from './admin-access';
 export {
   createRateLimitNotifier,
