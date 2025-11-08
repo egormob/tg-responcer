@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTelegramBroadcastCommandHandler } from '../telegram-broadcast-command';
+import type { BroadcastJob, BroadcastMessagePayload } from '../broadcast-queue';
 import type { TelegramAdminCommandContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 
@@ -42,21 +43,46 @@ describe('createTelegramBroadcastCommandHandler', () => {
   const createHandler = ({
     isAdmin = true,
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
+    enqueueMock,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
+    enqueueMock?: ReturnType<typeof vi.fn>;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
       sendText: sendTextMock as unknown as MessagingPort['sendText'],
     };
 
+    const enqueue = enqueueMock
+      ?? vi.fn().mockImplementation(
+        ({
+          payload,
+          requestedBy,
+        }: {
+          payload: BroadcastMessagePayload;
+          requestedBy?: string;
+        }) =>
+          ({
+            id: 'job-1',
+            createdAt: new Date('2024-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+            requestedBy,
+            status: 'pending',
+            attempts: 0,
+            payload,
+          }) satisfies BroadcastJob,
+      );
+
+    const queue = { enqueue };
+
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
       messaging,
+      queue,
     });
 
-    return { handler, adminAccess, sendTextMock };
+    return { handler, adminAccess, sendTextMock, queue };
   };
 
   it('sends help message for /broadcast help', async () => {
@@ -126,24 +152,37 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
-  it('parses filters and text for send intent', async () => {
-    const { handler } = createHandler();
+  it('enqueues job and notifies admin for send intent', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, queue } = createHandler({ sendTextMock });
 
     const response = await handler(
       createContext({ argument: 'send --chat=123,456 --lang=en hello world' }),
     );
 
-    expect(response?.status).toBe(200);
-    await expect(response?.json()).resolves.toEqual({
-      status: 'pending',
-      message:
-        'Используйте HTTP POST /admin/broadcast, чтобы завершить постановку в очередь. Фильтры и текст проверены.',
+    expect(queue.enqueue).toHaveBeenCalledWith({
       payload: {
         text: 'hello world',
-        filters: {
-          chatIds: ['123', '456'],
-          languageCodes: ['en'],
-        },
+        filters: { chatIds: ['123', '456'], languageCodes: ['en'] },
+      },
+      requestedBy: 'admin-1',
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: ['📣 Рассылка поставлена в очередь.', 'ID задачи: job-1', 'Проверить статус: /broadcast status'].join('\n'),
+    });
+
+    expect(response?.status).toBe(202);
+    await expect(response?.json()).resolves.toEqual({
+      status: 'queued',
+      jobId: 'job-1',
+      enqueuedAt: '2024-01-01T00:00:00.000Z',
+      requestedBy: 'admin-1',
+      filters: {
+        chatIds: ['123', '456'],
+        languageCodes: ['en'],
       },
     });
   });

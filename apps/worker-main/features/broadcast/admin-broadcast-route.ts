@@ -5,6 +5,10 @@ import type {
   BroadcastMessagePayload,
   BroadcastQueue,
 } from './broadcast-queue';
+import {
+  DEFAULT_MAX_TEXT_LENGTH,
+  buildBroadcastPayload,
+} from './broadcast-payload';
 
 export interface CreateAdminBroadcastRouteOptions {
   readonly adminToken: string;
@@ -19,8 +23,6 @@ export interface AdminBroadcastRequest {
   readonly filters?: BroadcastAudienceFilter;
   readonly metadata?: Record<string, unknown>;
 }
-
-const DEFAULT_MAX_TEXT_LENGTH = 4096;
 
 const toErrorResponse = (message: string, status: number) =>
   json(
@@ -114,22 +116,6 @@ const parseMetadata = (value: unknown): Record<string, unknown> | undefined => {
   return { ...value };
 };
 
-const buildPayload = (
-  body: AdminBroadcastRequest,
-  maxTextLength: number,
-): BroadcastMessagePayload => {
-  const text = parseString(body.text, 'text');
-
-  if (text.length > maxTextLength) {
-    throw new Error(`text must not exceed ${maxTextLength} characters`);
-  }
-
-  const filters = parseFilters(body.filters);
-  const metadata = parseMetadata(body.metadata);
-
-  return { text, filters, metadata } satisfies BroadcastMessagePayload;
-};
-
 const extractRequestedBy = (request: Request): string | undefined => {
   const header = request.headers.get('x-admin-actor');
   if (!header) {
@@ -186,7 +172,11 @@ export const createAdminBroadcastRoute = (options: CreateAdminBroadcastRouteOpti
 
     let messagePayload: BroadcastMessagePayload;
     try {
-      messagePayload = buildPayload(payload, maxTextLength);
+      const text = parseString(payload.text, 'text');
+      const filters = parseFilters(payload.filters);
+      const metadata = parseMetadata(payload.metadata);
+
+      messagePayload = buildBroadcastPayload({ text, filters, metadata }, { maxTextLength });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid payload';
       return toErrorResponse(message, 400);

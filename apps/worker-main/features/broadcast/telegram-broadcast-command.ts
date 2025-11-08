@@ -2,6 +2,15 @@ import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
+import type {
+  BroadcastJob,
+  BroadcastMessagePayload,
+  BroadcastQueue,
+} from './broadcast-queue';
+import {
+  DEFAULT_MAX_TEXT_LENGTH,
+  buildBroadcastPayload,
+} from './broadcast-payload';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -12,8 +21,28 @@ interface Logger {
 export interface CreateTelegramBroadcastCommandHandlerOptions {
   adminAccess: AdminAccess;
   messaging: Pick<MessagingPort, 'sendText'>;
+  queue: Pick<BroadcastQueue, 'enqueue'>;
+  enqueueBroadcast?: EnqueueBroadcastJob;
+  resolveRequestedBy?: (context: TelegramAdminCommandContext) => string | undefined;
+  maxTextLength?: number;
   logger?: Logger;
 }
+
+interface EnqueueBroadcastJobInput {
+  payload: BroadcastMessagePayload;
+  requestedBy: string;
+}
+
+interface EnqueueBroadcastJobResult {
+  jobId: string;
+  enqueuedAt: Date;
+  payload: BroadcastMessagePayload;
+  requestedBy?: string;
+}
+
+type EnqueueBroadcastJob = (
+  input: EnqueueBroadcastJobInput,
+) => Promise<EnqueueBroadcastJobResult>;
 
 interface BroadcastFilters {
   chatIds?: string[];
@@ -144,6 +173,13 @@ const createLogger = (logger?: Logger) => ({
 const hasAnyFilter = (filters: BroadcastFilters | undefined) =>
   Boolean(filters?.chatIds?.length || filters?.userIds?.length || filters?.languageCodes?.length);
 
+const toEnqueueResult = (job: BroadcastJob): EnqueueBroadcastJobResult => ({
+  jobId: job.id,
+  enqueuedAt: job.createdAt,
+  payload: job.payload,
+  requestedBy: job.requestedBy,
+});
+
 export const createTelegramBroadcastCommandHandler = (
   options: CreateTelegramBroadcastCommandHandlerOptions,
 ) => {
@@ -260,18 +296,83 @@ export const createTelegramBroadcastCommandHandler = (
           { status: 400 },
         );
       }
+      const maxTextLength = options.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH;
 
-      return json(
-        {
-          status: 'pending',
-          message:
-            'Используйте HTTP POST /admin/broadcast, чтобы завершить постановку в очередь. Фильтры и текст проверены.',
-          payload: {
+      let payload: BroadcastMessagePayload;
+      try {
+        payload = buildBroadcastPayload(
+          {
             text: parsed.text,
             filters: parsed.filters,
           },
+          { maxTextLength },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid broadcast payload';
+        return json({ error: message }, { status: 400 });
+      }
+
+      const requestedBy = options.resolveRequestedBy?.(context) ?? context.from.userId;
+      if (!requestedBy) {
+        return json({ error: 'Failed to determine broadcast requester' }, { status: 400 });
+      }
+
+      const enqueue = options.enqueueBroadcast
+        ?? ((input: EnqueueBroadcastJobInput) =>
+          Promise.resolve(toEnqueueResult(options.queue.enqueue(input))));
+
+      let job: EnqueueBroadcastJobResult;
+      try {
+        job = await enqueue({ payload, requestedBy });
+      } catch (error) {
+        logger.error('failed to enqueue broadcast job from telegram command', {
+          userId: context.from.userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+        });
+
+        return json({ error: 'Failed to enqueue broadcast job' }, { status: 503 });
+      }
+
+      const confirmationMessage = [
+        '📣 Рассылка поставлена в очередь.',
+        `ID задачи: ${job.jobId}`,
+        'Проверить статус: /broadcast status',
+      ].join('\n');
+
+      try {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: confirmationMessage,
+        });
+
+        logger.info('broadcast job enqueued via telegram command', {
+          userId: context.from.userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          jobId: job.jobId,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast confirmation message', {
+          userId: context.from.userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          jobId: job.jobId,
+          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+        });
+      }
+
+      return json(
+        {
+          status: 'queued',
+          jobId: job.jobId,
+          enqueuedAt: job.enqueuedAt.toISOString(),
+          requestedBy: job.requestedBy ?? requestedBy,
+          filters: job.payload.filters ?? null,
         },
-        { status: 200 },
+        { status: 202 },
       );
     }
 
