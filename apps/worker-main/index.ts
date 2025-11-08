@@ -12,24 +12,19 @@ import {
   type AdminAccessKvNamespace,
   type CreateAdminAccessOptions,
   createAdminAccess,
-  createAdminBroadcastRoute,
   createAdminExportRoute,
-  createBroadcastScheduler,
   createCsvExportHandler,
   createEnvzRoute,
-  createInMemoryBroadcastProgressStore,
-  createInMemoryBroadcastQueue,
+  createImmediateBroadcastSender,
   createRateLimitNotifier,
   createSelfTestRoute,
   createTelegramExportCommandHandler,
   createTelegramBroadcastCommandHandler,
-  createTelegramBroadcastJobCommandHandler,
   createTelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
-  type BroadcastJob,
-  type BroadcastScheduler,
-  type BroadcastSchedulerLogger,
+  type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
+  type SendBroadcast,
 } from './features';
 import {
   createRouter,
@@ -54,12 +49,12 @@ interface WorkerBindings {
   ADMIN_EXPORT_TOKEN?: string;
   ADMIN_EXPORT_FILENAME_PREFIX?: string;
   ADMIN_TOKEN?: string;
-  ADMIN_BROADCAST_TOKEN?: string;
   ADMIN_TG_IDS?: AdminAccessKvNamespace & AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_KV?: AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_LOG?: KVNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
+  BROADCAST_RECIPIENTS?: string;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
   RATE_LIMIT_WINDOW_MS?: string | number;
   RATE_LIMIT_NOTIFIER_WINDOW_MS?: string | number;
@@ -77,39 +72,6 @@ interface WorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
   passThroughOnException?(): void;
 }
-
-const broadcastQueue = createInMemoryBroadcastQueue();
-const broadcastProgressStore = createInMemoryBroadcastProgressStore();
-
-const createBroadcastSchedulerLogger = (): BroadcastSchedulerLogger => {
-  const log = (
-    level: 'debug' | 'info' | 'warn' | 'error',
-    message: string,
-    details?: Record<string, unknown>,
-  ) => {
-    const consoleMethod = (console as Record<string, ((...args: unknown[]) => void) | undefined>)[level] ?? console.log;
-    if (details) {
-      consoleMethod(`[broadcast] ${message}`, details);
-    } else {
-      consoleMethod(`[broadcast] ${message}`);
-    }
-  };
-
-  return {
-    debug(message, details) {
-      log('debug', message, details);
-    },
-    info(message, details) {
-      log('info', message, details);
-    },
-    warn(message, details) {
-      log('warn', message, details);
-    },
-    error(message, details) {
-      log('error', message, details);
-    },
-  } satisfies BroadcastSchedulerLogger;
-};
 
 const DEFAULT_RATE_LIMIT = 50;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -208,6 +170,77 @@ const isEnabledFlag = (value: unknown): boolean => {
     default:
       return false;
   }
+};
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const parseBroadcastRecipients = (
+  value: unknown,
+): CreateImmediateBroadcastSenderOptions['recipients'] => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  let source: unknown = value;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    try {
+      source = JSON.parse(trimmed);
+    } catch (error) {
+      const details = error instanceof Error ? { name: error.name, message: error.message } : { error: String(error) };
+      console.warn('[broadcast] failed to parse BROADCAST_RECIPIENTS value', details);
+      return [];
+    }
+  }
+
+  if (!Array.isArray(source)) {
+    console.warn('[broadcast] BROADCAST_RECIPIENTS must be an array of strings or objects');
+    return [];
+  }
+
+  const recipients: CreateImmediateBroadcastSenderOptions['recipients'] = [];
+  const seen = new Set<string>();
+
+  for (const item of source) {
+    if (typeof item === 'string') {
+      const chatId = item.trim();
+      if (!chatId) {
+        continue;
+      }
+
+      const key = `${chatId}:`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      recipients.push({ chatId });
+      continue;
+    }
+
+    if (isObjectRecord(item)) {
+      const chatIdValue = typeof item.chatId === 'string' ? item.chatId.trim() : undefined;
+      if (!chatIdValue) {
+        continue;
+      }
+
+      const threadIdValue =
+        typeof item.threadId === 'string' ? item.threadId.trim() : undefined;
+      const key = `${chatIdValue}:${threadIdValue ?? ''}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      recipients.push({ chatId: chatIdValue, threadId: threadIdValue });
+    }
+  }
+
+  return recipients;
 };
 
 const normalizePromptId = (value: unknown): string | undefined => {
@@ -370,35 +403,7 @@ const createAdminRoutes = (
     routes.exportToken = exportToken;
   }
 
-  const broadcastToken = getTrimmedString(env.ADMIN_BROADCAST_TOKEN) ?? adminToken;
-  if (isEnabledFlag(env.BROADCAST_ENABLED) && broadcastToken) {
-    routes.broadcast = createAdminBroadcastRoute({
-      adminToken: broadcastToken,
-      queue: broadcastQueue,
-      adminAccess,
-    });
-    routes.broadcastToken = broadcastToken;
-  }
-
   return routes;
-};
-
-const resolveBroadcastRecipientsFromJob = (job: BroadcastJob) => {
-  const filters = job.payload.filters;
-  const chatIds = filters?.chatIds ?? [];
-
-  if (chatIds.length === 0) {
-    throw new Error('Broadcast job requires filters.chatIds until audience resolver is implemented');
-  }
-
-  if ((filters?.userIds?.length ?? 0) > 0 || (filters?.languageCodes?.length ?? 0) > 0) {
-    console.warn('[broadcast] ignoring unsupported audience selectors', {
-      userIds: filters?.userIds?.length ?? 0,
-      languageCodes: filters?.languageCodes?.length ?? 0,
-    });
-  }
-
-  return chatIds.map((chatId) => ({ chatId }));
 };
 
 const createTransformPayload = (
@@ -430,20 +435,26 @@ const createTransformPayload = (
       })
     : undefined;
 
-  const broadcastCommandHandler = adminAccess
-    ? createTelegramBroadcastCommandHandler({
-        adminAccess,
+  const broadcastEnabled = isEnabledFlag(env.BROADCAST_ENABLED);
+  const broadcastRecipients = broadcastEnabled ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS) : [];
+
+  if (broadcastEnabled && broadcastRecipients.length === 0) {
+    console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');
+  }
+
+  const broadcastSender: SendBroadcast | undefined = broadcastEnabled
+    ? createImmediateBroadcastSender({
         messaging: composition.ports.messaging,
-        queue: broadcastQueue,
-        resolveRequestedBy: (context) => context.from.userId,
+        recipients: broadcastRecipients,
         logger: console,
       })
     : undefined;
-  const broadcastJobCommandHandler = adminAccess
-    ? createTelegramBroadcastJobCommandHandler({
+
+  const broadcastCommandHandler = adminAccess && broadcastSender
+    ? createTelegramBroadcastCommandHandler({
         adminAccess,
-        queue: broadcastQueue,
         messaging: composition.ports.messaging,
+        sendBroadcast: broadcastSender,
         logger: console,
         now: () => new Date(),
       })
@@ -484,11 +495,7 @@ const createTransformPayload = (
   }
 
   if (broadcastCommandHandler) {
-    adminCommandHandlers.push(broadcastCommandHandler);
-  }
-
-  if (broadcastJobCommandHandler) {
-    adminCommandHandlers.push(broadcastJobCommandHandler);
+    adminCommandHandlers.push(broadcastCommandHandler.handleCommand);
   }
 
   const handleAdminCommand = adminCommandHandlers.length > 0
@@ -504,21 +511,24 @@ const createTransformPayload = (
       }
     : undefined;
 
+  const webhookFeatures: Parameters<typeof createTelegramWebhookHandler>[0]['features'] | undefined =
+    handleAdminCommand || broadcastCommandHandler
+      ? {
+          ...(handleAdminCommand ? { handleAdminCommand } : {}),
+          ...(broadcastCommandHandler ? { handleMessage: broadcastCommandHandler.handleMessage } : {}),
+        }
+      : undefined;
+
   const telegramWebhookHandler = createTelegramWebhookHandler({
     storage: composition.ports.storage,
     botUsername: env.TELEGRAM_BOT_USERNAME,
-    features: handleAdminCommand ? { handleAdminCommand } : undefined,
+    features: webhookFeatures,
   });
 
   return (payload: unknown) => telegramWebhookHandler(payload);
 };
 
-interface RequestHandlerResult {
-  router: ReturnType<typeof createRouter>;
-  scheduler?: BroadcastScheduler;
-}
-
-const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
+const createRequestHandler = (env: WorkerEnv) => {
   const runtime = validateRuntimeConfig(env);
   const adapters = createPortOverrides(env, runtime);
 
@@ -535,7 +545,7 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
   const adminAccess = createAdminAccessIfConfigured(env);
   const adminRoutes = createAdminRoutes(env, composition, adminAccess);
 
-  const router = createRouter({
+  return createRouter({
     dialogEngine: composition.dialogEngine,
     messaging: composition.ports.messaging,
     webhookSecret: composition.webhookSecret,
@@ -544,38 +554,12 @@ const createRequestHandler = (env: WorkerEnv): RequestHandlerResult => {
     transformPayload: createTransformPayload(env, composition, adminAccess),
     admin: adminRoutes,
   });
-
-  const scheduler = adminRoutes?.broadcast
-    ? createBroadcastScheduler({
-        queue: broadcastQueue,
-        messaging: composition.ports.messaging,
-        progressStore: broadcastProgressStore,
-        resolveRecipients: resolveBroadcastRecipientsFromJob,
-        logger: createBroadcastSchedulerLogger(),
-      })
-    : undefined;
-
-  return { router, scheduler };
 };
 
 export default {
-  async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext): Promise<Response> {
-    const { router, scheduler } = createRequestHandler(env);
-    const response = await router.handle(request);
-
-    if (scheduler && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(
-        scheduler.processPendingJobs().catch((error) => {
-          const details =
-            error instanceof Error
-              ? { message: error.message, stack: error.stack }
-              : { error: String(error) };
-          console.error('[broadcast] scheduler task failed', details);
-        }),
-      );
-    }
-
-    return response;
+  async fetch(request: Request, env: WorkerEnv, _ctx: WorkerExecutionContext): Promise<Response> {
+    const router = createRequestHandler(env);
+    return router.handle(request);
   },
 };
 

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTelegramBroadcastCommandHandler } from '../telegram-broadcast-command';
-import type { BroadcastJob, BroadcastMessagePayload } from '../broadcast-queue';
 import type { TelegramAdminCommandContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
+import type { IncomingMessage } from '../../../core';
+import type { SendBroadcast } from '../minimal-broadcast-service';
 
 const createContext = ({
   command = '/broadcast',
@@ -21,7 +22,7 @@ const createContext = ({
     rawCommand: command,
     argument: contextArgument,
     text,
-    chat: { id: 'chat-1', threadId: 'thread-1', type: 'supergroup' },
+    chat: { id: 'chat-1', threadId: 'thread-1', type: 'private' },
     from: { userId: 'admin-1' },
     messageId: 'message-1',
     update: { update_id: 1 },
@@ -39,163 +40,157 @@ const createContext = ({
   };
 };
 
+const createIncomingMessage = (text: string): IncomingMessage => ({
+  user: { userId: 'admin-1' },
+  chat: { id: 'chat-1', threadId: 'thread-1' },
+  text,
+  messageId: 'incoming-1',
+  receivedAt: new Date('2024-01-01T00:01:00Z'),
+});
+
 describe('createTelegramBroadcastCommandHandler', () => {
   const createHandler = ({
     isAdmin = true,
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
-    enqueueMock,
+    sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] }),
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
-    enqueueMock?: ReturnType<typeof vi.fn>;
+    sendBroadcastMock?: SendBroadcast;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
       sendText: sendTextMock as unknown as MessagingPort['sendText'],
     };
 
-    const enqueue = enqueueMock
-      ?? vi.fn().mockImplementation(
-        ({
-          payload,
-          requestedBy,
-        }: {
-          payload: BroadcastMessagePayload;
-          requestedBy?: string;
-        }) =>
-          ({
-            id: 'job-1',
-            createdAt: new Date('2024-01-01T00:00:00.000Z'),
-            updatedAt: new Date('2024-01-01T00:00:00.000Z'),
-            requestedBy,
-            status: 'pending',
-            attempts: 0,
-            payload,
-          }) satisfies BroadcastJob,
-      );
-
-    const queue = { enqueue };
-
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
       messaging,
-      queue,
+      sendBroadcast: sendBroadcastMock,
+      now: () => new Date('2024-01-01T00:00:00Z'),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
 
-    return { handler, adminAccess, sendTextMock, queue };
+    return { handler, adminAccess, sendTextMock, sendBroadcastMock };
   };
 
-  it('sends help message for /broadcast help', async () => {
+  it('prompts admin for broadcast text after /broadcast command', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, adminAccess } = createHandler({ sendTextMock });
 
-    const response = await handler(createContext({ argument: 'help' }));
+    const response = await handler.handleCommand(createContext());
 
     expect(adminAccess.isAdmin).toHaveBeenCalledWith('admin-1');
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
       text: [
-        'Команды рассылок:',
-        '- /broadcast help — показать эту подсказку.',
-        '- /broadcast preview <текст> — отправить пробное сообщение только вам.',
-        '- /broadcast send [--chat=<id>] [--user=<id>] [--lang=<code>] <текст> — поставить рассылку в очередь. Для сложных сценариев используйте HTTP POST /admin/broadcast.',
+        'Введите текст рассылки (до 4096 символов).',
+        'Следующее сообщение уйдёт всем получателям минимальной модели.',
       ].join('\n'),
     });
     expect(response?.status).toBe(200);
-    await expect(response?.json()).resolves.toEqual({ help: 'sent' });
+    await expect(response?.json()).resolves.toEqual({ status: 'awaiting_text' });
   });
 
-  it('ignores non-admin users', async () => {
+  it('ignores command when user is not an admin', async () => {
     const sendTextMock = vi.fn();
     const { handler, adminAccess } = createHandler({ isAdmin: false, sendTextMock });
 
-    const response = await handler(createContext({ argument: 'help' }));
+    const response = await handler.handleCommand(createContext());
 
     expect(adminAccess.isAdmin).toHaveBeenCalledWith('admin-1');
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(response).toBeUndefined();
   });
 
-  it('returns 400 when preview text is missing', async () => {
-    const { handler } = createHandler();
-
-    const response = await handler(createContext({ argument: 'preview' }));
-
-    expect(response?.status).toBe(400);
-    await expect(response?.json()).resolves.toEqual({ error: 'Broadcast text must not be empty' });
-  });
-
-  it('sends preview message when text is provided', async () => {
-    const sendTextMock = vi.fn().mockResolvedValue({ messageId: 'preview-1' });
-    const { handler } = createHandler({ sendTextMock });
-
-    const response = await handler(createContext({ argument: 'preview hello world' }));
-
-    expect(sendTextMock).toHaveBeenCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: 'hello world',
-    });
-    expect(response?.status).toBe(200);
-    await expect(response?.json()).resolves.toEqual({ preview: 'sent', messageId: 'preview-1' });
-  });
-
-  it('validates filters for send intent', async () => {
-    const { handler } = createHandler();
-
-    const response = await handler(createContext({ argument: 'send hello world' }));
-
-    expect(response?.status).toBe(400);
-    await expect(response?.json()).resolves.toEqual({
-      error: 'Укажите хотя бы один фильтр (--chat, --user или --lang), чтобы ограничить аудиторию.',
-    });
-  });
-
-  it('enqueues job and notifies admin for send intent', async () => {
+  it('sends broadcast when admin provides valid text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const { handler, queue } = createHandler({ sendTextMock });
+    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 3, failed: 0, deliveries: [] });
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
-    const response = await handler(
-      createContext({ argument: 'send --chat=123,456 --lang=en hello world' }),
-    );
+    await handler.handleCommand(createContext());
+    const result = await handler.handleMessage(createIncomingMessage('hello everyone'));
 
-    expect(queue.enqueue).toHaveBeenCalledWith({
-      payload: {
-        text: 'hello world',
-        filters: { chatIds: ['123', '456'], languageCodes: ['en'] },
-      },
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      text: 'hello everyone',
       requestedBy: 'admin-1',
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith({
+    expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: ['📣 Рассылка поставлена в очередь.', 'ID задачи: job-1', 'Проверить статус: /broadcast status'].join('\n'),
-    });
-
-    expect(response?.status).toBe(202);
-    await expect(response?.json()).resolves.toEqual({
-      status: 'queued',
-      jobId: 'job-1',
-      enqueuedAt: '2024-01-01T00:00:00.000Z',
-      requestedBy: 'admin-1',
-      filters: {
-        chatIds: ['123', '456'],
-        languageCodes: ['en'],
-      },
+      text: ['📣 Рассылка отправлена.', 'Получателей: 3.'].join('\n'),
     });
   });
 
-  it('supports /admin broadcast namespace', async () => {
+  it('rejects empty broadcast text and asks to restart', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    await handler.handleCommand(createContext());
+    const result = await handler.handleMessage(createIncomingMessage('   '));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.',
+    });
+  });
+
+  it('rejects text that exceeds telegram limit', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    await handler.handleCommand(createContext());
+    const longText = 'a'.repeat(5000);
+    const result = await handler.handleMessage(createIncomingMessage(longText));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки превышает лимит 4096 символов. Отправьте более короткое сообщение.',
+    });
+  });
+
+  it('notifies admin when broadcast sending fails', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi.fn().mockRejectedValue(new Error('network error'));
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
+
+    await handler.handleCommand(createContext());
+    const result = await handler.handleMessage(createIncomingMessage('hello everyone'));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Не удалось отправить рассылку. Попробуйте ещё раз позже или обратитесь к оператору.',
+    });
+  });
+
+  it('supports /admin broadcast alias', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler } = createHandler({ sendTextMock });
 
-    const response = await handler(
-      createContext({ command: '/admin', argument: 'broadcast help' }),
-    );
+    const response = await handler.handleCommand(createContext({ command: '/admin', argument: 'broadcast' }));
 
     expect(sendTextMock).toHaveBeenCalled();
     expect(response?.status).toBe(200);
+  });
+
+  it('ignores incoming messages when there is no active broadcast session', async () => {
+    const { handler, sendBroadcastMock } = createHandler();
+
+    const result = await handler.handleMessage(createIncomingMessage('ignored text'));
+
+    expect(result).toBeUndefined();
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
   });
 });

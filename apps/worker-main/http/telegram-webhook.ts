@@ -194,6 +194,9 @@ export interface TelegramWebhookFeatures {
   handleAdminCommand?: (
     context: TelegramAdminCommandContext,
   ) => Promise<Response | void> | Response | void;
+  handleMessage?: (
+    message: IncomingMessage,
+  ) => Promise<Response | 'handled' | void> | Response | 'handled' | void;
 }
 
 export interface TelegramWebhookOptions {
@@ -324,16 +327,43 @@ export const transformTelegramUpdate = async (
     if (rawCommand.length > 0 && isCommandForThisBot(rawCommand, options.botUsername)) {
       const normalizedCommand = normalizeCommand(rawCommand);
 
+      const argumentSlice = incoming.text.slice(commandEntity.offset + commandEntity.length);
+      const argumentText = argumentSlice.trim();
+
       if (normalizedCommand === '/start') {
-        const payloadText = incoming.text.slice(commandEntity.offset + commandEntity.length);
-        startPayload = parseStartPayload(payloadText);
+        startPayload = parseStartPayload(argumentSlice);
+      }
+
+      if (normalizedCommand === '/broadcast') {
+        const context: TelegramAdminCommandContext = {
+          command: normalizedCommand,
+          rawCommand,
+          argument: argumentText.length > 0 ? argumentText : undefined,
+          text: incoming.text,
+          chat: {
+            id: incoming.chat.id,
+            threadId: incoming.chat.threadId,
+            type: toOptionalString(message.chat.type),
+          },
+          from: {
+            userId: incoming.user.userId,
+            username: incoming.user.username,
+            firstName: incoming.user.firstName,
+            lastName: incoming.user.lastName,
+            languageCode: incoming.user.languageCode,
+            isBot: typeof from.is_bot === 'boolean' ? from.is_bot : undefined,
+            isPremium: typeof from.is_premium === 'boolean' ? from.is_premium : undefined,
+          },
+          messageId: incoming.messageId ?? '',
+          update,
+          message,
+          incomingMessage: incoming,
+        };
+
+        return handleAdminCommand(context, options);
       }
 
       if (normalizedCommand === '/export' || normalizedCommand.startsWith('/admin')) {
-        const argumentText = incoming.text
-          .slice(commandEntity.offset + commandEntity.length)
-          .trim();
-
         const context: TelegramAdminCommandContext = {
           command: normalizedCommand,
           rawCommand,

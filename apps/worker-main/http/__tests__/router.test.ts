@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DialogEngine } from '../../core/DialogEngine';
-import type { MessagingPort } from '../../ports';
-import {
-  createInMemoryBroadcastQueue,
-  createTelegramBroadcastCommandHandler,
-} from '../../features/broadcast';
-import { transformTelegramUpdate } from '../telegram-webhook';
+import type { MessagingPort, StoragePort } from '../../ports';
+import { createTelegramWebhookHandler } from '../../features';
+import { createTelegramBroadcastCommandHandler } from '../../features/broadcast';
 import { createRouter, parseIncomingMessage } from '../router';
 
 describe('http router', () => {
@@ -20,6 +17,10 @@ describe('http router', () => {
     editMessageText: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
   }) as unknown as MessagingPort;
+
+  const createStorageMock = () => ({
+    saveUser: vi.fn().mockResolvedValue(undefined),
+  }) as unknown as StoragePort;
 
   it('responds with ok for healthz route', async () => {
     const router = createRouter({
@@ -329,85 +330,102 @@ describe('http router', () => {
     expect(response.status).toBe(404);
   });
 
-  it('enqueues broadcast via telegram admin command and confirms to requester', async () => {
-    const queue = createInMemoryBroadcastQueue({
-      now: () => new Date('2024-01-01T00:00:00.000Z'),
-      generateId: () => 'job-tg-1',
-    });
+  it('sends broadcast via telegram command and confirms delivery', async () => {
     const messaging = createMessagingMock();
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
+    const sendBroadcast = vi
+      .fn()
+      .mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] });
 
-    const handleAdminCommand = createTelegramBroadcastCommandHandler({
+    const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
       messaging,
-      queue,
-      resolveRequestedBy: (context) => context.from.userId,
-      logger,
+      sendBroadcast,
+      logger: console,
+      now: () => new Date('2024-01-01T00:00:00Z'),
+    });
+
+    const transformPayload = createTelegramWebhookHandler({
+      storage: createStorageMock(),
+      features: {
+        handleAdminCommand: (context) => handler.handleCommand(context),
+        handleMessage: (message) => handler.handleMessage(message),
+      },
     });
 
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
       messaging,
       webhookSecret: 'secret',
-      transformPayload: (payload) =>
-        transformTelegramUpdate(payload, {
-          features: { handleAdminCommand },
-        }),
+      transformPayload,
     });
 
-    const telegramUpdate = {
-      update_id: 1001,
+    const commandUpdate = {
+      update_id: 2001,
       message: {
-        message_id: 555,
+        message_id: 700,
         date: Math.trunc(new Date('2024-01-01T00:00:00Z').getTime() / 1000),
         chat: { id: 4242, type: 'private' },
         from: { id: 1010, first_name: 'Admin' },
-        text: '/admin broadcast send --chat=4242 привет всем',
+        text: '/broadcast',
         entities: [
-          {
-            type: 'bot_command',
-            offset: 0,
-            length: '/admin'.length,
-          },
+          { type: 'bot_command', offset: 0, length: '/broadcast'.length },
         ],
       },
     };
 
-    const response = await router.handle(
+    const textUpdate = {
+      update_id: 2002,
+      message: {
+        message_id: 701,
+        date: Math.trunc(new Date('2024-01-01T00:00:05Z').getTime() / 1000),
+        chat: { id: 4242, type: 'private' },
+        from: { id: 1010, first_name: 'Admin' },
+        text: 'привет всем',
+      },
+    };
+
+    const commandResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(telegramUpdate),
+        body: JSON.stringify(commandUpdate),
       }),
     );
 
-    expect(response.status).toBe(202);
-    const body = await response.json();
-
-    expect(body).toMatchObject({
-      status: 'queued',
-      jobId: 'job-tg-1',
-      requestedBy: '1010',
-      filters: { chatIds: ['4242'] },
-    });
-
-    const snapshot = queue.list();
-    expect(snapshot.jobs).toHaveLength(1);
-    expect(snapshot.jobs[0]?.payload.text).toBe('привет всем');
-    expect(snapshot.jobs[0]?.requestedBy).toBe('1010');
-
+    expect(commandResponse.status).toBe(200);
+    await expect(commandResponse.json()).resolves.toEqual({ status: 'awaiting_text' });
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('1010');
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: '4242',
       threadId: undefined,
       text: [
-        '📣 Рассылка поставлена в очередь.',
-        'ID задачи: job-tg-1',
-        'Проверить статус: /broadcast status',
+        'Введите текст рассылки (до 4096 символов).',
+        'Следующее сообщение уйдёт всем получателям минимальной модели.',
       ].join('\n'),
     });
 
-    expect(adminAccess.isAdmin).toHaveBeenCalledWith('1010');
+    const textResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(textUpdate),
+      }),
+    );
+
+    expect(textResponse.status).toBe(200);
+    await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
+
+    expect(sendBroadcast).toHaveBeenCalledWith({
+      text: 'привет всем',
+      requestedBy: '1010',
+    });
+
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
+      chatId: '4242',
+      threadId: undefined,
+      text: ['📣 Рассылка отправлена.', 'Получателей: 2.'].join('\n'),
+    });
   });
 
   it('exposes parseIncomingMessage for custom transformations', () => {

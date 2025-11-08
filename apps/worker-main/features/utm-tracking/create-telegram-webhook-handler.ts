@@ -1,5 +1,10 @@
 import { transformTelegramUpdate, type TelegramWebhookOptions } from '../../http/telegram-webhook';
-import type { MessageWebhookResult, TransformPayload, TransformPayloadResult } from '../../http/router';
+import type {
+  HandledWebhookResult,
+  MessageWebhookResult,
+  TransformPayload,
+  TransformPayloadResult,
+} from '../../http/router';
 import type { StoragePort } from '../../ports';
 
 interface KnownUser {
@@ -13,6 +18,16 @@ export interface CreateTelegramWebhookHandlerOptions extends TelegramWebhookOpti
 
 const isMessageResult = (value: TransformPayloadResult): value is MessageWebhookResult =>
   (value as MessageWebhookResult | undefined)?.kind === 'message';
+
+const handledResult = (response?: Response): HandledWebhookResult => ({
+  kind: 'handled',
+  response:
+    response
+    ?? new Response(JSON.stringify({ status: 'ok' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      status: 200,
+    }),
+});
 
 export const createTelegramWebhookHandler = (
   options: CreateTelegramWebhookHandlerOptions,
@@ -29,6 +44,16 @@ export const createTelegramWebhookHandler = (
 
     if (isMessageResult(result)) {
       const { message } = result;
+
+      const handledByFeature = await transformOptions.features?.handleMessage?.(message);
+      if (handledByFeature) {
+        if (handledByFeature instanceof Response) {
+          return handledResult(handledByFeature);
+        }
+
+        return handledResult();
+      }
+
       const userId = message.user.userId;
       const existing = knownUsers.get(userId);
       const incomingUtm = message.user.utmSource;

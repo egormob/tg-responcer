@@ -29,8 +29,17 @@ export {
 export {
   createTelegramBroadcastCommandHandler,
   type CreateTelegramBroadcastCommandHandlerOptions,
+  type TelegramBroadcastCommandHandler,
 } from './telegram-broadcast-command';
 export {
   createTelegramBroadcastJobCommandHandler,
   type CreateTelegramBroadcastJobCommandHandlerOptions,
 } from './telegram-broadcast-job-command';
+export {
+  createImmediateBroadcastSender,
+  type BroadcastSendInput,
+  type BroadcastSendResult,
+  type BroadcastSendResultDelivery,
+  type SendBroadcast,
+  type CreateImmediateBroadcastSenderOptions,
+} from './minimal-broadcast-service';
