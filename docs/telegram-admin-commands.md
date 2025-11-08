@@ -19,6 +19,8 @@
 * `/admin export …` — эквивалент прямому вызову `/export`.
 * `/admin broadcast` — алиас к `/broadcast` для операторов, которым так удобнее запускать сценарий.
 
+Если Telegram возвращает ошибки `400` или `403` при ответе на `/admin`, бот логирует событие с полями `status` и `description`, инвалидирует кеш whitelist-а и сохраняет запись `admin-error:<userId>` в KV. Эти данные отображаются в диагностическом роуте.
+
 ## `GET /admin/access`
 
 HTTP-маршрут диагностики whitelisting доступен по админ-токену. Возвращает JSON со структурой:
@@ -30,13 +32,29 @@ HTTP-маршрут диагностики whitelisting доступен по а
     { "userId": "123", "status": "ok" },
     { "userId": "456", "status": 403, "lastError": "blocked" }
   ],
-  "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}"
+  "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}",
+  "adminMessagingErrors": {
+    "source": "primary",
+    "total": 1,
+    "topByCode": [{ "code": 403, "count": 1 }],
+    "entries": [
+      {
+        "key": "admin-error:456:20240301000000",
+        "userId": "456",
+        "command": "admin_help",
+        "code": 403,
+        "desc": "Forbidden: bot was blocked by the user",
+        "when": "2024-03-01T00:00:00.000Z"
+      }
+    ]
+  }
 }
 ```
 
 - `whitelist` — нормализованный список ID из `ADMIN_TG_IDS`.
 - `kvRaw` — исходное значение ключа `whitelist` в KV.
 - `health` — попытка отправить безопасное сообщение каждому whitelisted ID. `status` равен `"ok"` при успехе, HTTP-статусу `TelegramApiError` при сбое или `"skipped"`, если порт сообщений недоступен. `lastError` содержит текст последней ошибки.
+- `adminMessagingErrors` — последние диагностические записи отправки `/admin`-команд. Каждое событие хранится отдельным ключом `admin-error:<userId>:<yyyymmddHHmmss>` с TTL 10 дней и включает поля `command`, `code`, `desc` и `when`. Поле `source` показывает, из какого KV читались данные (`primary` — `ADMIN_TG_IDS`, `fallback` — запасной биндинг, если whitelist недоступен). `topByCode` агрегирует счётчики по статусам.
 
 Маршрут помогает проверять whitelisting и доступность Telegram-адаптера без реальных рассылок.
 

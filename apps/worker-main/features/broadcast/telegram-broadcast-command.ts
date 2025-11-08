@@ -3,6 +3,11 @@ import type { IncomingMessage } from '../../core';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
+import {
+  type AdminCommandErrorRecorder,
+  extractTelegramErrorDetails,
+  shouldInvalidateAdminAccess,
+} from '../admin-access/admin-messaging-errors';
 import type {
   BroadcastSendInput,
   BroadcastSendResult,
@@ -67,6 +72,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   pendingTtlMs?: number;
   now?: () => Date;
   logger?: Logger;
+  adminErrorRecorder?: AdminCommandErrorRecorder;
 }
 
 export interface TelegramBroadcastCommandHandler {
@@ -112,6 +118,25 @@ export const createTelegramBroadcastCommandHandler = (
   const now = options.now ?? (() => new Date());
 
   const pending = new Map<string, PendingBroadcast>();
+
+  const handleMessagingFailure = async (
+    userId: string | number | bigint,
+    commandLabel: string,
+    error: unknown,
+  ) => {
+    const details = extractTelegramErrorDetails(error);
+
+    if (shouldInvalidateAdminAccess(details)) {
+      options.adminAccess.invalidate?.(userId);
+    }
+
+    await options.adminErrorRecorder?.record({
+      userId: String(userId),
+      command: commandLabel,
+      error,
+      details,
+    });
+  };
 
   const cleanupExpired = (timestamp: number) => {
     for (const [key, entry] of pending.entries()) {
@@ -162,6 +187,8 @@ export const createTelegramBroadcastCommandHandler = (
         error: toErrorDetails(error),
       });
 
+      await handleMessagingFailure(context.from.userId, 'broadcast_prompt', error);
+
       return json({ error: 'Failed to send broadcast prompt' }, { status: 502 });
     }
 
@@ -205,6 +232,8 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId ?? null,
           error: toErrorDetails(error),
         });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_empty_warning', error);
       }
 
       return 'handled';
@@ -231,6 +260,8 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId ?? null,
           error: toErrorDetails(error),
         });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_length_warning', error);
       }
 
       return 'handled';
@@ -265,6 +296,8 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId ?? null,
           error: toErrorDetails(error),
         });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_confirmation', error);
       }
     } catch (error) {
       logger.error('broadcast send failed via telegram command', {
@@ -287,6 +320,8 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId ?? null,
           error: toErrorDetails(sendError),
         });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_failure_notice', sendError);
       }
     }
 

@@ -2,6 +2,11 @@ import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
+import {
+  type AdminCommandErrorRecorder,
+  extractTelegramErrorDetails,
+  shouldInvalidateAdminAccess,
+} from '../admin-access/admin-messaging-errors';
 import type { BroadcastJob, BroadcastQueue } from './broadcast-queue';
 
 interface Logger {
@@ -16,6 +21,7 @@ export interface CreateTelegramBroadcastJobCommandHandlerOptions {
   messaging: Pick<MessagingPort, 'editMessageText' | 'deleteMessage'>;
   logger?: Logger;
   now?: () => Date;
+  adminErrorRecorder?: AdminCommandErrorRecorder;
 }
 
 interface BroadcastJobMessageTarget {
@@ -176,6 +182,25 @@ export const createTelegramBroadcastJobCommandHandler = (
   const logger = createLogger(options.logger);
   const now = options.now ?? (() => new Date());
 
+  const handleMessagingFailure = async (
+    userId: string | number | bigint,
+    commandLabel: string,
+    error: unknown,
+  ) => {
+    const details = extractTelegramErrorDetails(error);
+
+    if (shouldInvalidateAdminAccess(details)) {
+      options.adminAccess.invalidate?.(userId);
+    }
+
+    await options.adminErrorRecorder?.record({
+      userId: String(userId),
+      command: commandLabel,
+      error,
+      details,
+    });
+  };
+
   return async (context: TelegramAdminCommandContext) => {
     const normalizedCommand = context.command.toLowerCase();
     if (normalizedCommand !== '/broadcast' && normalizedCommand !== '/admin') {
@@ -271,6 +296,8 @@ export const createTelegramBroadcastJobCommandHandler = (
           error: toErrorDetails(error),
         });
 
+        await handleMessagingFailure(context.from.userId, 'broadcast_job_edit', error);
+
         return json({ error: 'Не удалось обновить сообщение рассылки.' }, { status: 502 });
       }
     }
@@ -296,6 +323,8 @@ export const createTelegramBroadcastJobCommandHandler = (
         messageId: target.messageId,
         error: toErrorDetails(error),
       });
+
+      await handleMessagingFailure(context.from.userId, 'broadcast_job_delete', error);
 
       return json({ error: 'Не удалось удалить сообщение рассылки.' }, { status: 502 });
     }

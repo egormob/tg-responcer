@@ -5,6 +5,7 @@ import type { TelegramAdminCommandContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
 import type { SendBroadcast } from '../minimal-broadcast-service';
+import type { AdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
 
 const createContext = ({
   command = '/broadcast',
@@ -53,10 +54,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
     isAdmin = true,
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
     sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] }),
+    adminErrorRecorder,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
     sendBroadcastMock?: SendBroadcast;
+    adminErrorRecorder?: AdminCommandErrorRecorder;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -69,6 +72,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       sendBroadcast: sendBroadcastMock,
       now: () => new Date('2024-01-01T00:00:00Z'),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      adminErrorRecorder,
     });
 
     return { handler, adminAccess, sendTextMock, sendBroadcastMock };
@@ -156,6 +160,30 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: 'Текст рассылки превышает лимит 4096 символов. Отправьте более короткое сообщение.',
     });
+  });
+
+  it('records diagnostics when prompt delivery fails', async () => {
+    const error = Object.assign(new Error('blocked'), { status: 403 });
+    const sendTextMock = vi.fn().mockRejectedValue(error);
+    const record = vi.fn().mockResolvedValue(undefined);
+    const adminErrorRecorder: AdminCommandErrorRecorder = {
+      record,
+      source: 'primary',
+      namespace: undefined,
+    };
+
+    const { handler, adminAccess } = createHandler({ sendTextMock, adminErrorRecorder });
+
+    const response = await handler.handleCommand(createContext());
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('admin-1');
+    expect(record).toHaveBeenCalledWith({
+      userId: 'admin-1',
+      command: 'broadcast_prompt',
+      error,
+      details: { status: 403 },
+    });
+    expect(response?.status).toBe(502);
   });
 
   it('notifies admin when broadcast sending fails', async () => {

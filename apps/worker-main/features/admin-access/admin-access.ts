@@ -1,6 +1,4 @@
-export interface AdminAccessKvNamespace {
-  get(key: string, type?: 'text'): Promise<string | null>;
-}
+export type AdminAccessKvNamespace = Pick<KVNamespace, 'get' | 'put' | 'list' | 'delete'>;
 
 export interface CreateAdminAccessOptions {
   kv: AdminAccessKvNamespace;
@@ -10,6 +8,7 @@ export interface CreateAdminAccessOptions {
 
 export interface AdminAccess {
   isAdmin(userId: string | number | bigint): Promise<boolean>;
+  invalidate?(userId?: string | number | bigint): void;
 }
 
 export interface AdminWhitelistSnapshot {
@@ -120,6 +119,9 @@ export const createAdminAccess = (options: CreateAdminAccessOptions): AdminAcces
 
       const whitelist = await readWhitelist();
       return whitelist.has(normalizedUserId);
+    },
+    invalidate() {
+      cachedWhitelist = undefined;
     },
   };
 };

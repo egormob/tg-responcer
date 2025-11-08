@@ -6,6 +6,12 @@ import {
   type AdminAccess,
   type AdminAccessKvNamespace,
 } from './admin-access';
+import {
+  type AdminCommandErrorRecorder,
+  type AdminDiagnosticsKvNamespace,
+  type AdminMessagingErrorSource,
+  readAdminMessagingErrors,
+} from './admin-messaging-errors';
 
 const SAFE_MESSAGE_TEXT = 'Access diagnostics ping. Please ignore this message.';
 
@@ -21,6 +27,9 @@ export interface CreateAccessDiagnosticsRouteOptions {
   env: { ADMIN_TG_IDS?: AdminAccessKvNamespace };
   composition: CompositionResult;
   adminAccess?: AdminAccess;
+  adminErrorRecorder?: Pick<AdminCommandErrorRecorder, 'namespace' | 'source'>;
+  adminErrorKv?: AdminDiagnosticsKvNamespace;
+  adminErrorSource?: AdminMessagingErrorSource;
 }
 
 const getErrorStatus = (error: unknown): { status: HealthStatus; lastError?: string } => {
@@ -66,6 +75,18 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
     const adminAccess = options.adminAccess ?? (kv ? createAdminAccess({ kv }) : undefined);
     const whitelist = await filterWhitelistWithAccess(snapshot.ids, adminAccess);
 
+    const adminErrorNamespace =
+      options.adminErrorKv
+      ?? options.adminErrorRecorder?.namespace
+      ?? kv;
+    const adminErrorSource = options.adminErrorSource
+      ?? options.adminErrorRecorder?.source
+      ?? (adminErrorNamespace && adminErrorNamespace === kv ? 'primary' : 'none');
+
+    const adminMessagingErrors = adminErrorNamespace
+      ? await readAdminMessagingErrors(adminErrorNamespace, { limit: 50 })
+      : { entries: [], total: 0, topByCode: [] };
+
     const health: AccessHealthEntry[] = [];
     const messaging = options.composition?.ports.messaging;
 
@@ -98,5 +119,11 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
       whitelist,
       health,
       kvRaw: snapshot.raw,
+      adminMessagingErrors: {
+        source: adminErrorNamespace ? adminErrorSource : 'none',
+        entries: adminMessagingErrors.entries,
+        total: adminMessagingErrors.total,
+        topByCode: adminMessagingErrors.topByCode,
+      },
     });
   };
