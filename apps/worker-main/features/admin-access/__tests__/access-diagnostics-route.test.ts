@@ -41,6 +41,7 @@ describe('createAccessDiagnosticsRoute', () => {
       { userId: '123', status: 'ok' },
       { userId: '456', status: 'ok' },
     ]);
+    expect(payload.adminErrors).toEqual({});
 
     expect(sendTyping).toHaveBeenCalledTimes(2);
     expect(sendText).toHaveBeenCalledTimes(2);
@@ -68,6 +69,45 @@ describe('createAccessDiagnosticsRoute', () => {
     expect(payload.health).toEqual([
       { userId: '789', status: 403, lastError: 'blocked' },
     ]);
+    expect(payload.adminErrors).toEqual({});
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('includes admin error records from kv when available', async () => {
+    const kv = {
+      get: vi.fn().mockImplementation((key: string) => {
+        if (key === 'whitelist') {
+          return Promise.resolve('{"whitelist":["321"]}');
+        }
+
+        if (key === 'admin-error:321') {
+          return Promise.resolve(
+            '{"status":403,"description":"Forbidden","at":"2024-03-01T00:00:00.000Z"}',
+          );
+        }
+
+        return Promise.resolve(null);
+      }),
+    };
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const sendText = vi.fn().mockResolvedValue({ messageId: '1' });
+    const composition = createComposition({ sendTyping, sendText });
+
+    const handleRequest = createAccessDiagnosticsRoute({
+      env: { ADMIN_TG_IDS: kv },
+      composition,
+    });
+
+    const response = await handleRequest(new Request('https://example.com/admin/access', { method: 'GET' }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.adminErrors).toEqual({
+      '321': {
+        status: 403,
+        description: 'Forbidden',
+        at: '2024-03-01T00:00:00.000Z',
+      },
+    });
   });
 });

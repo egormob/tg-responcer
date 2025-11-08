@@ -12,7 +12,7 @@ interface Logger {
 
 export interface AdminExportRateLimitKvNamespace {
   get(key: string, type: 'text'): Promise<string | null>;
-  put(key: string, value: string, options: { expirationTtl: number }): Promise<void>;
+  put(key: string, value: string, options?: { expirationTtl: number }): Promise<void>;
 }
 
 export type AdminExportLogKvNamespace = Pick<KVNamespace, 'put'>;
@@ -84,6 +84,31 @@ const createLogger = (logger?: Logger) => ({
     logger?.error?.(message, details);
   },
 });
+
+interface TelegramErrorDetails {
+  status?: number;
+  description?: string;
+}
+
+const extractTelegramErrorDetails = (error: unknown): TelegramErrorDetails => {
+  if (typeof error === 'object' && error !== null && 'status' in error) {
+    const { status } = error as { status?: unknown };
+    const statusValue = typeof status === 'number' && Number.isFinite(status) ? status : undefined;
+
+    let description: string | undefined;
+    if ('description' in error) {
+      const descriptionValue = (error as { description?: unknown }).description;
+      description = typeof descriptionValue === 'string' ? descriptionValue : undefined;
+    }
+
+    return { status: statusValue, description };
+  }
+
+  return {};
+};
+
+const normalizeErrorForLog = (error: unknown) =>
+  error instanceof Error ? { name: error.name, message: error.message } : String(error);
 
 const buildTelegramFormData = (
   chatId: string,
@@ -158,6 +183,58 @@ export const createTelegramExportCommandHandler = (
   const logger = createLogger(options.logger);
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
 
+  const handleAdminErrorSideEffects = async (
+    userId: string,
+    details: TelegramErrorDetails,
+  ) => {
+    if (!details.status || (details.status !== 400 && details.status !== 403)) {
+      return;
+    }
+
+    options.adminAccess.invalidate?.(userId);
+
+    if (options.cooldownKv) {
+      const at = now().toISOString();
+      try {
+        await options.cooldownKv.put(
+          `admin-error:${userId}`,
+          JSON.stringify({ status: details.status, description: details.description, at }),
+        );
+      } catch (kvError) {
+        logger.warn('failed to write admin error kv', {
+          userId,
+          status: details.status,
+          description: details.description,
+          error: normalizeErrorForLog(kvError),
+        });
+      }
+    }
+  };
+
+  const logAdminMessagingError = async (
+    message: string,
+    contextDetails: { userId: string; chatId: string; threadId?: string },
+    error: unknown,
+  ) => {
+    const telegramDetails = extractTelegramErrorDetails(error);
+    const logDetails: Record<string, unknown> = {
+      ...contextDetails,
+      error: normalizeErrorForLog(error),
+    };
+
+    if (telegramDetails.status !== undefined) {
+      logDetails.status = telegramDetails.status;
+    }
+
+    if (telegramDetails.description) {
+      logDetails.description = telegramDetails.description;
+    }
+
+    logger.error(message, logDetails);
+
+    await handleAdminErrorSideEffects(contextDetails.userId, telegramDetails);
+  };
+
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
     const command = context.command.toLowerCase();
     const trimmedArgument = context.argument?.trim();
@@ -183,15 +260,15 @@ export const createTelegramExportCommandHandler = (
           threadId: context.chat.threadId,
         });
       } catch (error) {
-        logger.error('failed to send admin help response', {
-          userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : String(error),
-        });
+        await logAdminMessagingError(
+          'failed to send admin help response',
+          {
+            userId,
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+          },
+          error,
+        );
 
         return json({ error: 'Failed to send admin help response' }, { status: 502 });
       }
@@ -225,15 +302,15 @@ export const createTelegramExportCommandHandler = (
           });
         }
       } catch (error) {
-        logger.error('failed to send admin status response', {
-          userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : String(error),
-        });
+        await logAdminMessagingError(
+          'failed to send admin status response',
+          {
+            userId,
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+          },
+          error,
+        );
 
         return json({ error: 'Failed to send admin status response' }, { status: 502 });
       }

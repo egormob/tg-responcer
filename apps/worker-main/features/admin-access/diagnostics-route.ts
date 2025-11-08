@@ -17,6 +17,12 @@ interface AccessHealthEntry {
   lastError?: string;
 }
 
+interface AdminMessagingErrorState {
+  status?: number;
+  description?: string;
+  at?: string;
+}
+
 export interface CreateAccessDiagnosticsRouteOptions {
   env: { ADMIN_TG_IDS?: AdminAccessKvNamespace };
   composition: CompositionResult;
@@ -52,6 +58,41 @@ const filterWhitelistWithAccess = async (
   return checks.filter((item) => item.ok).map((item) => item.userId);
 };
 
+const readAdminMessagingErrorState = async (
+  kv: AdminAccessKvNamespace,
+  userId: string,
+): Promise<AdminMessagingErrorState | undefined> => {
+  try {
+    const raw = await kv.get(`admin-error:${userId}`, 'text');
+    if (typeof raw !== 'string') {
+      return undefined;
+    }
+
+    const data = JSON.parse(raw) as {
+      status?: unknown;
+      description?: unknown;
+      at?: unknown;
+    };
+
+    const status =
+      typeof data.status === 'number' && Number.isFinite(data.status) ? data.status : undefined;
+    const description = typeof data.description === 'string' ? data.description : undefined;
+    const at = typeof data.at === 'string' ? data.at : undefined;
+
+    if (status === undefined && !description && !at) {
+      return undefined;
+    }
+
+    return { status, description, at };
+  } catch (error) {
+    console.warn('[admin-access] failed to read admin error record from KV', {
+      userId,
+      error: error instanceof Error ? { name: error.name, message: error.message } : undefined,
+    });
+    return undefined;
+  }
+};
+
 export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRouteOptions) =>
   async (request: Request): Promise<Response> => {
     if (request.method !== 'GET') {
@@ -65,6 +106,16 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
     const snapshot = kv ? await readAdminWhitelist(kv) : { ids: [], raw: null };
     const adminAccess = options.adminAccess ?? (kv ? createAdminAccess({ kv }) : undefined);
     const whitelist = await filterWhitelistWithAccess(snapshot.ids, adminAccess);
+
+    const adminErrors: Record<string, AdminMessagingErrorState> = {};
+    if (kv) {
+      for (const userId of whitelist) {
+        const state = await readAdminMessagingErrorState(kv, userId);
+        if (state) {
+          adminErrors[userId] = state;
+        }
+      }
+    }
 
     const health: AccessHealthEntry[] = [];
     const messaging = options.composition?.ports.messaging;
@@ -98,5 +149,6 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
       whitelist,
       health,
       kvRaw: snapshot.raw,
+      adminErrors,
     });
   };

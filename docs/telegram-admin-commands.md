@@ -19,6 +19,8 @@
 * `/admin export …` — эквивалент прямому вызову `/export`.
 * `/admin broadcast` — алиас к `/broadcast` для операторов, которым так удобнее запускать сценарий.
 
+Если Telegram возвращает ошибки `400` или `403` при ответе на `/admin`, бот логирует событие с полями `status` и `description`, инвалидирует кеш whitelist-а и сохраняет запись `admin-error:<userId>` в KV. Эти данные отображаются в диагностическом роуте.
+
 ## `GET /admin/access`
 
 HTTP-маршрут диагностики whitelisting доступен по админ-токену. Возвращает JSON со структурой:
@@ -30,13 +32,17 @@ HTTP-маршрут диагностики whitelisting доступен по а
     { "userId": "123", "status": "ok" },
     { "userId": "456", "status": 403, "lastError": "blocked" }
   ],
-  "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}"
+  "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}",
+  "adminErrors": {
+    "456": { "status": 403, "description": "Forbidden: bot was blocked by the user", "at": "2024-03-01T00:00:00.000Z" }
+  }
 }
 ```
 
 - `whitelist` — нормализованный список ID из `ADMIN_TG_IDS`.
 - `kvRaw` — исходное значение ключа `whitelist` в KV.
 - `health` — попытка отправить безопасное сообщение каждому whitelisted ID. `status` равен `"ok"` при успехе, HTTP-статусу `TelegramApiError` при сбое или `"skipped"`, если порт сообщений недоступен. `lastError` содержит текст последней ошибки.
+- `adminErrors` — последняя зафиксированная ошибка отправки `/admin`-сообщений для каждого `userId`. Запись появляется, если Telegram вернул `400/403` и содержит `status`, `description` и метку времени `at` (ISO 8601).
 
 Маршрут помогает проверять whitelisting и доступность Telegram-адаптера без реальных рассылок.
 
