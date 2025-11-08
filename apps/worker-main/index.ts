@@ -434,6 +434,9 @@ const createTransformPayload = (
     ? createTelegramBroadcastCommandHandler({
         adminAccess,
         messaging: composition.ports.messaging,
+        queue: broadcastQueue,
+        resolveRequestedBy: (context) => context.from.userId,
+        logger: console,
       })
     : undefined;
   const broadcastJobCommandHandler = adminAccess
