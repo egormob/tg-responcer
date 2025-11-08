@@ -6,6 +6,9 @@
 
 ## Ограничения Telegram Bot API
 - Максимальная длина текстового сообщения — 4096 символов. Более длинные сообщения необходимо делить на несколько рассылок (см. [`sendMessage`](https://core.telegram.org/bots/api#sendmessage)).
+- Безопасная скорость отправки — до 28 сообщений в секунду (жёсткий глобальный предел ≈30/сек); при более высоких значениях Telegram может отвечать ошибками 429.
+- Лимит на чат — не более 1 сообщения в секунду для каждого получателя.
+- Максимальный размер пересылаемых файлов — до 50 МБ (см. [`sendDocument`](https://core.telegram.org/bots/api#senddocument)).
 - Редактирование и удаление сообщений возможно только в течение 48 часов после отправки (см. [`editMessageText`](https://core.telegram.org/bots/api#editmessagetext) и [`deleteMessage`](https://core.telegram.org/bots/api#deletemessage)).
 
 ## Коммуникация и ревизии
