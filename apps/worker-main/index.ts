@@ -434,6 +434,7 @@ const createTransformPayload = (
         handleExport: csvExportHandler,
         rateLimit: composition.ports.rateLimit,
         messaging: composition.ports.messaging,
+        adminAccessKv: env.ADMIN_TG_IDS,
         cooldownKv: adminExportKv,
         exportLogKv: env.ADMIN_EXPORT_LOG,
         logger: console,

@@ -82,6 +82,7 @@ describe('createTelegramExportCommandHandler', () => {
       handleExport?: ReturnType<typeof vi.fn>;
       adminAccess?: { isAdmin: ReturnType<typeof vi.fn> };
       rateLimit?: { checkAndIncrement: ReturnType<typeof vi.fn> };
+      adminAccessKv?: AdminExportRateLimitKvNamespace;
       cooldownKv?: AdminExportRateLimitKvNamespace;
       exportLogKv?: AdminExportLogKvNamespace;
       now?: () => Date;
@@ -116,6 +117,7 @@ describe('createTelegramExportCommandHandler', () => {
       adminAccess,
       rateLimit,
       messaging,
+      adminAccessKv: options?.adminAccessKv,
       now: options?.now ?? (() => new Date('2024-02-01T00:00:00Z')),
       cooldownKv: options?.cooldownKv,
       exportLogKv: options?.exportLogKv,
@@ -179,13 +181,13 @@ describe('createTelegramExportCommandHandler', () => {
       description: 'Forbidden: bot was blocked by the user',
     });
     const sendTextMock = vi.fn().mockRejectedValue(error);
-    const cooldownKv = createFakeKv();
+    const adminAccessKv = createFakeKv();
     const invalidate = vi.fn();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true), invalidate };
     const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
     const { handler } = createHandler({
       sendTextMock,
-      cooldownKv,
+      adminAccessKv,
       adminAccess,
       logger,
     });
@@ -203,7 +205,7 @@ describe('createTelegramExportCommandHandler', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith('42');
-    const errorRecord = cooldownKv.store.get('admin-error:42');
+    const errorRecord = adminAccessKv.store.get('admin-error:42');
     expect(errorRecord).toBeDefined();
     expect(errorRecord?.expirationTtl).toBeUndefined();
     expect(JSON.parse(errorRecord?.value as string)).toEqual({
@@ -440,13 +442,13 @@ describe('createTelegramExportCommandHandler', () => {
       description: 'Bad Request: chat not found',
     });
     const sendTextMock = vi.fn().mockRejectedValue(error);
-    const cooldownKv = createFakeKv();
+    const adminAccessKv = createFakeKv();
     const invalidate = vi.fn();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true), invalidate };
     const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
     const { handler } = createHandler({
       sendTextMock,
-      cooldownKv,
+      adminAccessKv,
       adminAccess,
       logger,
     });
@@ -464,7 +466,7 @@ describe('createTelegramExportCommandHandler', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith('42');
-    const errorRecord = cooldownKv.store.get('admin-error:42');
+    const errorRecord = adminAccessKv.store.get('admin-error:42');
     expect(errorRecord).toBeDefined();
     expect(JSON.parse(errorRecord?.value as string)).toEqual({
       status: 400,

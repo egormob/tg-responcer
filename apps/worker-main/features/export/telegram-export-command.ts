@@ -1,7 +1,7 @@
 import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort, RateLimitPort } from '../../ports';
-import type { AdminAccess } from '../admin-access';
+import type { AdminAccess, AdminAccessKvNamespace } from '../admin-access';
 import type { AdminExportRequest } from './admin-export-route';
 
 interface Logger {
@@ -23,6 +23,7 @@ export interface CreateTelegramExportCommandHandlerOptions {
   adminAccess: AdminAccess;
   rateLimit: RateLimitPort;
   messaging: Pick<MessagingPort, 'sendText'>;
+  adminAccessKv?: AdminAccessKvNamespace & Pick<KVNamespace, 'put'>;
   cooldownKv?: AdminExportRateLimitKvNamespace;
   exportLogKv?: AdminExportLogKvNamespace;
   logger?: Logger;
@@ -193,10 +194,11 @@ export const createTelegramExportCommandHandler = (
 
     options.adminAccess.invalidate?.(userId);
 
-    if (options.cooldownKv) {
+    const adminErrorKv = options.adminAccessKv ?? options.cooldownKv;
+    if (adminErrorKv) {
       const at = now().toISOString();
       try {
-        await options.cooldownKv.put(
+        await adminErrorKv.put(
           `admin-error:${userId}`,
           JSON.stringify({ status: details.status, description: details.description, at }),
         );
