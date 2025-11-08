@@ -5,6 +5,8 @@ import type {
   AdminExportLogKvNamespace,
   AdminExportRateLimitKvNamespace,
 } from '../telegram-export-command';
+import { createAdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
+import type { AdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
 import type { MessagingPort } from '../../../ports';
 import type { TelegramAdminCommandContext } from '../../../http';
 
@@ -62,6 +64,18 @@ describe('createTelegramExportCommandHandler', () => {
       async put(key: string, value: string, options) {
         store.set(key, { value, expirationTtl: options?.expirationTtl });
       },
+      async delete(key: string) {
+        store.delete(key);
+      },
+      async list({ prefix }: { prefix?: string }) {
+        const keys = Array.from(store.keys()).filter((key) =>
+          prefix ? key.startsWith(prefix) : true,
+        );
+        return {
+          keys: keys.map((key) => ({ name: key })),
+          list_complete: true,
+        } satisfies Awaited<ReturnType<AdminExportRateLimitKvNamespace['list']>>;
+      },
     };
 
     return kv;
@@ -88,8 +102,10 @@ describe('createTelegramExportCommandHandler', () => {
       now?: () => Date;
       sendTextMock?: ReturnType<typeof vi.fn>;
       logger?: { info?: ReturnType<typeof vi.fn>; warn?: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> };
+      adminErrorRecorder?: AdminCommandErrorRecorder;
     },
   ) => {
+    const now = options?.now ?? (() => new Date('2024-02-01T00:00:00Z'));
     const handleExport =
       options?.handleExport
         ?? vi.fn().mockResolvedValue(
@@ -111,6 +127,15 @@ describe('createTelegramExportCommandHandler', () => {
       sendText: sendTextMock as unknown as MessagingPort['sendText'],
     };
 
+    const adminErrorRecorder =
+      options?.adminErrorRecorder
+      ?? createAdminCommandErrorRecorder({
+        primaryKv: options?.adminAccessKv,
+        fallbackKv: options?.cooldownKv,
+        logger: options?.logger,
+        now,
+      });
+
     const handler = createTelegramExportCommandHandler({
       botToken,
       handleExport,
@@ -118,10 +143,11 @@ describe('createTelegramExportCommandHandler', () => {
       rateLimit,
       messaging,
       adminAccessKv: options?.adminAccessKv,
-      now: options?.now ?? (() => new Date('2024-02-01T00:00:00Z')),
+      now,
       cooldownKv: options?.cooldownKv,
       exportLogKv: options?.exportLogKv,
       logger: options?.logger,
+      adminErrorRecorder,
     });
 
     return { handler, handleExport, adminAccess, rateLimit, sendTextMock, logger: options?.logger };
@@ -205,13 +231,20 @@ describe('createTelegramExportCommandHandler', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith('42');
-    const errorRecord = adminAccessKv.store.get('admin-error:42');
+    const rateLimitKey = 'admin-error-rate:42:admin_help';
+    const errorKey = 'admin-error:42:20240201000000';
+    const limiterRecord = adminAccessKv.store.get(rateLimitKey);
+    const errorRecord = adminAccessKv.store.get(errorKey);
+
+    expect(limiterRecord).toEqual({ value: '1', expirationTtl: 60 });
     expect(errorRecord).toBeDefined();
-    expect(errorRecord?.expirationTtl).toBeUndefined();
+    expect(errorRecord?.expirationTtl).toBe(864000);
     expect(JSON.parse(errorRecord?.value as string)).toEqual({
-      status: 403,
-      description: 'Forbidden: bot was blocked by the user',
-      at: '2024-02-01T00:00:00.000Z',
+      user_id: '42',
+      cmd: 'admin_help',
+      code: 403,
+      desc: 'Forbidden: bot was blocked by the user',
+      when: '2024-02-01T00:00:00.000Z',
     });
   });
 
@@ -244,6 +277,37 @@ describe('createTelegramExportCommandHandler', () => {
     const document = body.get('document');
     expect(document).toBeInstanceOf(Blob);
     await expect((document as Blob).text()).resolves.toBe('message_id,chat_id,utm_source\n1,chat-1,src_demo\n');
+  });
+
+  it('records export delivery failure diagnostics when Telegram returns an error', async () => {
+    const adminAccessKv = createFakeKv();
+    const invalidate = vi.fn();
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true), invalidate };
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: false, description: 'Forbidden: bot was blocked by the user' }),
+        { status: 403 },
+      ),
+    );
+
+    const { handler } = createHandler({ adminAccessKv, adminAccess, logger });
+
+    const response = await handler(createContext({ command: '/export' }));
+
+    expect(response?.status).toBe(502);
+    await expect(response?.json()).resolves.toEqual({ error: 'Failed to send export to Telegram' });
+    expect(invalidate).toHaveBeenCalledWith('42');
+    const rateLimitKey = 'admin-error-rate:42:export_upload';
+    const errorKey = 'admin-error:42:20240201000000';
+    expect(adminAccessKv.store.get(rateLimitKey)).toEqual({ value: '1', expirationTtl: 60 });
+    expect(JSON.parse(adminAccessKv.store.get(errorKey)?.value as string)).toEqual({
+      user_id: '42',
+      cmd: 'export_upload',
+      code: 403,
+      desc: 'Forbidden: bot was blocked by the user',
+      when: '2024-02-01T00:00:00.000Z',
+    });
   });
 
   it('parses date arguments and converts to UTC ISO', async () => {
@@ -466,12 +530,15 @@ describe('createTelegramExportCommandHandler', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith('42');
-    const errorRecord = adminAccessKv.store.get('admin-error:42');
-    expect(errorRecord).toBeDefined();
-    expect(JSON.parse(errorRecord?.value as string)).toEqual({
-      status: 400,
-      description: 'Bad Request: chat not found',
-      at: '2024-02-01T00:00:00.000Z',
+    const rateLimitKey = 'admin-error-rate:42:admin_status';
+    const errorKey = 'admin-error:42:20240201000000';
+    expect(adminAccessKv.store.get(rateLimitKey)).toEqual({ value: '1', expirationTtl: 60 });
+    expect(JSON.parse(adminAccessKv.store.get(errorKey)?.value as string)).toEqual({
+      user_id: '42',
+      cmd: 'admin_status',
+      code: 400,
+      desc: 'Bad Request: chat not found',
+      when: '2024-02-01T00:00:00.000Z',
     });
   });
 });

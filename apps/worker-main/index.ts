@@ -14,6 +14,7 @@ import {
   createAdminAccess,
   createAccessDiagnosticsRoute,
   createAdminExportRoute,
+  createAdminCommandErrorRecorder,
   createCsvExportHandler,
   createEnvzRoute,
   createImmediateBroadcastSender,
@@ -26,6 +27,7 @@ import {
   type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
   type SendBroadcast,
+  type AdminCommandErrorRecorder,
 } from './features';
 import {
   createRouter,
@@ -375,6 +377,7 @@ const createAdminRoutes = (
   env: WorkerEnv,
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
+  adminErrorRecorder: AdminCommandErrorRecorder,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -392,6 +395,7 @@ const createAdminRoutes = (
       env,
       composition,
       adminAccess,
+      adminErrorRecorder,
     }),
   };
 
@@ -416,6 +420,7 @@ const createTransformPayload = (
   env: WorkerEnv,
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
+  adminErrorRecorder: AdminCommandErrorRecorder,
 ) => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
@@ -439,6 +444,7 @@ const createTransformPayload = (
         exportLogKv: env.ADMIN_EXPORT_LOG,
         logger: console,
         now: () => new Date(),
+        adminErrorRecorder,
       })
     : undefined;
 
@@ -464,6 +470,7 @@ const createTransformPayload = (
         sendBroadcast: broadcastSender,
         logger: console,
         now: () => new Date(),
+        adminErrorRecorder,
       })
     : undefined;
 
@@ -550,7 +557,13 @@ const createRequestHandler = (env: WorkerEnv) => {
   const typingIndicator = createTypingIndicatorIfAvailable(composition.ports.messaging);
 
   const adminAccess = createAdminAccessIfConfigured(env);
-  const adminRoutes = createAdminRoutes(env, composition, adminAccess);
+  const adminErrorRecorder = createAdminCommandErrorRecorder({
+    primaryKv: env.ADMIN_TG_IDS,
+    fallbackKv: env.ADMIN_TG_IDS ? undefined : env.ADMIN_EXPORT_KV,
+    logger: console,
+    now: () => new Date(),
+  });
+  const adminRoutes = createAdminRoutes(env, composition, adminAccess, adminErrorRecorder);
 
   return createRouter({
     dialogEngine: composition.dialogEngine,
@@ -558,7 +571,7 @@ const createRequestHandler = (env: WorkerEnv) => {
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
-    transformPayload: createTransformPayload(env, composition, adminAccess),
+    transformPayload: createTransformPayload(env, composition, adminAccess, adminErrorRecorder),
     admin: adminRoutes,
   });
 };

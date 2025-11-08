@@ -2,6 +2,11 @@ import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort, RateLimitPort } from '../../ports';
 import type { AdminAccess, AdminAccessKvNamespace } from '../admin-access';
+import {
+  type AdminCommandErrorRecorder,
+  extractTelegramErrorDetails,
+  shouldInvalidateAdminAccess,
+} from '../admin-access/admin-messaging-errors';
 import type { AdminExportRequest } from './admin-export-route';
 
 interface Logger {
@@ -10,10 +15,10 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
-export interface AdminExportRateLimitKvNamespace {
-  get(key: string, type: 'text'): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl: number }): Promise<void>;
-}
+export type AdminExportRateLimitKvNamespace = Pick<
+  KVNamespace,
+  'get' | 'put' | 'list' | 'delete'
+>;
 
 export type AdminExportLogKvNamespace = Pick<KVNamespace, 'put'>;
 
@@ -28,6 +33,7 @@ export interface CreateTelegramExportCommandHandlerOptions {
   exportLogKv?: AdminExportLogKvNamespace;
   logger?: Logger;
   now?: () => Date;
+  adminErrorRecorder?: AdminCommandErrorRecorder;
 }
 
 interface ExportArguments {
@@ -85,28 +91,6 @@ const createLogger = (logger?: Logger) => ({
     logger?.error?.(message, details);
   },
 });
-
-interface TelegramErrorDetails {
-  status?: number;
-  description?: string;
-}
-
-const extractTelegramErrorDetails = (error: unknown): TelegramErrorDetails => {
-  if (typeof error === 'object' && error !== null && 'status' in error) {
-    const { status } = error as { status?: unknown };
-    const statusValue = typeof status === 'number' && Number.isFinite(status) ? status : undefined;
-
-    let description: string | undefined;
-    if ('description' in error) {
-      const descriptionValue = (error as { description?: unknown }).description;
-      description = typeof descriptionValue === 'string' ? descriptionValue : undefined;
-    }
-
-    return { status: statusValue, description };
-  }
-
-  return {};
-};
 
 const normalizeErrorForLog = (error: unknown) =>
   error instanceof Error ? { name: error.name, message: error.message } : String(error);
@@ -184,39 +168,11 @@ export const createTelegramExportCommandHandler = (
   const logger = createLogger(options.logger);
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
 
-  const handleAdminErrorSideEffects = async (
-    userId: string,
-    details: TelegramErrorDetails,
-  ) => {
-    if (!details.status || (details.status !== 400 && details.status !== 403)) {
-      return;
-    }
-
-    options.adminAccess.invalidate?.(userId);
-
-    const adminErrorKv = options.adminAccessKv ?? options.cooldownKv;
-    if (adminErrorKv) {
-      const at = now().toISOString();
-      try {
-        await adminErrorKv.put(
-          `admin-error:${userId}`,
-          JSON.stringify({ status: details.status, description: details.description, at }),
-        );
-      } catch (kvError) {
-        logger.warn('failed to write admin error kv', {
-          userId,
-          status: details.status,
-          description: details.description,
-          error: normalizeErrorForLog(kvError),
-        });
-      }
-    }
-  };
-
   const logAdminMessagingError = async (
     message: string,
     contextDetails: { userId: string; chatId: string; threadId?: string },
     error: unknown,
+    commandLabel: string,
   ) => {
     const telegramDetails = extractTelegramErrorDetails(error);
     const logDetails: Record<string, unknown> = {
@@ -234,7 +190,16 @@ export const createTelegramExportCommandHandler = (
 
     logger.error(message, logDetails);
 
-    await handleAdminErrorSideEffects(contextDetails.userId, telegramDetails);
+    if (shouldInvalidateAdminAccess(telegramDetails)) {
+      options.adminAccess.invalidate?.(contextDetails.userId);
+    }
+
+    await options.adminErrorRecorder?.record({
+      userId: contextDetails.userId,
+      command: commandLabel,
+      error,
+      details: telegramDetails,
+    });
   };
 
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
@@ -270,6 +235,7 @@ export const createTelegramExportCommandHandler = (
             threadId: context.chat.threadId,
           },
           error,
+          'admin_help',
         );
 
         return json({ error: 'Failed to send admin help response' }, { status: 502 });
@@ -312,6 +278,7 @@ export const createTelegramExportCommandHandler = (
             threadId: context.chat.threadId,
           },
           error,
+          'admin_status',
         );
 
         return json({ error: 'Failed to send admin status response' }, { status: 502 });
@@ -468,10 +435,52 @@ export const createTelegramExportCommandHandler = (
     }
 
     if (!telegramResponse.ok) {
+      let description: string | undefined;
+      try {
+        const responseText = await telegramResponse.text();
+        try {
+          const parsed = JSON.parse(responseText) as { description?: unknown };
+          if (typeof parsed.description === 'string') {
+            description = parsed.description;
+          }
+        } catch (parseError) {
+          logger.warn('failed to parse telegram export error response', {
+            status: telegramResponse.status,
+            error:
+              parseError instanceof Error
+                ? { name: parseError.name, message: parseError.message }
+                : String(parseError),
+          });
+        }
+      } catch (readError) {
+        logger.warn('failed to read telegram export error response body', {
+          status: telegramResponse.status,
+          error:
+            readError instanceof Error
+              ? { name: readError.name, message: readError.message }
+              : String(readError),
+        });
+      }
+
+      const failureDetails = { status: telegramResponse.status, description };
+
       logger.error('failed to upload export to telegram', {
         status: telegramResponse.status,
         statusText: telegramResponse.statusText,
+        description,
       });
+
+      if (shouldInvalidateAdminAccess(failureDetails)) {
+        options.adminAccess.invalidate?.(userId);
+      }
+
+      await options.adminErrorRecorder?.record({
+        userId,
+        command: 'export_upload',
+        error: failureDetails,
+        details: failureDetails,
+      });
+
       return json({ error: 'Failed to send export to Telegram' }, { status: 502 });
     }
 

@@ -21,6 +21,7 @@ describe('createAccessDiagnosticsRoute', () => {
   it('returns whitelist with successful messaging health entries', async () => {
     const kv = {
       get: vi.fn().mockResolvedValue('{"whitelist":["123","456"]}'),
+      list: vi.fn().mockResolvedValue({ keys: [], list_complete: true }),
     };
     const sendTyping = vi.fn().mockResolvedValue(undefined);
     const sendText = vi.fn().mockResolvedValue({ messageId: '1' });
@@ -41,7 +42,12 @@ describe('createAccessDiagnosticsRoute', () => {
       { userId: '123', status: 'ok' },
       { userId: '456', status: 'ok' },
     ]);
-    expect(payload.adminErrors).toEqual({});
+    expect(payload.adminMessagingErrors).toEqual({
+      source: 'primary',
+      entries: [],
+      total: 0,
+      topByCode: [],
+    });
 
     expect(sendTyping).toHaveBeenCalledTimes(2);
     expect(sendText).toHaveBeenCalledTimes(2);
@@ -50,6 +56,7 @@ describe('createAccessDiagnosticsRoute', () => {
   it('reports messaging failure status when sendTyping rejects', async () => {
     const kv = {
       get: vi.fn().mockResolvedValue('{"whitelist":["789"]}'),
+      list: vi.fn().mockResolvedValue({ keys: [], list_complete: true }),
     };
     const error = Object.assign(new Error('blocked'), { status: 403 });
     const sendTyping = vi.fn().mockRejectedValue(error);
@@ -69,7 +76,12 @@ describe('createAccessDiagnosticsRoute', () => {
     expect(payload.health).toEqual([
       { userId: '789', status: 403, lastError: 'blocked' },
     ]);
-    expect(payload.adminErrors).toEqual({});
+    expect(payload.adminMessagingErrors).toEqual({
+      source: 'primary',
+      entries: [],
+      total: 0,
+      topByCode: [],
+    });
     expect(sendText).not.toHaveBeenCalled();
   });
 
@@ -80,13 +92,17 @@ describe('createAccessDiagnosticsRoute', () => {
           return Promise.resolve('{"whitelist":["321"]}');
         }
 
-        if (key === 'admin-error:321') {
+        if (key === 'admin-error:321:20240301000000') {
           return Promise.resolve(
-            '{"status":403,"description":"Forbidden","at":"2024-03-01T00:00:00.000Z"}',
+            '{"user_id":"321","cmd":"admin_help","code":403,"desc":"Forbidden","when":"2024-03-01T00:00:00.000Z"}',
           );
         }
 
         return Promise.resolve(null);
+      }),
+      list: vi.fn().mockResolvedValue({
+        keys: [{ name: 'admin-error:321:20240301000000' }],
+        list_complete: true,
       }),
     };
     const sendTyping = vi.fn().mockResolvedValue(undefined);
@@ -102,12 +118,20 @@ describe('createAccessDiagnosticsRoute', () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.adminErrors).toEqual({
-      '321': {
-        status: 403,
-        description: 'Forbidden',
-        at: '2024-03-01T00:00:00.000Z',
-      },
+    expect(payload.adminMessagingErrors).toEqual({
+      source: 'primary',
+      entries: [
+        {
+          key: 'admin-error:321:20240301000000',
+          userId: '321',
+          command: 'admin_help',
+          code: 403,
+          desc: 'Forbidden',
+          when: '2024-03-01T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+      topByCode: [{ code: 403, count: 1 }],
     });
   });
 });

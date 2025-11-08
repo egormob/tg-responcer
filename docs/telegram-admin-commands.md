@@ -33,8 +33,20 @@ HTTP-маршрут диагностики whitelisting доступен по а
     { "userId": "456", "status": 403, "lastError": "blocked" }
   ],
   "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}",
-  "adminErrors": {
-    "456": { "status": 403, "description": "Forbidden: bot was blocked by the user", "at": "2024-03-01T00:00:00.000Z" }
+  "adminMessagingErrors": {
+    "source": "primary",
+    "total": 1,
+    "topByCode": [{ "code": 403, "count": 1 }],
+    "entries": [
+      {
+        "key": "admin-error:456:20240301000000",
+        "userId": "456",
+        "command": "admin_help",
+        "code": 403,
+        "desc": "Forbidden: bot was blocked by the user",
+        "when": "2024-03-01T00:00:00.000Z"
+      }
+    ]
   }
 }
 ```
@@ -42,7 +54,7 @@ HTTP-маршрут диагностики whitelisting доступен по а
 - `whitelist` — нормализованный список ID из `ADMIN_TG_IDS`.
 - `kvRaw` — исходное значение ключа `whitelist` в KV.
 - `health` — попытка отправить безопасное сообщение каждому whitelisted ID. `status` равен `"ok"` при успехе, HTTP-статусу `TelegramApiError` при сбое или `"skipped"`, если порт сообщений недоступен. `lastError` содержит текст последней ошибки.
-- `adminErrors` — последняя зафиксированная ошибка отправки `/admin`-сообщений для каждого `userId`. Запись появляется, если Telegram вернул `400/403` и содержит `status`, `description` и метку времени `at` (ISO 8601).
+- `adminMessagingErrors` — последние диагностические записи отправки `/admin`-команд. Каждое событие хранится отдельным ключом `admin-error:<userId>:<yyyymmddHHmmss>` с TTL 10 дней и включает поля `command`, `code`, `desc` и `when`. Поле `source` показывает, из какого KV читались данные (`primary` — `ADMIN_TG_IDS`, `fallback` — запасной биндинг, если whitelist недоступен). `topByCode` агрегирует счётчики по статусам.
 
 Маршрут помогает проверять whitelisting и доступность Telegram-адаптера без реальных рассылок.
 

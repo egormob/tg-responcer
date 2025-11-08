@@ -1,6 +1,4 @@
-export interface AdminAccessKvNamespace {
-  get(key: string, type?: 'text'): Promise<string | null>;
-}
+export type AdminAccessKvNamespace = Pick<KVNamespace, 'get' | 'put' | 'list' | 'delete'>;
 
 export interface CreateAdminAccessOptions {
   kv: AdminAccessKvNamespace;
