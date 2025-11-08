@@ -1,16 +1,13 @@
 import { json } from '../../shared';
+import type { IncomingMessage } from '../../core';
 import type { TelegramAdminCommandContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
 import type {
-  BroadcastJob,
-  BroadcastMessagePayload,
-  BroadcastQueue,
-} from './broadcast-queue';
-import {
-  DEFAULT_MAX_TEXT_LENGTH,
-  buildBroadcastPayload,
-} from './broadcast-payload';
+  BroadcastSendInput,
+  BroadcastSendResult,
+  SendBroadcast,
+} from './minimal-broadcast-service';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -18,145 +15,37 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
-export interface CreateTelegramBroadcastCommandHandlerOptions {
-  adminAccess: AdminAccess;
-  messaging: Pick<MessagingPort, 'sendText'>;
-  queue: Pick<BroadcastQueue, 'enqueue'>;
-  enqueueBroadcast?: EnqueueBroadcastJob;
-  resolveRequestedBy?: (context: TelegramAdminCommandContext) => string | undefined;
-  maxTextLength?: number;
-  logger?: Logger;
-}
+const DEFAULT_MAX_TEXT_LENGTH = 4096;
+const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 
-interface EnqueueBroadcastJobInput {
-  payload: BroadcastMessagePayload;
-  requestedBy: string;
-}
-
-interface EnqueueBroadcastJobResult {
-  jobId: string;
-  enqueuedAt: Date;
-  payload: BroadcastMessagePayload;
-  requestedBy?: string;
-}
-
-type EnqueueBroadcastJob = (
-  input: EnqueueBroadcastJobInput,
-) => Promise<EnqueueBroadcastJobResult>;
-
-interface BroadcastFilters {
-  chatIds?: string[];
-  userIds?: string[];
-  languageCodes?: string[];
-}
-
-interface ParsedBroadcastCommand {
-  intent: 'help' | 'preview' | 'send' | 'status';
-  text?: string;
-  filters?: BroadcastFilters;
-}
-
-const BROADCAST_HELP_MESSAGE = [
-  'Команды рассылок:',
-  '- /broadcast help — показать эту подсказку.',
-  '- /broadcast preview <текст> — отправить пробное сообщение только вам.',
-  '- /broadcast send [--chat=<id>] [--user=<id>] [--lang=<code>] <текст> — поставить рассылку в очередь. Для сложных сценариев используйте HTTP POST /admin/broadcast.',
+const BROADCAST_PROMPT_MESSAGE = [
+  'Введите текст рассылки (до 4096 символов).',
+  'Следующее сообщение уйдёт всем получателям минимальной модели.',
 ].join('\n');
 
-const BROADCAST_STATUS_MESSAGE = [
-  'Рассылки доступны по HTTP POST /admin/broadcast.',
-  'Укажите X-Admin-Token и X-Admin-Actor заголовки и передайте JSON {"text":"...","filters":{"chatIds":["123"]}}.',
-  'Команда /broadcast send повторяет этот формат и проверяет фильтры до отправки запроса.',
-].join('\n');
+const buildTooLongMessage = (limit: number) =>
+  `Текст рассылки превышает лимит ${limit} символов. Отправьте более короткое сообщение.`;
 
-const parseListArgument = (value: string | undefined): string[] | undefined => {
-  if (!value) {
-    return undefined;
-  }
+const BROADCAST_EMPTY_MESSAGE =
+  'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
 
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
+const BROADCAST_FAILURE_MESSAGE =
+  'Не удалось отправить рассылку. Попробуйте ещё раз позже или обратитесь к оператору.';
 
-  return trimmed.split(',').map((item) => item.trim()).filter((item) => item.length > 0);
-};
+const buildSuccessMessage = (delivered: number) =>
+  [
+    '📣 Рассылка отправлена.',
+    `Получателей: ${delivered}.`,
+  ].join('\n');
 
-const mergeFilters = (target: BroadcastFilters | undefined, update: Partial<BroadcastFilters>) => {
-  const result: BroadcastFilters = { ...target };
+interface PendingBroadcast {
+  chatId: string;
+  threadId?: string;
+  expiresAt: number;
+}
 
-  if (update.chatIds?.length) {
-    result.chatIds = Array.from(new Set([...(result.chatIds ?? []), ...update.chatIds]));
-  }
-
-  if (update.userIds?.length) {
-    result.userIds = Array.from(new Set([...(result.userIds ?? []), ...update.userIds]));
-  }
-
-  if (update.languageCodes?.length) {
-    result.languageCodes = Array.from(new Set([...(result.languageCodes ?? []), ...update.languageCodes]));
-  }
-
-  return result;
-};
-
-const parseBroadcastCommand = (argument: string | undefined): ParsedBroadcastCommand => {
-  if (!argument) {
-    return { intent: 'help' };
-  }
-
-  const trimmed = argument.trim();
-  if (trimmed.length === 0) {
-    return { intent: 'help' };
-  }
-
-  const tokens = trimmed.split(/\s+/);
-  const [firstTokenRaw, ...restTokens] = tokens;
-  const firstToken = firstTokenRaw.toLowerCase();
-
-  if (firstToken === 'help') {
-    return { intent: 'help' };
-  }
-
-  if (firstToken === 'status') {
-    return { intent: 'status' };
-  }
-
-  if (firstToken !== 'preview' && firstToken !== 'send') {
-    // Команда без известной подкоманды трактуется как запрос помощи.
-    return { intent: 'help' };
-  }
-
-  let filters: BroadcastFilters | undefined;
-  const textTokens: string[] = [];
-
-  for (const token of restTokens) {
-    if (token.startsWith('--chat=')) {
-      filters = mergeFilters(filters, { chatIds: parseListArgument(token.slice('--chat='.length)) });
-      continue;
-    }
-
-    if (token.startsWith('--user=')) {
-      filters = mergeFilters(filters, { userIds: parseListArgument(token.slice('--user='.length)) });
-      continue;
-    }
-
-    if (token.startsWith('--lang=')) {
-      filters = mergeFilters(filters, { languageCodes: parseListArgument(token.slice('--lang='.length)) });
-      continue;
-    }
-
-    textTokens.push(token);
-  }
-
-  const text = textTokens.join(' ').trim();
-
-  return {
-    intent: firstToken,
-    text: text.length > 0 ? text : undefined,
-    filters,
-  } satisfies ParsedBroadcastCommand;
-};
+const toErrorDetails = (error: unknown) =>
+  error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) };
 
 const createLogger = (logger?: Logger) => ({
   info(message: string, details?: Record<string, unknown>) {
@@ -170,67 +59,70 @@ const createLogger = (logger?: Logger) => ({
   },
 });
 
-const hasAnyFilter = (filters: BroadcastFilters | undefined) =>
-  Boolean(filters?.chatIds?.length || filters?.userIds?.length || filters?.languageCodes?.length);
+export interface CreateTelegramBroadcastCommandHandlerOptions {
+  adminAccess: AdminAccess;
+  messaging: Pick<MessagingPort, 'sendText'>;
+  sendBroadcast: SendBroadcast;
+  maxTextLength?: number;
+  pendingTtlMs?: number;
+  now?: () => Date;
+  logger?: Logger;
+}
 
-const toEnqueueResult = (job: BroadcastJob): EnqueueBroadcastJobResult => ({
-  jobId: job.id,
-  enqueuedAt: job.createdAt,
-  payload: job.payload,
-  requestedBy: job.requestedBy,
-});
+export interface TelegramBroadcastCommandHandler {
+  handleCommand: (
+    context: TelegramAdminCommandContext,
+  ) => Promise<Response | void> | Response | void;
+  handleMessage: (
+    message: IncomingMessage,
+  ) => Promise<Response | 'handled' | void> | Response | 'handled' | void;
+}
+
+const isBroadcastCommand = (context: TelegramAdminCommandContext) => {
+  const normalized = context.command.toLowerCase();
+
+  if (normalized === '/broadcast') {
+    return true;
+  }
+
+  if (normalized !== '/admin') {
+    return false;
+  }
+
+  const argument = context.argument?.trim();
+  if (!argument) {
+    return false;
+  }
+
+  const [namespace] = argument.split(/\s+/, 1);
+  return namespace?.toLowerCase() === 'broadcast';
+};
+
+const createBroadcastResponse = (result: BroadcastSendResult) => {
+  const delivered = Math.max(0, result.delivered);
+  return buildSuccessMessage(delivered);
+};
 
 export const createTelegramBroadcastCommandHandler = (
   options: CreateTelegramBroadcastCommandHandlerOptions,
-) => {
+): TelegramBroadcastCommandHandler => {
   const logger = createLogger(options.logger);
+  const maxTextLength = options.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH;
+  const pendingTtlMs = Math.max(1, options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS);
+  const now = options.now ?? (() => new Date());
 
-  const sendHelpMessage = async (context: TelegramAdminCommandContext, text: string) => {
-    try {
-      await options.messaging.sendText({
-        chatId: context.chat.id,
-        threadId: context.chat.threadId,
-        text,
-      });
+  const pending = new Map<string, PendingBroadcast>();
 
-      logger.info('broadcast help sent', {
-        userId: context.from.userId,
-        chatId: context.chat.id,
-        threadId: context.chat.threadId,
-      });
-    } catch (error) {
-      logger.error('failed to send broadcast help message', {
-        userId: context.from.userId,
-        chatId: context.chat.id,
-        threadId: context.chat.threadId,
-        error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-      });
-
-      return json({ error: 'Failed to send broadcast help response' }, { status: 502 });
+  const cleanupExpired = (timestamp: number) => {
+    for (const [key, entry] of pending.entries()) {
+      if (entry.expiresAt <= timestamp) {
+        pending.delete(key);
+      }
     }
-
-    return json({ help: 'sent' }, { status: 200 });
   };
 
-  return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
-    const normalizedCommand = context.command.toLowerCase();
-    let parsed: ParsedBroadcastCommand | undefined;
-
-    if (normalizedCommand === '/broadcast') {
-      parsed = parseBroadcastCommand(context.argument);
-    } else if (normalizedCommand === '/admin') {
-      const trimmedArgument = context.argument?.trim();
-      if (!trimmedArgument) {
-        return undefined;
-      }
-
-      const [firstToken, ...rest] = trimmedArgument.split(/\s+/);
-      if (firstToken.toLowerCase() !== 'broadcast') {
-        return undefined;
-      }
-
-      parsed = parseBroadcastCommand(rest.join(' '));
-    } else {
+  const handleCommand = async (context: TelegramAdminCommandContext): Promise<Response | void> => {
+    if (!isBroadcastCommand(context)) {
       return undefined;
     }
 
@@ -239,143 +131,170 @@ export const createTelegramBroadcastCommandHandler = (
       return undefined;
     }
 
-    if (!parsed) {
+    const currentTime = now().getTime();
+    cleanupExpired(currentTime);
+
+    pending.set(context.from.userId, {
+      chatId: context.chat.id,
+      threadId: context.chat.threadId,
+      expiresAt: currentTime + pendingTtlMs,
+    });
+
+    try {
+      await options.messaging.sendText({
+        chatId: context.chat.id,
+        threadId: context.chat.threadId,
+        text: BROADCAST_PROMPT_MESSAGE,
+      });
+
+      logger.info('broadcast awaiting text', {
+        userId: context.from.userId,
+        chatId: context.chat.id,
+        threadId: context.chat.threadId ?? null,
+      });
+    } catch (error) {
+      pending.delete(context.from.userId);
+
+      logger.error('failed to send broadcast prompt', {
+        userId: context.from.userId,
+        chatId: context.chat.id,
+        threadId: context.chat.threadId ?? null,
+        error: toErrorDetails(error),
+      });
+
+      return json({ error: 'Failed to send broadcast prompt' }, { status: 502 });
+    }
+
+    return json({ status: 'awaiting_text' }, { status: 200 });
+  };
+
+  const handleMessage = async (message: IncomingMessage): Promise<'handled' | void> => {
+    const currentTime = now().getTime();
+    cleanupExpired(currentTime);
+
+    const entry = pending.get(message.user.userId);
+    if (!entry) {
       return undefined;
     }
 
-    if (parsed.intent === 'help') {
-      return sendHelpMessage(context, BROADCAST_HELP_MESSAGE);
+    pending.delete(message.user.userId);
+
+    if (entry.chatId !== message.chat.id) {
+      return undefined;
     }
 
-    if (parsed.intent === 'status') {
-      return sendHelpMessage(context, BROADCAST_STATUS_MESSAGE);
-    }
+    const text = message.text ?? '';
+    const trimmed = text.trim();
 
-    if (parsed.intent === 'preview') {
-      if (!parsed.text) {
-        return json({ error: 'Broadcast text must not be empty' }, { status: 400 });
-      }
-
-      try {
-        const result = await options.messaging.sendText({
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          text: parsed.text,
-        });
-
-        logger.info('broadcast preview sent', {
-          userId: context.from.userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          messageId: result?.messageId ?? null,
-        });
-
-        return json({ preview: 'sent', messageId: result?.messageId ?? null }, { status: 200 });
-      } catch (error) {
-        logger.error('failed to send broadcast preview', {
-          userId: context.from.userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-        });
-
-        return json({ error: 'Failed to send broadcast preview' }, { status: 502 });
-      }
-    }
-
-    if (parsed.intent === 'send') {
-      if (!parsed.text) {
-        return json({ error: 'Broadcast text must not be empty' }, { status: 400 });
-      }
-
-      if (!hasAnyFilter(parsed.filters)) {
-        return json(
-          {
-            error: 'Укажите хотя бы один фильтр (--chat, --user или --lang), чтобы ограничить аудиторию.',
-          },
-          { status: 400 },
-        );
-      }
-      const maxTextLength = options.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH;
-
-      let payload: BroadcastMessagePayload;
-      try {
-        payload = buildBroadcastPayload(
-          {
-            text: parsed.text,
-            filters: parsed.filters,
-          },
-          { maxTextLength },
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Invalid broadcast payload';
-        return json({ error: message }, { status: 400 });
-      }
-
-      const requestedBy = options.resolveRequestedBy?.(context) ?? context.from.userId;
-      if (!requestedBy) {
-        return json({ error: 'Failed to determine broadcast requester' }, { status: 400 });
-      }
-
-      const enqueue = options.enqueueBroadcast
-        ?? ((input: EnqueueBroadcastJobInput) =>
-          Promise.resolve(toEnqueueResult(options.queue.enqueue(input))));
-
-      let job: EnqueueBroadcastJobResult;
-      try {
-        job = await enqueue({ payload, requestedBy });
-      } catch (error) {
-        logger.error('failed to enqueue broadcast job from telegram command', {
-          userId: context.from.userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-        });
-
-        return json({ error: 'Failed to enqueue broadcast job' }, { status: 503 });
-      }
-
-      const confirmationMessage = [
-        '📣 Рассылка поставлена в очередь.',
-        `ID задачи: ${job.jobId}`,
-        'Проверить статус: /broadcast status',
-      ].join('\n');
+    if (trimmed.length === 0) {
+      logger.warn('broadcast text rejected', {
+        userId: message.user.userId,
+        reason: 'empty',
+      });
 
       try {
         await options.messaging.sendText({
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          text: confirmationMessage,
-        });
-
-        logger.info('broadcast job enqueued via telegram command', {
-          userId: context.from.userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          jobId: job.jobId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_EMPTY_MESSAGE,
         });
       } catch (error) {
-        logger.error('failed to send broadcast confirmation message', {
-          userId: context.from.userId,
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          jobId: job.jobId,
-          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+        logger.error('failed to send broadcast empty warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
         });
       }
 
-      return json(
-        {
-          status: 'queued',
-          jobId: job.jobId,
-          enqueuedAt: job.enqueuedAt.toISOString(),
-          requestedBy: job.requestedBy ?? requestedBy,
-          filters: job.payload.filters ?? null,
-        },
-        { status: 202 },
-      );
+      return 'handled';
     }
 
-    return undefined;
+    if (text.length > maxTextLength) {
+      logger.warn('broadcast text rejected', {
+        userId: message.user.userId,
+        reason: 'too_long',
+        length: text.length,
+        limit: maxTextLength,
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: buildTooLongMessage(maxTextLength),
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast length warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+      }
+
+      return 'handled';
+    }
+
+    let result: BroadcastSendResult;
+
+    try {
+      const payload: BroadcastSendInput = {
+        text,
+        requestedBy: message.user.userId,
+      };
+
+      result = await options.sendBroadcast(payload);
+
+      logger.info('broadcast sent via telegram command', {
+        userId: message.user.userId,
+        delivered: result.delivered,
+        failed: result.failed,
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: createBroadcastResponse(result),
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast confirmation', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+      }
+    } catch (error) {
+      logger.error('broadcast send failed via telegram command', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        error: toErrorDetails(error),
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_FAILURE_MESSAGE,
+        });
+      } catch (sendError) {
+        logger.error('failed to send broadcast failure message', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(sendError),
+        });
+      }
+    }
+
+    return 'handled';
   };
+
+  return {
+    handleCommand,
+    handleMessage,
+  } satisfies TelegramBroadcastCommandHandler;
 };
