@@ -109,6 +109,25 @@ const UPSERT_USER_SQL = `
     updated_at = excluded.updated_at;
 `;
 
+const UPSERT_USER_SQL_FALLBACK = `
+  INSERT INTO users (
+    user_id,
+    username,
+    first_name,
+    last_name,
+    language_code,
+    metadata,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(user_id) DO UPDATE SET
+    username = excluded.username,
+    first_name = excluded.first_name,
+    last_name = excluded.last_name,
+    language_code = excluded.language_code,
+    metadata = excluded.metadata,
+    updated_at = excluded.updated_at;
+`;
+
 const CHECK_MESSAGE_DUPLICATE_SQL = `
   SELECT id FROM messages
   WHERE user_id = ? AND metadata = ?
@@ -261,25 +280,96 @@ const mapRowToStoredMessage = (row: MessageRow): StoredMessage => ({
 
 export const createD1StorageAdapter = (options: D1StorageAdapterOptions): StoragePort => {
   const logger: Logger = options.logger ?? NOOP_LOGGER;
+  let supportsUtmColumn = true;
 
   return {
     async saveUser(input: UserProfile & { updatedAt: Date }) {
       const metadataText = serializeMetadata(input.metadata);
 
+      const runStatement = async (useUtmColumn: boolean) => {
+        const statement = options.db.prepare(useUtmColumn ? UPSERT_USER_SQL : UPSERT_USER_SQL_FALLBACK);
+
+        const bindings = useUtmColumn
+          ? [
+              input.userId,
+              toNullableString(input.username),
+              toNullableString(input.firstName),
+              toNullableString(input.lastName),
+              toNullableString(input.languageCode),
+              toNullableString(input.utmSource),
+              metadataText,
+              toIsoString(input.updatedAt),
+            ]
+          : [
+              input.userId,
+              toNullableString(input.username),
+              toNullableString(input.firstName),
+              toNullableString(input.lastName),
+              toNullableString(input.languageCode),
+              metadataText,
+              toIsoString(input.updatedAt),
+            ];
+
+        return statement.bind(...bindings).run<D1Result>();
+      };
+
+      const isSchemaMismatchMessage = (message: string | undefined): boolean =>
+        typeof message === 'string' && /no such column:?\s+utm_source/i.test(message);
+
+      const handleSchemaMismatch = async (reason: unknown) => {
+        const errorMessage =
+          reason instanceof Error
+            ? reason.message
+            : typeof reason === 'string'
+            ? reason
+            : undefined;
+
+        logger.warn('[d1-storage] utm_source column missing, disabling usage', {
+          ...
+            (errorMessage
+              ? {
+                  error: errorMessage,
+                }
+              : undefined),
+        });
+
+        supportsUtmColumn = false;
+
+        const fallbackResult = await runStatement(false);
+        if (fallbackResult && typeof fallbackResult === 'object' && 'success' in fallbackResult) {
+          if (fallbackResult.success === false && !isSchemaMismatchMessage(fallbackResult.error)) {
+            throw new Error(fallbackResult.error ?? 'Failed to save user');
+          }
+        }
+      };
+
       await runWithRetry(logger, { operation: 'saveUser', details: { userId: input.userId } }, async () => {
-        await options.db
-          .prepare(UPSERT_USER_SQL)
-          .bind(
-            input.userId,
-            toNullableString(input.username),
-            toNullableString(input.firstName),
-            toNullableString(input.lastName),
-            toNullableString(input.languageCode),
-            toNullableString(input.utmSource),
-            metadataText,
-            toIsoString(input.updatedAt),
-          )
-          .run();
+        if (!supportsUtmColumn) {
+          const result = await runStatement(false);
+          if (result && typeof result === 'object' && 'success' in result && result.success === false) {
+            throw new Error(result.error ?? 'Failed to save user');
+          }
+          return;
+        }
+
+        try {
+          const result = await runStatement(true);
+          if (result && typeof result === 'object' && 'success' in result && result.success === false) {
+            if (isSchemaMismatchMessage(result.error)) {
+              await handleSchemaMismatch(result.error);
+              return;
+            }
+
+            throw new Error(result.error ?? 'Failed to save user');
+          }
+        } catch (error) {
+          if (error instanceof Error && isSchemaMismatchMessage(error.message)) {
+            await handleSchemaMismatch(error);
+            return;
+          }
+
+          throw error;
+        }
       });
     },
 

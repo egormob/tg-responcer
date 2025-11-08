@@ -26,6 +26,7 @@ interface StoredMessageRow {
 
 interface TestDatabaseOptions {
   failOnRecentMessages?: boolean;
+  hasUtmColumn?: boolean;
 }
 
 interface D1PreparedStatement {
@@ -63,6 +64,7 @@ class InMemoryD1Database implements D1Database {
   private readonly users = new Map<string, StoredUserRow>();
   private readonly messages: StoredMessageRow[] = [];
   private nextMessageId = 1;
+  private readonly executedUserQueries: string[] = [];
 
   constructor(private readonly options: TestDatabaseOptions = {}) {}
 
@@ -72,7 +74,20 @@ class InMemoryD1Database implements D1Database {
 
   executeRun<T>(query: string, params: unknown[]): Promise<T> {
     if (query.startsWith('INSERT INTO users')) {
-      this.upsertUser(params);
+      this.executedUserQueries.push(query);
+
+      const hasUtmColumn = this.options.hasUtmColumn !== false;
+
+      if (!hasUtmColumn && query.includes('utm_source')) {
+        return Promise.reject(new Error('no such column: utm_source'));
+      }
+
+      if (query.includes('utm_source')) {
+        this.upsertUserWithUtmColumn(params);
+      } else {
+        this.upsertUserWithoutUtmColumn(params);
+      }
+
       return Promise.resolve({ success: true } as unknown as T);
     }
 
@@ -140,7 +155,11 @@ class InMemoryD1Database implements D1Database {
     return [...this.messages];
   }
 
-  private upsertUser(params: unknown[]) {
+  getExecutedUserQueries(): string[] {
+    return [...this.executedUserQueries];
+  }
+
+  private upsertUserWithUtmColumn(params: unknown[]) {
     const [
       userId,
       username,
@@ -186,6 +205,52 @@ class InMemoryD1Database implements D1Database {
       lastName,
       languageCode,
       utmSource: nextUtmSource,
+      metadata,
+      updatedAt,
+    });
+  }
+
+  private upsertUserWithoutUtmColumn(params: unknown[]) {
+    const [
+      userId,
+      username,
+      firstName,
+      lastName,
+      languageCode,
+      metadata,
+      updatedAt,
+    ] = params as [
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+      string,
+    ];
+
+    const existing = this.users.get(userId);
+
+    if (!existing) {
+      this.users.set(userId, {
+        userId,
+        username,
+        firstName,
+        lastName,
+        languageCode,
+        utmSource: null,
+        metadata,
+        updatedAt,
+      });
+      return;
+    }
+
+    this.users.set(userId, {
+      ...existing,
+      username,
+      firstName,
+      lastName,
+      languageCode,
       metadata,
       updatedAt,
     });
@@ -289,6 +354,47 @@ describe('createD1StorageAdapter', () => {
     const stored = db.getUser('user-2');
     expect(stored).toBeDefined();
     expect(stored?.utmSource).toBeNull();
+  });
+
+  it('falls back to statements without utm_source when the column is missing', async () => {
+    const warn = vi.fn();
+    const db = new InMemoryD1Database({ hasUtmColumn: false });
+    const adapter = createD1StorageAdapter({ db, logger: { warn } });
+
+    await expect(
+      adapter.saveUser({
+        userId: 'user-missing-column',
+        utmSource: 'spring-campaign',
+        updatedAt: baseDate,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      '[d1-storage] utm_source column missing, disabling usage',
+      expect.objectContaining({ error: 'no such column: utm_source' }),
+    );
+
+    const executedQueries = db.getExecutedUserQueries();
+    expect(executedQueries).toHaveLength(2);
+    expect(executedQueries[0]).toContain('utm_source');
+    expect(executedQueries[1]).not.toContain('utm_source');
+
+    await expect(
+      adapter.saveUser({
+        userId: 'user-missing-column',
+        username: 'fallback-user',
+        updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+      }),
+    ).resolves.toBeUndefined();
+
+    const finalQueries = db.getExecutedUserQueries();
+    expect(finalQueries).toHaveLength(3);
+    expect(finalQueries[2]).not.toContain('utm_source');
+
+    const stored = db.getUser('user-missing-column');
+    expect(stored).toBeDefined();
+    expect(stored?.utmSource).toBeNull();
+    expect(stored?.username).toBe('fallback-user');
   });
 
   it('preserves existing utm source when subsequent updates omit the value', async () => {
