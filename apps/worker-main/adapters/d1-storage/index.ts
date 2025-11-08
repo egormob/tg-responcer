@@ -314,7 +314,7 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
       };
 
       const isSchemaMismatchMessage = (message: string | undefined): boolean =>
-        typeof message === 'string' && /no such column:?\s+utm_source/i.test(message);
+        typeof message === 'string' && /(no such column:?|has no column named)\s+utm_source/i.test(message);
 
       const handleSchemaMismatch = async (reason: unknown) => {
         const errorMessage =
