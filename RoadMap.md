@@ -360,6 +360,8 @@
     - **Проверка:** ревью [`apps/worker-main/index.ts`](apps/worker-main/index.ts) подтверждает проверку токена на непустое значение; финальный чек `npm test -- --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts`.
   - **Шаг 4.3 — усиление `/admin/selftest`.**
     - **Результат:** [`apps/worker-main/features/admin-diagnostics/self-test-route.ts`](apps/worker-main/features/admin-diagnostics/self-test-route.ts) выполняет цепочку проверок (OpenAI → Telegram) и возвращает структурированный отчёт с полями `openAiOk`, `telegramOk`, `errors[]` и метриками задержек.
+    - **Расширение:** тот же маршрут обрабатывает `q=utm`, вызывая `StoragePort.saveUser/getRecentMessages` и подтверждая доступность колонки `utm_source` (ответ `200` при `utmDegraded = false`).
+    - **Новая диагностика:** [`apps/worker-main/features/admin-diagnostics/bindings-route.ts`](apps/worker-main/features/admin-diagnostics/bindings-route.ts) добавляет `/admin/diag?q=bindings`, выводя безопасные биндинги для `saveUser` и `getRecentMessages`.
   - **Проверка:** добавлены юнит-тесты для маршрута; финальный чек `npm test -- --run apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts` подтверждает корректность.
   - **Статус:** ✅ Шаг подтверждён: self-test успешно обрабатывает no-op AI, отчёт формирует ошибки без падений ([commit dd01f6e](https://github.com/egormob/tg-responcer/commit/dd01f6eb8acff15e0b88ed906c19200a409315eb), [лог `npm run check:roadmap`](logs/check-roadmap.log)).
 5. Шаг 5 — внешняя проверка `/admin/export` на боевом воркере.

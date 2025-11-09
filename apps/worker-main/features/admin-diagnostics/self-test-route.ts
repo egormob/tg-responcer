@@ -1,16 +1,85 @@
-import type { AiPort, MessagingPort } from '../../ports';
+import type { AiPort, MessagingPort, StoragePort } from '../../ports';
 import { json } from '../../shared/json-response';
 
 export interface CreateSelfTestRouteOptions {
   ai: AiPort;
   messaging: MessagingPort;
+  storage?: StoragePort;
   now?: () => number;
 }
 
 const defaultNow = () => Date.now();
 
+const formatError = (scope: string, reason: unknown) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return `${scope}: ${message}`;
+};
+
 export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
   const now = options.now ?? defaultNow;
+  const storage = options.storage;
+
+  const runUtmDiagnostics = async (): Promise<Response> => {
+    if (!storage) {
+      return json(
+        {
+          test: 'utm',
+          ok: false,
+          errors: ['storage: adapter is not configured'],
+        },
+        { status: 500 },
+      );
+    }
+
+    const timestamp = now();
+    const userId = `admin:selftest:utm:${timestamp.toString(36)}`;
+    const updatedAt = new Date(timestamp);
+    const errors: string[] = [];
+
+    let saveOutcome: { utmDegraded: boolean } | undefined;
+    try {
+      saveOutcome = await storage.saveUser({
+        userId,
+        utmSource: 'src_SELFTEST',
+        metadata: { scope: 'selftest', feature: 'utm' },
+        updatedAt,
+      });
+      // eslint-disable-next-line no-console
+      console.info('[admin:selftest][utm] saveUser result', {
+        userId,
+        utmDegraded: saveOutcome.utmDegraded,
+      });
+    } catch (error) {
+      errors.push(formatError('storage.saveUser', error));
+    }
+
+    let readOk = false;
+    if (errors.length === 0) {
+      try {
+        const messages = await storage.getRecentMessages({ userId, limit: 1 });
+        readOk = Array.isArray(messages);
+      } catch (error) {
+        errors.push(formatError('storage.getRecentMessages', error));
+      }
+    }
+
+    const ok = errors.length === 0 && saveOutcome?.utmDegraded === false;
+    const payload: Record<string, unknown> = {
+      test: 'utm',
+      ok,
+      saveOk: saveOutcome !== undefined && errors.length === 0,
+      readOk,
+      utmDegraded: saveOutcome?.utmDegraded ?? true,
+      errors,
+    };
+
+    if (ok) {
+      // eslint-disable-next-line no-console
+      console.info('[admin:selftest][utm] completed', { userId });
+    }
+
+    return json(payload, { status: ok ? 200 : 500 });
+  };
 
   return async (request: Request): Promise<Response> => {
     if (request.method !== 'GET') {
@@ -21,6 +90,12 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     }
 
     const url = new URL(request.url);
+    const query = url.searchParams.get('q');
+
+    if (query?.toLowerCase() === 'utm') {
+      return runUtmDiagnostics();
+    }
+
     const chatIdParam = url.searchParams.get('chatId') ?? url.searchParams.get('chat_id');
     const threadIdParam = url.searchParams.get('threadId') ?? url.searchParams.get('thread_id') ?? undefined;
     const textParam = url.searchParams.get('text') ?? 'Self-test ping';

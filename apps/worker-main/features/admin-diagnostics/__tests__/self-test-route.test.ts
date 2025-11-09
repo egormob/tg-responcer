@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createEnvzRoute } from '../envz-route';
 import { createSelfTestRoute } from '../self-test-route';
-import type { AiPort, MessagingPort } from '../../../ports';
+import type { AiPort, MessagingPort, StoragePort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/selftest${query}`);
@@ -128,6 +128,71 @@ describe('createSelfTestRoute', () => {
 
     expect(payload.openAiOk).toBe(false);
     expect(payload.errors).toContain('openai: noop adapter response');
+  });
+
+  it('runs storage diagnostics when q=utm', async () => {
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'unused' }),
+    };
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn(),
+      sendText: vi.fn(),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
+    };
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const route = createSelfTestRoute({ ai, messaging, storage, now: () => 1_000 });
+    const response = await route(createRequest('?q=utm'));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+
+    expect(payload).toMatchObject({
+      test: 'utm',
+      ok: true,
+      saveOk: true,
+      readOk: true,
+      utmDegraded: false,
+      errors: [],
+    });
+
+    expect(storage.saveUser).toHaveBeenCalledTimes(1);
+    const savedUser = storage.saveUser.mock.calls[0][0];
+    expect(savedUser.userId).toMatch(/^admin:selftest:utm:/);
+    expect(savedUser.utmSource).toBe('src_SELFTEST');
+    expect(storage.getRecentMessages).toHaveBeenCalledWith({
+      userId: savedUser.userId,
+      limit: 1,
+    });
+  });
+
+  it('signals storage errors for utm diagnostics when adapter missing', async () => {
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'unused' }),
+    };
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn(),
+      sendText: vi.fn(),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
+    };
+
+    const route = createSelfTestRoute({ ai, messaging, now: () => 5_000 });
+    const response = await route(createRequest('?q=utm'));
+
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+
+    expect(payload).toMatchObject({
+      test: 'utm',
+      ok: false,
+      errors: ['storage: adapter is not configured'],
+    });
   });
 });
 
