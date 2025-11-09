@@ -28,6 +28,11 @@ const BROADCAST_PROMPT_MESSAGE = [
   'Следующее сообщение уйдёт всем получателям минимальной модели.',
 ].join('\n');
 
+const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE = [
+  'Мгновенная рассылка поддерживает только /broadcast без дополнительных аргументов.',
+  'Отправьте /broadcast (или /admin broadcast), затем текст сообщения для немедленной доставки.',
+].join('\n');
+
 const buildTooLongMessage = (limit: number) =>
   `Текст рассылки превышает лимит ${limit} символов. Отправьте более короткое сообщение.`;
 
@@ -84,24 +89,47 @@ export interface TelegramBroadcastCommandHandler {
   ) => Promise<Response | 'handled' | void> | Response | 'handled' | void;
 }
 
+const hasArgument = (value: string | undefined): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
 const isBroadcastCommand = (context: TelegramAdminCommandContext) => {
   const normalized = context.command.toLowerCase();
 
   if (normalized === '/broadcast') {
-    return true;
+    return !hasArgument(context.argument);
   }
 
   if (normalized !== '/admin') {
     return false;
   }
 
-  const argument = context.argument?.trim();
-  if (!argument) {
+  if (!hasArgument(context.argument)) {
     return false;
   }
 
-  const [namespace] = argument.split(/\s+/, 1);
-  return namespace?.toLowerCase() === 'broadcast';
+  const parts = context.argument.trim().split(/\s+/);
+  if (parts[0]?.toLowerCase() !== 'broadcast') {
+    return false;
+  }
+
+  return parts.length === 1;
+};
+
+const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
+  if (context.command.toLowerCase() !== '/admin') {
+    return false;
+  }
+
+  if (!hasArgument(context.argument)) {
+    return false;
+  }
+
+  const parts = context.argument.trim().split(/\s+/);
+  if (parts[0]?.toLowerCase() !== 'broadcast') {
+    return false;
+  }
+
+  return parts.length > 1;
 };
 
 const createBroadcastResponse = (result: BroadcastSendResult) => {
@@ -150,7 +178,10 @@ export const createTelegramBroadcastCommandHandler = (
     const currentTime = now().getTime();
     cleanupExpired(currentTime);
 
-    if (!isBroadcastCommand(context)) {
+    const broadcastRequested = isBroadcastCommand(context);
+    const unsupportedAdminBroadcast = !broadcastRequested && isUnsupportedAdminBroadcast(context);
+
+    if (!broadcastRequested && !unsupportedAdminBroadcast) {
       const entry = pending.get(context.from.userId);
       if (entry) {
         pending.delete(context.from.userId);
@@ -170,6 +201,35 @@ export const createTelegramBroadcastCommandHandler = (
     const isAdmin = await options.adminAccess.isAdmin(context.from.userId);
     if (!isAdmin) {
       return undefined;
+    }
+
+    if (unsupportedAdminBroadcast) {
+      try {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE,
+        });
+
+        logger.warn('unsupported broadcast subcommand', {
+          userId: context.from.userId,
+          command: context.command,
+          argument: context.argument ?? null,
+        });
+      } catch (error) {
+        logger.error('failed to send unsupported broadcast subcommand notice', {
+          userId: context.from.userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(context.from.userId, 'broadcast_unsupported_subcommand', error);
+
+        return json({ error: 'Failed to send unsupported broadcast notice' }, { status: 502 });
+      }
+
+      return json({ status: 'unsupported_broadcast_subcommand' }, { status: 200 });
     }
 
     const timestamp = now().getTime();
