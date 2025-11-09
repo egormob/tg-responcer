@@ -3,6 +3,8 @@ import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
 
+export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
+
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json; charset=utf-8' },
@@ -297,16 +299,29 @@ export const createRouter = (options: RouterOptions) => {
           )
         : await executeDialog();
 
-      if (dialogResult.status === 'rate_limited' && options.rateLimitNotifier) {
+      if (dialogResult.status === 'rate_limited') {
+        if (options.rateLimitNotifier) {
+          try {
+            await options.rateLimitNotifier.notify({
+              userId: message.user.userId,
+              chatId: message.chat.id,
+              threadId: message.chat.threadId,
+            });
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.warn('[router] rate limit notifier failed', error);
+          }
+        }
+
         try {
-          await options.rateLimitNotifier.notify({
-            userId: message.user.userId,
+          await options.messaging.sendText({
             chatId: message.chat.id,
             threadId: message.chat.threadId,
+            text: RATE_LIMIT_FALLBACK_TEXT,
           });
         } catch (error) {
           // eslint-disable-next-line no-console
-          console.warn('[router] rate limit notifier failed', error);
+          console.warn('[router] failed to send rate limit fallback', error);
         }
       }
 
