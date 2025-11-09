@@ -42,7 +42,7 @@ describe('DialogEngine', () => {
     ];
 
     const storage: StoragePort = {
-      saveUser: vi.fn().mockResolvedValue(undefined),
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
       appendMessage: vi.fn().mockResolvedValue(undefined),
       getRecentMessages: vi.fn().mockResolvedValue(previousMessages),
     };
@@ -168,7 +168,7 @@ describe('DialogEngine', () => {
     ];
 
     const storage: StoragePort = {
-      saveUser: vi.fn().mockResolvedValue(undefined),
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
       appendMessage: vi.fn().mockResolvedValue(undefined),
       getRecentMessages: vi.fn().mockResolvedValue(storedMessages),
     };
@@ -208,7 +208,7 @@ describe('DialogEngine', () => {
       reply: vi.fn(),
     };
     const storage: StoragePort = {
-      saveUser: vi.fn(),
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
       appendMessage: vi.fn(),
       getRecentMessages: vi.fn(),
     };

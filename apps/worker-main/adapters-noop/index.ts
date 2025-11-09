@@ -102,6 +102,7 @@ export const createNoopAiPort = (options?: CreateNoopPortsOptions): AiPort => ({
 export const createNoopStoragePort = (): StoragePort => ({
   async saveUser(input: UserProfile & { updatedAt: Date }) {
     warn('storage.saveUser', 'noop save', { userId: input.userId });
+    return { utmDegraded: false };
   },
 
   async appendMessage(message: StoredMessage) {

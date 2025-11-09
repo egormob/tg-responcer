@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 
-import { createD1StorageAdapter, type D1Database } from '..';
+import { createD1StorageAdapter, type D1Database, UTM_COLUMN_RECHECK_INTERVAL } from '..';
 
 interface StoredUserRow {
   userId: string;
@@ -66,7 +66,11 @@ class InMemoryD1Database implements D1Database {
   private nextMessageId = 1;
   private readonly executedUserQueries: string[] = [];
 
-  constructor(private readonly options: TestDatabaseOptions = {}) {}
+  private hasUtmColumn: boolean;
+
+  constructor(private readonly options: TestDatabaseOptions = {}) {
+    this.hasUtmColumn = options.hasUtmColumn !== false;
+  }
 
   prepare(query: string): D1PreparedStatement {
     return new InMemoryStatement(query.trim(), this);
@@ -76,9 +80,7 @@ class InMemoryD1Database implements D1Database {
     if (query.startsWith('INSERT INTO users')) {
       this.executedUserQueries.push(query);
 
-      const hasUtmColumn = this.options.hasUtmColumn !== false;
-
-      if (!hasUtmColumn && query.includes('utm_source')) {
+      if (!this.hasUtmColumn && query.includes('utm_source')) {
         return Promise.reject(new Error('no such column: utm_source'));
       }
 
@@ -144,7 +146,29 @@ class InMemoryD1Database implements D1Database {
       return Promise.resolve({ results });
     }
 
+    if (query.toUpperCase().startsWith('PRAGMA TABLE_INFO')) {
+      const columns: Array<{ name: string }> = [
+        { name: 'user_id' },
+        { name: 'username' },
+        { name: 'first_name' },
+        { name: 'last_name' },
+        { name: 'language_code' },
+        { name: 'metadata' },
+        { name: 'updated_at' },
+      ];
+
+      if (this.hasUtmColumn) {
+        columns.splice(5, 0, { name: 'utm_source' });
+      }
+
+      return Promise.resolve({ results: columns as unknown as T[] });
+    }
+
     throw new Error(`Unsupported all query: ${query}`);
+  }
+
+  setHasUtmColumn(hasColumn: boolean) {
+    this.hasUtmColumn = hasColumn;
   }
 
   getUser(userId: string): StoredUserRow | undefined {
@@ -361,14 +385,13 @@ describe('createD1StorageAdapter', () => {
     const db = new InMemoryD1Database({ hasUtmColumn: false });
     const adapter = createD1StorageAdapter({ db, logger: { warn } });
 
-    await expect(
-      adapter.saveUser({
-        userId: 'user-missing-column',
-        utmSource: 'spring-campaign',
-        updatedAt: baseDate,
-      }),
-    ).resolves.toBeUndefined();
+    const firstResult = await adapter.saveUser({
+      userId: 'user-missing-column',
+      utmSource: 'spring-campaign',
+      updatedAt: baseDate,
+    });
 
+    expect(firstResult).toEqual({ utmDegraded: true });
     expect(warn).toHaveBeenCalledWith(
       '[d1-storage] utm_source column missing, disabling usage',
       expect.objectContaining({ error: 'no such column: utm_source' }),
@@ -379,13 +402,14 @@ describe('createD1StorageAdapter', () => {
     expect(executedQueries[0]).toContain('utm_source');
     expect(executedQueries[1]).not.toContain('utm_source');
 
-    await expect(
-      adapter.saveUser({
-        userId: 'user-missing-column',
-        username: 'fallback-user',
-        updatedAt: new Date('2024-01-02T00:00:00.000Z'),
-      }),
-    ).resolves.toBeUndefined();
+    const fallbackResult = await adapter.saveUser({
+      userId: 'user-missing-column',
+      username: 'fallback-user',
+      updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+    });
+
+    expect(fallbackResult).toEqual({ utmDegraded: true });
+    expect(warn).toHaveBeenCalledTimes(1);
 
     const finalQueries = db.getExecutedUserQueries();
     expect(finalQueries).toHaveLength(3);
@@ -395,6 +419,50 @@ describe('createD1StorageAdapter', () => {
     expect(stored).toBeDefined();
     expect(stored?.utmSource).toBeNull();
     expect(stored?.username).toBe('fallback-user');
+  });
+
+  it('rechecks schema after fallback saves and restores utm usage when the column reappears', async () => {
+    const warn = vi.fn();
+    const db = new InMemoryD1Database({ hasUtmColumn: false });
+    const adapter = createD1StorageAdapter({ db, logger: { warn } });
+
+    await adapter.saveUser({
+      userId: 'user-self-heal',
+      utmSource: 'initial',
+      updatedAt: baseDate,
+    });
+
+    db.setHasUtmColumn(true);
+
+    for (let attempt = 0; attempt < UTM_COLUMN_RECHECK_INTERVAL - 1; attempt += 1) {
+      const result = await adapter.saveUser({
+        userId: 'user-self-heal',
+        updatedAt: new Date(baseDate.getTime() + (attempt + 1) * 1_000),
+      });
+
+      if (attempt < UTM_COLUMN_RECHECK_INTERVAL - 2) {
+        expect(result).toEqual({ utmDegraded: true });
+      } else {
+        expect(result).toEqual({ utmDegraded: false });
+      }
+    }
+
+    const finalResult = await adapter.saveUser({
+      userId: 'user-self-heal',
+      utmSource: 'restored',
+      updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+    });
+
+    expect(finalResult).toEqual({ utmDegraded: false });
+
+    const queries = db.getExecutedUserQueries();
+    expect(queries.at(-1)).toContain('utm_source');
+
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === '[d1-storage] utm_source column restored, re-enabling usage',
+      ),
+    ).toBe(true);
   });
 
   it('preserves existing utm source when subsequent updates omit the value', async () => {
@@ -538,7 +606,7 @@ describe('createD1StorageAdapter', () => {
       });
 
       await vi.advanceTimersByTimeAsync(1000);
-      await expect(promise).resolves.toBeUndefined();
+      await expect(promise).resolves.toEqual({ utmDegraded: false });
 
       expect(run).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledTimes(1);

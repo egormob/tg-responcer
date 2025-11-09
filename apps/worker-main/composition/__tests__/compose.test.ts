@@ -28,7 +28,7 @@ const createAiPort = (): AiPort => ({
 const createStoragePort = (): StoragePort => ({
   saveUser: vi
     .fn<Parameters<StoragePort['saveUser']>, ReturnType<StoragePort['saveUser']>>()
-    .mockResolvedValue(undefined),
+    .mockResolvedValue({ utmDegraded: false }),
   appendMessage: vi
     .fn<Parameters<StoragePort['appendMessage']>, ReturnType<StoragePort['appendMessage']>>()
     .mockResolvedValue(undefined),
