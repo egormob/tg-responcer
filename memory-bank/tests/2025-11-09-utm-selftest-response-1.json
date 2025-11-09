@@ -1,0 +1,8 @@
+{
+  "test": "utm",
+  "ok": true,
+  "saveOk": true,
+  "readOk": true,
+  "utmDegraded": false,
+  "errors": []
+}
