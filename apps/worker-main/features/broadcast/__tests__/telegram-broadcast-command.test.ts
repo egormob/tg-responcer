@@ -232,6 +232,29 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(response?.status).toBe(200);
   });
 
+  it('warns admin about unsupported /admin broadcast subcommands', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    const response = await handler.handleCommand(createContext({ command: '/admin', argument: 'broadcast status' }));
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: [
+        'Мгновенная рассылка поддерживает только /broadcast без дополнительных аргументов.',
+        'Отправьте /broadcast (или /admin broadcast), затем текст сообщения для немедленной доставки.',
+      ].join('\n'),
+    });
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
+
+    const result = await handler.handleMessage(createIncomingMessage('продолжить диалог'));
+
+    expect(result).toBeUndefined();
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+  });
+
   it('clears pending broadcast when admin runs another command', async () => {
     const info = vi.fn();
     const logger = { info, warn: vi.fn(), error: vi.fn() };
