@@ -3,6 +3,7 @@ import type {
   HandledWebhookResult,
   MessageWebhookResult,
   TransformPayload,
+  TransformPayloadContext,
   TransformPayloadResult,
 } from '../../http/router';
 import type { StoragePort } from '../../ports';
@@ -87,7 +88,7 @@ export const createTelegramWebhookHandler = (
     knownUsers.set(userId, { utmSource });
   };
 
-  return async (payload: unknown) => {
+  return async (payload: unknown, context?: TransformPayloadContext) => {
     // eslint-disable-next-line no-console
     console.info('[utm-tracking] incoming payload', safePayloadSnapshot(payload));
 
@@ -115,17 +116,39 @@ export const createTelegramWebhookHandler = (
 
       if (incomingUtm) {
         if (!existing || !existing.utmSource) {
-          const saveResult = await storage.saveUser({
-            ...message.user,
-            updatedAt: now(),
-          });
-          // eslint-disable-next-line no-console
-          console.info('[utm-tracking] saveUser result', {
-            userId,
-            utmSource: incomingUtm,
-            utmDegraded: saveResult.utmDegraded,
-          });
           rememberUser(userId, incomingUtm);
+
+          const saveTask = (async () => {
+            try {
+              const saveResult = await storage.saveUser({
+                ...message.user,
+                updatedAt: now(),
+              });
+              // eslint-disable-next-line no-console
+              console.info('[utm-tracking] saveUser result', {
+                userId,
+                utmSource: incomingUtm,
+                utmDegraded: saveResult.utmDegraded,
+              });
+            } catch (error) {
+              const details =
+                error instanceof Error
+                  ? { name: error.name, message: error.message }
+                  : { error: String(error) };
+              // eslint-disable-next-line no-console
+              console.error('[utm-tracking] failed to save user', {
+                userId,
+                utmSource: incomingUtm,
+                ...details,
+              });
+            }
+          })();
+
+          if (context?.waitUntil) {
+            context.waitUntil(saveTask);
+          } else {
+            await saveTask;
+          }
         }
       } else if (existing?.utmSource) {
         result.message = {

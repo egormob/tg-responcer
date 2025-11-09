@@ -58,8 +58,13 @@ export type TransformPayloadResult =
   | MessageWebhookResult
   | NonTextWebhookResult;
 
+export interface TransformPayloadContext {
+  waitUntil?(promise: Promise<unknown>): void;
+}
+
 export type TransformPayload = (
   payload: unknown,
+  context?: TransformPayloadContext,
 ) => TransformPayloadResult | Promise<TransformPayloadResult>;
 
 const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =>
@@ -172,8 +177,14 @@ const extractWebhookSecret = (pathname: string): string | undefined => {
   return undefined;
 };
 
+export interface RouterHandleContext {
+  waitUntil?(promise: Promise<unknown>): void;
+}
+
 export const createRouter = (options: RouterOptions) => {
-  const transformPayload = options.transformPayload ?? (async (payload: unknown) => parseIncomingMessage(payload));
+  const transformPayload =
+    options.transformPayload ??
+    (async (payload: unknown, _context?: TransformPayloadContext) => parseIncomingMessage(payload));
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
   const handleNotFound = () => new Response('Not Found', { status: 404 });
@@ -226,7 +237,11 @@ export const createRouter = (options: RouterOptions) => {
     return { ok: false, response: unauthorizedResponse('Invalid admin token', 403) };
   };
 
-  const handleWebhook = async (request: Request, url: URL) => {
+  const handleWebhook = async (
+    request: Request,
+    url: URL,
+    context?: RouterHandleContext,
+  ) => {
     if (!options.webhookSecret) {
       return new Response('Webhook secret is not configured', { status: 500 });
     }
@@ -254,7 +269,7 @@ export const createRouter = (options: RouterOptions) => {
 
     let message: IncomingMessage;
     try {
-      const transformed = await transformPayload(payload);
+      const transformed = await transformPayload(payload, context);
 
       if (isHandledWebhookResult(transformed)) {
         return (
@@ -348,7 +363,7 @@ export const createRouter = (options: RouterOptions) => {
   };
 
   return {
-    async handle(request: Request): Promise<Response> {
+    async handle(request: Request, context?: RouterHandleContext): Promise<Response> {
       const url = new URL(request.url);
       const pathname = normalizePath(url.pathname);
 
@@ -357,7 +372,7 @@ export const createRouter = (options: RouterOptions) => {
       }
 
       if (pathname.startsWith('/webhook')) {
-        return handleWebhook(request, url);
+        return handleWebhook(request, url, context);
       }
 
       if (pathname === '/admin/export') {

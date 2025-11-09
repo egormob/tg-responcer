@@ -132,6 +132,27 @@ describe('createTelegramWebhookHandler', () => {
       }),
     );
   });
+
+  it('returns message result even when saveUser fails', async () => {
+    const storage = createStorageMock();
+    const failure = new Error('storage offline');
+    storage.saveUser = vi.fn().mockRejectedValue(failure);
+
+    const waitUntil = vi.fn();
+    const handler = createTelegramWebhookHandler({
+      storage,
+      now: () => new Date('2024-02-01T00:00:00.000Z'),
+    });
+
+    const result = await handler(createStartUpdate('src_FAIL'), { waitUntil });
+
+    expect(result.kind).toBe('message');
+    expect(storage.saveUser).toHaveBeenCalledTimes(1);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+
+    const savePromise = waitUntil.mock.calls[0]?.[0];
+    await expect(savePromise).resolves.toBeUndefined();
+  });
 });
 
 describe('worker integration with cached router', () => {

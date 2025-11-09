@@ -3,8 +3,10 @@ export {
   parseIncomingMessage,
   type HandledWebhookResult,
   type MessageWebhookResult,
+  type RouterHandleContext,
   type RouterOptions,
   type TransformPayload,
+  type TransformPayloadContext,
   type TransformPayloadResult,
 } from './router';
 export {

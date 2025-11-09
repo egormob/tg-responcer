@@ -544,7 +544,8 @@ const createTransformPayload = (
     features: webhookFeatures,
   });
 
-  return (payload: unknown) => telegramWebhookHandler(payload);
+  return (payload: unknown, context?: Parameters<typeof telegramWebhookHandler>[1]) =>
+    telegramWebhookHandler(payload, context);
 };
 
 const createRequestHandler = (env: WorkerEnv) => {
@@ -652,9 +653,9 @@ const clearRouterCache = (env?: WorkerEnv) => {
 };
 
 export default {
-  async fetch(request: Request, env: WorkerEnv, _ctx: WorkerExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext): Promise<Response> {
     const { router } = getCachedRequestHandler(env);
-    return router.handle(request);
+    return router.handle(request, ctx);
   },
 };
 
