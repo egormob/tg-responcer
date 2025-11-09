@@ -1,11 +1,21 @@
 export {
   createAdminAccess,
   createAccessDiagnosticsRoute,
+  createAdminCommandErrorRecorder,
+  readAdminMessagingErrors,
+  extractTelegramErrorDetails,
+  shouldInvalidateAdminAccess,
   type AdminAccess,
   type AdminAccessKvNamespace,
+  type AdminCommandErrorRecorder,
+  type AdminDiagnosticsKvNamespace,
   type CreateAdminAccessOptions,
   type CreateAccessDiagnosticsRouteOptions,
   type AdminWhitelistSnapshot,
+  type AdminMessagingErrorEntry,
+  type AdminMessagingErrorSource,
+  type AdminMessagingErrorSummary,
+  type TelegramErrorDetails,
   readAdminWhitelist,
 } from './admin-access';
 export {
