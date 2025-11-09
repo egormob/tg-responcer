@@ -7,6 +7,10 @@
 - Обновлены артефакты: `RoadMap.md` (подраздел М8) и `memory-bank/operations/broadcast-operations.md`.
 - Следующие шаги: поддерживать журналы рассылок, наблюдать `wrangler tail` и оценить необходимость дополнительных подтверждений перед отправкой.
 
+## 2025-11-09 — Диалог зависает при 400 от transformPayload
+- См. расследование: [issues/2025-11-09-dialog-freeze.md](issues/2025-11-09-dialog-freeze.md).
+- Текущий статус: требуется вынести UTM-запись из критического пути и подтвердить восстановление ответов.
+
 ## prod-2025-11-02-stable
 - **Commit**: efe6573413f12ff24451eb89d5ea73b03bae3689
 - **Description**: Responses-only prod: Telegram-бот отвечает по промпту из OpenAI Responses, память отключена.
