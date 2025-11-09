@@ -7,6 +7,8 @@
 4. Обновить документацию (`memory-bank/operations/export.md`, `memory-bank/references/telegram-deeplink-utm.md`, `RoadMap.md`) и контрольный CSV в `memory-bank/tests/2025-11-05-admin-export-check.csv`.
 5. Прогнать `npm run test -- apps/worker-main/features/export/__tests__/csv-export.test.ts` и `npm run check:roadmap`.
 
+> Guardrail: перед изменениями свериться с [регрессионными проверками `/broadcast`](../active-stack-checks.md#регрессионные-проверки-broadcast), чтобы UTM-обновления не ломали подтверждённый сценарий рассылки и фидбэк по rate limit.
+
 ## Быстрый старт
 ```sh
 npm run task:checkout m7-export-utm-gap

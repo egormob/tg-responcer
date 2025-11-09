@@ -20,6 +20,12 @@
 - Messaging-адаптер использует ретраи/джиттер, очищает текст и не зависит от `assistantId`.
 - Тесты: `apps/worker-main/http/__tests__/telegram-webhook.test.ts`, `apps/worker-main/http/__tests__/router.test.ts`, `apps/worker-main/adapters/telegram/__tests__/messaging.test.ts`.
 
+### Регрессионные проверки `/broadcast`
+- `/broadcast → admin command → dialog` не ломает цепочку: после завершения сценария команда возвращается к стандартной обработке сообщений без залипания в «ожидании текста»; автотесты покрывают ветку `/admin broadcast`.
+- Любые устаревшие подпотоки (`/broadcast queue`, `/broadcast http`, произвольные алиасы) отвергаются с явным ответом «не поддерживается», без попытки перехода в режим рассылки.
+- При получении от Telegram `429` или внутреннего лимита бот отправляет администратору fallback с информацией о задержке (сценарий «Волин клик») и логирует событие.
+- После изменений, затрагивающих рассылку, обязательно прогонять сценарий «Волин клик» по памятке `docs/telegram-admin-commands.md` и фиксировать результат в журнале.
+
 ### `composition/*` и typing-индикация
 - `composeWorker` собирает порты из адаптеров или NOOP-реализаций, а `createRateLimitToggle` подключается только при наличии KV.
 - `typing-indicator.ts` использует только `MessagingPort.sendTyping`, исключая параллельные индикаторы для одного чата.

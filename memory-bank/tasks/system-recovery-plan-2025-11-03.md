@@ -39,6 +39,8 @@
    - Через 24 часа подтвердить, что переменные не были очищены автоматически (сравнить со скриншотом).
    - При повторении проблемы открыть новую запись в `memory-bank/issues/` с ссылкой на текущий план и результаты ретеста.
 
+> Guardrail: при восстановлении стека сверяйся с [RoadMap guardrails по `/broadcast`](../../RoadMap.md#майлстоун-8-broadcast-feature) и [чек-листом регрессий](../active-stack-checks.md#регрессионные-проверки-broadcast), чтобы не потерять мгновенный сценарий рассылки и обязательный отклик при rate limit.
+
 ## Ссылки
 - Инцидент и диагностика: `memory-bank/issues/cloudflare-env-reset.md`.
 - Чек-листы: `memory-bank/verification-protocol.md`, `memory-bank/active-stack-checks.md`, `memory-bank/infrastructure.md`.
