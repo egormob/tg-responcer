@@ -38,6 +38,8 @@ const RETRY_BACKOFF_FACTOR = 2;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export const UTM_COLUMN_RECHECK_INTERVAL = 5;
+
 interface RetryContext {
   operation: string;
   details?: Record<string, unknown>;
@@ -177,6 +179,9 @@ const toNullableString = (value: string | undefined | null): string | null =>
 const sanitizeBigInt = (_key: string, value: unknown) =>
   typeof value === 'bigint' ? value.toString() : value;
 
+const isUtmSchemaMismatchMessage = (message: string | undefined): boolean =>
+  typeof message === 'string' && /(no such column:?|has no column named)\s+utm_source/i.test(message);
+
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -281,6 +286,44 @@ const mapRowToStoredMessage = (row: MessageRow): StoredMessage => ({
 export const createD1StorageAdapter = (options: D1StorageAdapterOptions): StoragePort => {
   const logger: Logger = options.logger ?? NOOP_LOGGER;
   let supportsUtmColumn = true;
+  let utmColumnDegraded = false;
+  let fallbackSuccessCounter = 0;
+
+  const checkUtmColumnPresence = async (): Promise<boolean> => {
+    try {
+      const statement = options.db.prepare('PRAGMA table_info(users);');
+      const result = await statement.all<{ name: string }>();
+      const hasUtmColumn = Array.isArray(result?.results)
+        ? result.results.some((row) => row.name === 'utm_source')
+        : false;
+
+      return hasUtmColumn;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('[d1-storage] failed to verify utm_source column', { error: message });
+      return false;
+    }
+  };
+
+  const markUtmDegraded = (details?: Record<string, unknown>) => {
+    if (!utmColumnDegraded) {
+      logger.warn('[d1-storage] utm_source column missing, disabling usage', details);
+    }
+
+    supportsUtmColumn = false;
+    utmColumnDegraded = true;
+    fallbackSuccessCounter = 0;
+  };
+
+  const markUtmRecovered = () => {
+    if (utmColumnDegraded) {
+      logger.warn('[d1-storage] utm_source column restored, re-enabling usage');
+    }
+
+    supportsUtmColumn = true;
+    utmColumnDegraded = false;
+    fallbackSuccessCounter = 0;
+  };
 
   return {
     async saveUser(input: UserProfile & { updatedAt: Date }) {
@@ -313,10 +356,30 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
         return statement.bind(...bindings).run<D1Result>();
       };
 
-      const isSchemaMismatchMessage = (message: string | undefined): boolean =>
-        typeof message === 'string' && /(no such column:?|has no column named)\s+utm_source/i.test(message);
+      const runFallbackAndMaybeRecover = async (): Promise<{ utmDegraded: boolean }> => {
+        const fallbackResult = await runStatement(false);
+        if (fallbackResult && typeof fallbackResult === 'object' && 'success' in fallbackResult) {
+          if (fallbackResult.success === false && !isUtmSchemaMismatchMessage(fallbackResult.error)) {
+            throw new Error(fallbackResult.error ?? 'Failed to save user');
+          }
+        }
 
-      const handleSchemaMismatch = async (reason: unknown) => {
+        if (utmColumnDegraded) {
+          fallbackSuccessCounter += 1;
+
+          if (fallbackSuccessCounter >= UTM_COLUMN_RECHECK_INTERVAL) {
+            fallbackSuccessCounter = 0;
+            const hasUtmColumn = await checkUtmColumnPresence();
+            if (hasUtmColumn) {
+              markUtmRecovered();
+            }
+          }
+        }
+
+        return { utmDegraded: utmColumnDegraded };
+      };
+
+      const handleSchemaMismatch = async (reason: unknown): Promise<{ utmDegraded: boolean }> => {
         const errorMessage =
           reason instanceof Error
             ? reason.message
@@ -324,53 +387,47 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
             ? reason
             : undefined;
 
-        logger.warn('[d1-storage] utm_source column missing, disabling usage', {
-          ...
-            (errorMessage
-              ? {
-                  error: errorMessage,
-                }
-              : undefined),
-        });
+        markUtmDegraded(
+          errorMessage
+            ? {
+                error: errorMessage,
+              }
+            : undefined,
+        );
 
-        supportsUtmColumn = false;
-
-        const fallbackResult = await runStatement(false);
-        if (fallbackResult && typeof fallbackResult === 'object' && 'success' in fallbackResult) {
-          if (fallbackResult.success === false && !isSchemaMismatchMessage(fallbackResult.error)) {
-            throw new Error(fallbackResult.error ?? 'Failed to save user');
-          }
-        }
+        return runFallbackAndMaybeRecover();
       };
 
-      await runWithRetry(logger, { operation: 'saveUser', details: { userId: input.userId } }, async () => {
-        if (!supportsUtmColumn) {
-          const result = await runStatement(false);
-          if (result && typeof result === 'object' && 'success' in result && result.success === false) {
-            throw new Error(result.error ?? 'Failed to save user');
+      const outcome = await runWithRetry(
+        logger,
+        { operation: 'saveUser', details: { userId: input.userId } },
+        async () => {
+          if (!supportsUtmColumn) {
+            return runFallbackAndMaybeRecover();
           }
-          return;
-        }
 
-        try {
-          const result = await runStatement(true);
-          if (result && typeof result === 'object' && 'success' in result && result.success === false) {
-            if (isSchemaMismatchMessage(result.error)) {
-              await handleSchemaMismatch(result.error);
-              return;
+          try {
+            const result = await runStatement(true);
+            if (result && typeof result === 'object' && 'success' in result && result.success === false) {
+              if (isUtmSchemaMismatchMessage(result.error)) {
+                return handleSchemaMismatch(result.error);
+              }
+
+              throw new Error(result.error ?? 'Failed to save user');
+            }
+          } catch (error) {
+            if (error instanceof Error && isUtmSchemaMismatchMessage(error.message)) {
+              return handleSchemaMismatch(error);
             }
 
-            throw new Error(result.error ?? 'Failed to save user');
-          }
-        } catch (error) {
-          if (error instanceof Error && isSchemaMismatchMessage(error.message)) {
-            await handleSchemaMismatch(error);
-            return;
+            throw error;
           }
 
-          throw error;
-        }
-      });
+          return { utmDegraded: utmColumnDegraded };
+        },
+      );
+
+      return outcome ?? { utmDegraded: utmColumnDegraded };
     },
 
     async appendMessage(message) {

@@ -19,7 +19,7 @@ describe('http router', () => {
   }) as unknown as MessagingPort;
 
   const createStorageMock = () => ({
-    saveUser: vi.fn().mockResolvedValue(undefined),
+    saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
   }) as unknown as StoragePort;
 
   it('responds with ok for healthz route', async () => {

@@ -5,7 +5,7 @@ import type { StoragePort } from '../../../ports';
 import type { TelegramUpdate } from '../../../http/telegram-webhook';
 
 const createStorageMock = () => ({
-  saveUser: vi.fn().mockResolvedValue(undefined),
+  saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
   appendMessage: vi.fn(),
   getRecentMessages: vi.fn(),
 }) as unknown as StoragePort;

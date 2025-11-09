@@ -85,7 +85,7 @@ describe('adapters-noop', () => {
 
     await expect(
       storage.saveUser({ userId: 'user-2', updatedAt: new Date() }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ utmDegraded: false });
 
     await expect(
       storage.appendMessage({

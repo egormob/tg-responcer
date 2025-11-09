@@ -133,7 +133,7 @@ export interface StoragePort {
    */
   saveUser(input: UserProfile & {
     updatedAt: Date;
-  }): Promise<void>;
+  }): Promise<{ utmDegraded: boolean }>;
 
   /**
    * Добавляет сообщение в историю диалога.
