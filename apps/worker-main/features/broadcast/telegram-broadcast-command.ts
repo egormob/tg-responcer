@@ -147,7 +147,23 @@ export const createTelegramBroadcastCommandHandler = (
   };
 
   const handleCommand = async (context: TelegramAdminCommandContext): Promise<Response | void> => {
+    const currentTime = now().getTime();
+    cleanupExpired(currentTime);
+
     if (!isBroadcastCommand(context)) {
+      const entry = pending.get(context.from.userId);
+      if (entry) {
+        pending.delete(context.from.userId);
+
+        logger.info('broadcast pending cleared before non-broadcast command', {
+          userId: context.from.userId,
+          chatId: entry.chatId,
+          threadId: entry.threadId ?? null,
+          command: context.command,
+          argument: context.argument ?? null,
+        });
+      }
+
       return undefined;
     }
 
@@ -156,13 +172,13 @@ export const createTelegramBroadcastCommandHandler = (
       return undefined;
     }
 
-    const currentTime = now().getTime();
-    cleanupExpired(currentTime);
+    const timestamp = now().getTime();
+    cleanupExpired(timestamp);
 
     pending.set(context.from.userId, {
       chatId: context.chat.id,
       threadId: context.chat.threadId,
-      expiresAt: currentTime + pendingTtlMs,
+      expiresAt: timestamp + pendingTtlMs,
     });
 
     try {
