@@ -4,7 +4,7 @@ import type { DialogEngine } from '../../core/DialogEngine';
 import type { MessagingPort, StoragePort } from '../../ports';
 import { createTelegramWebhookHandler } from '../../features';
 import { createTelegramBroadcastCommandHandler } from '../../features/broadcast';
-import { createRouter, parseIncomingMessage } from '../router';
+import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
 
 describe('http router', () => {
   const createDialogEngineMock = () => ({
@@ -100,7 +100,37 @@ describe('http router', () => {
     expect(message.receivedAt).toBeInstanceOf(Date);
   });
 
-  it('returns ok payload when dialog engine signals rate limit', async () => {
+  it('sends fallback message when dialog engine signals rate limit without notifier', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
+    const messaging = createMessagingMock();
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-2' },
+          chat: { id: 'chat-2' },
+          text: 'hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'rate_limited' });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-2',
+      threadId: undefined,
+      text: RATE_LIMIT_FALLBACK_TEXT,
+    });
+  });
+
+  it('notifies rate limit and sends fallback message when notifier is provided', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const notify = vi.fn().mockResolvedValue(undefined);
     const messaging = createMessagingMock();
@@ -130,16 +160,22 @@ describe('http router', () => {
       chatId: 'chat-2',
       threadId: undefined,
     });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-2',
+      threadId: undefined,
+      text: RATE_LIMIT_FALLBACK_TEXT,
+    });
   });
 
   it('logs warning when notifier throws but still returns ok response', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const notify = vi.fn().mockRejectedValue(new Error('notify failed'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const messaging = createMessagingMock();
 
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
-      messaging: createMessagingMock(),
+      messaging,
       webhookSecret: 'secret',
       rateLimitNotifier: { notify },
     });
@@ -158,6 +194,11 @@ describe('http router', () => {
 
     expect(response.status).toBe(200);
     expect(warnSpy).toHaveBeenCalledWith('[router] rate limit notifier failed', expect.any(Error));
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-3',
+      threadId: undefined,
+      text: RATE_LIMIT_FALLBACK_TEXT,
+    });
 
     warnSpy.mockRestore();
   });
