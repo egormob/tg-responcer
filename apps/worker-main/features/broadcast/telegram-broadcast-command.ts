@@ -226,6 +226,13 @@ export const createTelegramBroadcastCommandHandler = (
       return undefined;
     }
 
+    const entryThreadId = entry.threadId ?? null;
+    const messageThreadId = message.chat.threadId ?? null;
+
+    if (entryThreadId !== messageThreadId) {
+      return undefined;
+    }
+
     const text = message.text ?? '';
     const trimmed = text.trim();
 

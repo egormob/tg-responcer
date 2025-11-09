@@ -131,6 +131,23 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
+  it('ignores incoming message from a different thread', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 3, failed: 0, deliveries: [] });
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
+
+    await handler.handleCommand(createContext());
+
+    const result = await handler.handleMessage({
+      ...createIncomingMessage('hello everyone'),
+      chat: { id: 'chat-1', threadId: 'thread-2' },
+    });
+
+    expect(result).toBeUndefined();
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects empty broadcast text and asks to restart', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
