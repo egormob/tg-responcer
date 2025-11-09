@@ -485,6 +485,10 @@ const createTransformPayload = (
 
   const adminCommandHandlers: AdminCommandHandler[] = [];
 
+  if (broadcastCommandHandler) {
+    adminCommandHandlers.push(broadcastCommandHandler.handleCommand);
+  }
+
   if (exportCommandHandler) {
     const handler: AdminCommandHandler = (context) => {
       const command = context.command.toLowerCase();
@@ -511,10 +515,6 @@ const createTransformPayload = (
     };
 
     adminCommandHandlers.push(handler);
-  }
-
-  if (broadcastCommandHandler) {
-    adminCommandHandlers.push(broadcastCommandHandler.handleCommand);
   }
 
   const handleAdminCommand = adminCommandHandlers.length > 0

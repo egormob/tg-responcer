@@ -338,6 +338,70 @@ describe('transformTelegramUpdate', () => {
     expect(result.message.text).toBe('/broadcast');
   });
 
+  it('routes dialog after broadcast command is followed by admin status', async () => {
+    const broadcastUpdate = createBaseUpdate();
+    const statusUpdate = createBaseUpdate();
+    const messageUpdate = createBaseUpdate();
+
+    if (!broadcastUpdate.message || !statusUpdate.message || !messageUpdate.message) {
+      throw new Error('message is required for test');
+    }
+
+    broadcastUpdate.message.text = '/broadcast';
+    broadcastUpdate.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/broadcast'.length },
+    ];
+
+    statusUpdate.message.text = '/admin status';
+    statusUpdate.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/admin'.length },
+    ];
+
+    messageUpdate.message.text = 'привет, бот';
+    delete messageUpdate.message.entities;
+
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
+    const messaging = { sendText: vi.fn().mockResolvedValue(undefined) } as Pick<MessagingPort, 'sendText'>;
+    const sendBroadcast = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const broadcastHandler = createTelegramBroadcastCommandHandler({
+      adminAccess,
+      messaging,
+      sendBroadcast,
+      now: () => new Date('2024-01-01T00:00:00Z'),
+      logger,
+    });
+
+    const features = { handleAdminCommand: broadcastHandler.handleCommand };
+
+    const broadcastResult = await transformTelegramUpdate(broadcastUpdate, { features });
+    expect(broadcastResult.kind).toBe('handled');
+
+    const statusResult = await transformTelegramUpdate(statusUpdate, { features });
+    expect(statusResult.kind).toBe('message');
+    if (statusResult.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+    expect(statusResult.message.text).toBe('/admin status');
+
+    const dialogResult = await transformTelegramUpdate(messageUpdate, { features });
+    expect(dialogResult.kind).toBe('message');
+    if (dialogResult.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(dialogResult.message.text).toBe('привет, бот');
+    expect(sendBroadcast).not.toHaveBeenCalled();
+    expect(messaging.sendText).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith('broadcast pending cleared before non-broadcast command', {
+      userId: '789',
+      chatId: '555',
+      threadId: null,
+      command: '/admin',
+      argument: 'status',
+    });
+  });
+
   it('returns non-text result for voice messages without text', async () => {
     const update = createBaseUpdate();
     if (!update.message) {

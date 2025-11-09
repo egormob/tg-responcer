@@ -55,11 +55,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
     sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] }),
     adminErrorRecorder,
+    logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
     sendBroadcastMock?: SendBroadcast;
     adminErrorRecorder?: AdminCommandErrorRecorder;
+    logger?: { info?: (...args: unknown[]) => unknown; warn?: (...args: unknown[]) => unknown; error?: (...args: unknown[]) => unknown };
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -71,11 +73,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
       messaging,
       sendBroadcast: sendBroadcastMock,
       now: () => new Date('2024-01-01T00:00:00Z'),
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logger,
       adminErrorRecorder,
     });
 
-    return { handler, adminAccess, sendTextMock, sendBroadcastMock };
+    return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger };
   };
 
   it('prompts admin for broadcast text after /broadcast command', async () => {
@@ -211,6 +213,31 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(sendTextMock).toHaveBeenCalled();
     expect(response?.status).toBe(200);
+  });
+
+  it('clears pending broadcast when admin runs another command', async () => {
+    const info = vi.fn();
+    const logger = { info, warn: vi.fn(), error: vi.fn() };
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock, logger });
+
+    await handler.handleCommand(createContext());
+
+    const statusResult = await handler.handleCommand(createContext({ command: '/admin', argument: 'status' }));
+
+    expect(statusResult).toBeUndefined();
+    expect(info).toHaveBeenCalledWith('broadcast pending cleared before non-broadcast command', {
+      userId: 'admin-1',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      command: '/admin',
+      argument: 'status',
+    });
+
+    const messageResult = await handler.handleMessage(createIncomingMessage('не рассылка'));
+
+    expect(messageResult).toBeUndefined();
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
   });
 
   it('ignores incoming messages when there is no active broadcast session', async () => {
