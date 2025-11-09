@@ -57,7 +57,7 @@ describe('createTelegramWebhookHandler', () => {
     expect(storage.saveUser).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: '55',
-        utmSource: 'src_demo',
+        utmSource: 'src_DEMO',
         updatedAt: new Date('2024-02-01T00:00:00.000Z'),
       }),
     );
@@ -105,6 +105,31 @@ describe('createTelegramWebhookHandler', () => {
     if (result.kind !== 'message') {
       throw new Error('Expected message result');
     }
-    expect(result.message.user.utmSource).toBe('src_demo');
+    expect(result.message.user.utmSource).toBe('src_DEMO');
+  });
+
+  it('stores utmSource from mini app start payload', async () => {
+    const storage = createStorageMock();
+    const handler = createTelegramWebhookHandler({
+      storage,
+      now: () => new Date('2024-02-01T00:00:00.000Z'),
+    });
+
+    const miniAppUpdate: TelegramUpdate = {
+      ...baseUpdate,
+      startapp: 'src_MINI-Launch',
+    };
+
+    const result = await handler(miniAppUpdate);
+
+    expect(result.kind).toBe('message');
+    expect(storage.saveUser).toHaveBeenCalledTimes(1);
+    expect(storage.saveUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '55',
+        utmSource: 'src_MINI-Launch',
+        updatedAt: new Date('2024-02-01T00:00:00.000Z'),
+      }),
+    );
   });
 });

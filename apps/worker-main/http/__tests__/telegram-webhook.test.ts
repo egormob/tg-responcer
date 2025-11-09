@@ -66,6 +66,49 @@ describe('transformTelegramUpdate', () => {
     expect(result.message.user.utmSource).toBe('src_SPRING-Launch');
   });
 
+  it('attaches utmSource when startapp payload provided for mini app', async () => {
+    const update = createBaseUpdate();
+    update.startapp = 'src_MINI-App';
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBe('src_MINI-App');
+  });
+
+  it('extracts utmSource from mini app initData payload', async () => {
+    const update = createBaseUpdate();
+    const initData = new URLSearchParams({
+      query_id: 'AA12345',
+      start_param: 'src_INIT-Data',
+      user: JSON.stringify({ id: 789 }),
+      auth_date: '1710000000',
+      hash: 'test',
+    }).toString();
+
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.query_id = 'AA12345';
+    update.message.web_app_data = {
+      data: JSON.stringify({ initData }),
+    };
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBe('src_INIT-Data');
+  });
+
   it('attaches utmSource with dot prefix and special characters', async () => {
     const update = createBaseUpdate();
     if (!update.message) {

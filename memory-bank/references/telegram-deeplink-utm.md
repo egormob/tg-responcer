@@ -17,6 +17,12 @@
 - `startapp`: открывает веб-приложение (Bot API Web App). Payload так же ограничен 64 символами и передаётся в `initData`, поэтому готовь сжатый JSON/токен и декодируй его на стороне приложения.
 - При работе с mini app фиксируй источник сразу после получения `initData`, затем передавай идентификатор в API бота или в KV.
 
+### Mini app → webhook
+- При первом открытии mini app Telegram присылает `web_app_data.data` с объектом, внутри которого есть `initData` (строка формата `query_id=...&user=...&start_param=<payload>&...`).
+- Бекенд воркера должен разобрать `initData`, извлечь `start_param` и нормализовать его через `parseStartPayload`. С 2025-11-10 `apps/worker-main/http/telegram-webhook.ts` делает это автоматически, а `createTelegramWebhookHandler` сохраняет результат в `users.utm_source`.
+- Для ретестов отправь в mini app `JSON.stringify({ initData })` через `Telegram.WebApp.sendData`, убедись, что в логах/БД появляется `utm_source`, и что повторные сообщения пользователя наследуют ту же метку.
+- Дополнительно Telegram дублирует payload в `update.startapp` и `update.query_id`. Воркер проверяет все источники, поэтому можно использовать как прямые deeplink, так и инициализацию из mini app.
+
 ## Best practices
 1. **Единая нормализация.** Храни payload в исходном виде (`users.utm_source`) и при необходимости раскладывай части уже в аналитике или вспомогательных витринах. Допустимые префиксы `src_`/`src.` и символы `a-zA-Z0-9._+-` подтверждены юнит-тестами от 2025-11-09.
 2. **Контроль длины.** Автоматически проверяй, что payload ≤64 символов, иначе отклоняй создание ссылки или сокращай название кампании.
@@ -33,3 +39,6 @@
 
 ## Проверки 2025-11-09
 - `npx vitest run apps/worker-main/features/utm-tracking/__tests__/parse-start-payload.test.ts apps/worker-main/http/__tests__/telegram-webhook.test.ts` — подтверждена поддержка payload с точками, плюсом и смешанным регистром.
+
+## Проверки 2025-11-10
+- `npm test -- --run apps/worker-main/http/__tests__/telegram-webhook.test.ts apps/worker-main/features/utm-tracking/__tests__/create-telegram-webhook-handler.test.ts` — подтверждена обработка mini app payload (`startapp`, `initData`) и сохранение UTM в сторадж.
