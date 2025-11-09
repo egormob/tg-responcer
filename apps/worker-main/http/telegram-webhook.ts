@@ -296,13 +296,17 @@ const findRelevantMessage = (update: TelegramUpdate): TelegramMessage | undefine
 const handleAdminCommand = async (
   context: TelegramAdminCommandContext,
   options: TelegramWebhookOptions,
-): Promise<HandledWebhookResult> => {
+): Promise<HandledWebhookResult | undefined> => {
   const handler = options.features?.handleAdminCommand;
   if (!handler) {
-    return handledOk();
+    return undefined;
   }
 
   const response = await handler(context);
+  if (!response) {
+    return undefined;
+  }
+
   return toHandledResult(response);
 };
 
@@ -470,7 +474,10 @@ export const transformTelegramUpdate = async (
           incomingMessage: incoming,
         };
 
-        return handleAdminCommand(context, options);
+        const adminResult = await handleAdminCommand(context, options);
+        if (adminResult) {
+          return adminResult;
+        }
       }
 
       if (normalizedCommand === '/export' || normalizedCommand.startsWith('/admin')) {
@@ -499,7 +506,10 @@ export const transformTelegramUpdate = async (
           incomingMessage: incoming,
         };
 
-        return handleAdminCommand(context, options);
+        const adminResult = await handleAdminCommand(context, options);
+        if (adminResult) {
+          return adminResult;
+        }
       }
     }
   }

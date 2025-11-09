@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createTelegramBroadcastCommandHandler } from '../../features/broadcast/telegram-broadcast-command';
 import { createTelegramExportCommandHandler } from '../../features/export/telegram-export-command';
 import type { MessagingPort } from '../../ports';
 import { transformTelegramUpdate } from '../telegram-webhook';
@@ -253,7 +254,7 @@ describe('transformTelegramUpdate', () => {
     expect(result.message.text).toBe('/admin@OtherBot do');
   });
 
-  it('returns handled result when admin command has no handler', async () => {
+  it('passes admin command to dialog when handler is missing', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
       throw new Error('message is required for test');
@@ -266,8 +267,75 @@ describe('transformTelegramUpdate', () => {
 
     const result = await transformTelegramUpdate(update);
 
-    expect(result.kind).toBe('handled');
-    await expect(result.response?.json()).resolves.toEqual({ status: 'ok' });
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.text).toBe('/admin');
+  });
+
+  it('continues dialog when admin command handler returns undefined', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/admin ping';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/admin'.length },
+    ];
+
+    const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
+
+    const result = await transformTelegramUpdate(update, {
+      features: { handleAdminCommand },
+    });
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    const context = handleAdminCommand.mock.calls[0][0];
+    expect(context.command).toBe('/admin');
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.text).toBe('/admin ping');
+  });
+
+  it('continues dialog when broadcast command access is denied', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/broadcast';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/broadcast'.length },
+    ];
+
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
+    const messaging = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const sendBroadcast = vi.fn();
+    const broadcastHandler = createTelegramBroadcastCommandHandler({
+      adminAccess,
+      messaging,
+      sendBroadcast,
+      now: () => new Date(),
+    });
+
+    const result = await transformTelegramUpdate(update, {
+      features: { handleAdminCommand: broadcastHandler.handleCommand },
+    });
+
+    expect(adminAccess.isAdmin).toHaveBeenCalledWith('789');
+    expect(messaging.sendText).not.toHaveBeenCalled();
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.text).toBe('/broadcast');
   });
 
   it('returns non-text result for voice messages without text', async () => {
