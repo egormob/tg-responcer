@@ -337,7 +337,8 @@ export const transformTelegramUpdate = async (
     }
 
     try {
-      const params = new URLSearchParams(initData);
+      const initDataPreservingPlus = initData.replace(/\+/g, '%2B');
+      const params = new URLSearchParams(initDataPreservingPlus);
       const startParam = params.get('start_param') ?? params.get('startapp');
       if (!startParam) {
         return undefined;
