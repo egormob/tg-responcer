@@ -17,6 +17,7 @@ import {
   createAdminCommandErrorRecorder,
   createCsvExportHandler,
   createEnvzRoute,
+  createBindingsDiagnosticsRoute,
   createImmediateBroadcastSender,
   createRateLimitNotifier,
   createSelfTestRoute,
@@ -389,6 +390,7 @@ const createAdminRoutes = (
     selfTest: createSelfTestRoute({
       ai: composition.ports.ai,
       messaging: composition.ports.messaging,
+      storage: composition.ports.storage,
     }),
     envz: createEnvzRoute({ env }),
     accessDiagnostics: createAccessDiagnosticsRoute({
@@ -396,6 +398,9 @@ const createAdminRoutes = (
       composition,
       adminAccess,
       adminErrorRecorder,
+    }),
+    diag: createBindingsDiagnosticsRoute({
+      storage: composition.ports.storage,
     }),
   };
 

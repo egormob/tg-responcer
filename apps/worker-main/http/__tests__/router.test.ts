@@ -636,4 +636,28 @@ describe('http router', () => {
     expect(response.status).toBe(200);
     expect(envz).toHaveBeenCalledTimes(1);
   });
+
+  it('delegates admin diag route when configured', async () => {
+    const diag = vi.fn().mockResolvedValue(new Response('diag', { status: 200 }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        diag,
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/diag?q=bindings', {
+        headers: { 'x-admin-token': 'secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(diag).toHaveBeenCalledTimes(1);
+    const passedRequest = diag.mock.calls[0][0];
+    expect(passedRequest.url).toContain('/admin/diag?q=bindings');
+  });
 });

@@ -59,6 +59,37 @@ const toIdString = (value: unknown): string | undefined => {
   return undefined;
 };
 
+const snapshotUpdate = (update: unknown) => {
+  if (typeof update !== 'object' || update === null) {
+    return { type: typeof update };
+  }
+
+  const record = update as Record<string, unknown>;
+  const message =
+    record.message && typeof record.message === 'object' && record.message !== null
+      ? (record.message as Record<string, unknown>)
+      : undefined;
+  const chat =
+    message?.chat && typeof message.chat === 'object' && message.chat !== null
+      ? (message.chat as Record<string, unknown>)
+      : undefined;
+  const from =
+    message?.from && typeof message.from === 'object' && message.from !== null
+      ? (message.from as Record<string, unknown>)
+      : undefined;
+
+  return {
+    updateId: typeof record.update_id === 'number' ? record.update_id : undefined,
+    messageId: toIdString(message?.message_id),
+    chatId: toIdString(chat?.id),
+    chatType: typeof chat?.type === 'string' ? chat.type : undefined,
+    fromId: toIdString(from?.id),
+    hasText: typeof message?.text === 'string',
+    hasWebAppData: typeof message?.web_app_data === 'object' && message?.web_app_data !== null,
+    hasStartapp: typeof record.startapp === 'string' && record.startapp.length > 0,
+  };
+};
+
 const toDate = (value: unknown): Date => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const date = new Date(value * 1000);
@@ -284,6 +315,8 @@ export const transformTelegramUpdate = async (
   }
 
   const update = payload as TelegramUpdate;
+  // eslint-disable-next-line no-console
+  console.info('[telegram-webhook] incoming update', snapshotUpdate(update));
   const message = findRelevantMessage(update);
 
   if (!message || !isRecord(message.chat)) {
@@ -483,6 +516,15 @@ export const transformTelegramUpdate = async (
         }
       : incoming,
   };
+
+  // eslint-disable-next-line no-console
+  console.info('[telegram-webhook] normalized message', {
+    updateId: update.update_id,
+    chatId: incoming.chat.id,
+    threadId: incoming.chat.threadId,
+    userId: incoming.user.userId,
+    hasStartPayload: Boolean(startPayload),
+  });
 
   return result;
 };
