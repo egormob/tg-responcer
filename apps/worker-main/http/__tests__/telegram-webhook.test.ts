@@ -63,7 +63,28 @@ describe('transformTelegramUpdate', () => {
       throw new Error('Expected message result');
     }
 
-    expect(result.message.user.utmSource).toBe('src_spring-launch');
+    expect(result.message.user.utmSource).toBe('src_SPRING-Launch');
+  });
+
+  it('attaches utmSource with dot prefix and special characters', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/start src.Campaign+Q1';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/start'.length },
+    ];
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBe('src.Campaign+Q1');
   });
 
   it('does not set utmSource when /start command has no payload', async () => {

@@ -1,6 +1,4 @@
-const PAYLOAD_PATTERN = /^src_[a-z0-9-]{1,64}$/;
-
-const normalizeToken = (value: string): string => value.toLowerCase();
+const PAYLOAD_PATTERN = /^src(?:_|\.)[a-zA-Z0-9._+\-]{1,60}$/;
 
 export const parseStartPayload = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') {
@@ -17,12 +15,11 @@ export const parseStartPayload = (raw: unknown): string | undefined => {
     return undefined;
   }
 
-  const normalized = normalizeToken(firstToken);
-  if (!PAYLOAD_PATTERN.test(normalized)) {
+  if (!PAYLOAD_PATTERN.test(firstToken)) {
     return undefined;
   }
 
-  return normalized;
+  return firstToken;
 };
 
 export type ParseStartPayload = typeof parseStartPayload;

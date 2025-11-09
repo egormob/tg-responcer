@@ -388,7 +388,7 @@
 8. Шаг 8 — UTM-метки и справочник deeplink.
    - **Результат:** подготовлена справка по deeplink/`startapp` и ограничениям 64 символов (`memory-bank/references/telegram-deeplink-utm.md`), обновлена операционная памятка экспорта (`memory-bank/operations/export.md`) с фактической схемой CSV и инструкцией по проверке `users.utm_source`.
    - **Проверка:** ревью `RoadMap.md` и памяток подтверждает описание текущего формата (`message_metadata` без `utm_*`) и наличие инструкции по ручной проверке `wrangler d1 execute ... SELECT user_id, utm_source ...`; журнал прогресса содержит запись о запуске шага и результатах документирования.
-   - **Статус:** ✅ Документация по UTM и экспорту актуализирована; для автоматического экспорта UTM создан фоллоу-ап [issue](memory-bank/issues/m7-export-utm-gap.md) с кнопкой быстрого старта (`npm run task:checkout m7-export-utm-gap`).
+   - **Статус:** ✅ Документация по UTM и экспорту актуализирована; для автоматического экспорта UTM создан фоллоу-ап [issue](memory-bank/issues/m7-export-utm-gap.md) с кнопкой быстрого старта (`npm run task:checkout m7-export-utm-gap`). 2025-11-09 обновлены `parseStartPayload` и тесты (`telegram-webhook`, `utm-tracking`) с подтверждением через `npx vitest run ...` сохранения регистра и поддержки `src.`-payload.
 
 
 **Риски и предохранители:** ограничение выгрузки пагинацией и валидацией диапазонов; токен не логируется; большая выгрузка переводится в очередь.
