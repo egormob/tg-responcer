@@ -34,6 +34,15 @@ const toOptionalString = (value: unknown): string | undefined => {
   return undefined;
 };
 
+const toOptionalTrimmedString = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const toIdString = (value: unknown): string | undefined => {
   if (typeof value === 'string') {
     return value;
@@ -152,6 +161,11 @@ export interface TelegramMessage {
   photo?: unknown;
   document?: unknown;
   video_note?: unknown;
+  web_app_data?: {
+    data?: string;
+    button_text?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface TelegramUpdate {
@@ -316,7 +330,70 @@ export const transformTelegramUpdate = async (
   }
 
   const commandEntity = extractCommandEntity(message);
-  let startPayload: string | undefined;
+
+  const extractStartPayloadFromInitData = (initData: string | undefined): string | undefined => {
+    if (!initData) {
+      return undefined;
+    }
+
+    try {
+      const initDataPreservingPlus = initData.replace(/\+/g, '%2B');
+      const params = new URLSearchParams(initDataPreservingPlus);
+      const startParam = params.get('start_param') ?? params.get('startapp');
+      if (!startParam) {
+        return undefined;
+      }
+
+      return parseStartPayload(startParam);
+    } catch (error) {
+      return undefined;
+    }
+  };
+
+  const extractStartPayloadFromWebAppData = (): string | undefined => {
+    const rawWebAppData = message.web_app_data;
+    if (!isRecord(rawWebAppData)) {
+      return undefined;
+    }
+
+    const rawData = toOptionalTrimmedString(rawWebAppData.data);
+    if (!rawData) {
+      return undefined;
+    }
+
+    let parsed: unknown = rawData;
+    if (rawData.startsWith('{') || rawData.startsWith('[')) {
+      try {
+        parsed = JSON.parse(rawData);
+      } catch (error) {
+        parsed = rawData;
+      }
+    }
+
+    if (typeof parsed === 'string') {
+      return extractStartPayloadFromInitData(parsed);
+    }
+
+    if (!isRecord(parsed)) {
+      return undefined;
+    }
+
+    const initData = toOptionalTrimmedString(parsed.initData ?? parsed.init_data);
+    const fromInitData = extractStartPayloadFromInitData(initData);
+    if (fromInitData) {
+      return fromInitData;
+    }
+
+    const directStartParam = toOptionalTrimmedString(parsed.startParam ?? parsed.start_param);
+    return parseStartPayload(directStartParam);
+  };
+
+  const startPayloadFromMiniApp =
+    parseStartPayload(update.startapp)
+    ?? parseStartPayload(update.query_id)
+    ?? extractStartPayloadFromWebAppData();
+
+  let startPayload: string | undefined = startPayloadFromMiniApp;
 
   if (commandEntity) {
     const rawCommand = incoming.text.slice(
@@ -331,7 +408,7 @@ export const transformTelegramUpdate = async (
       const argumentText = argumentSlice.trim();
 
       if (normalizedCommand === '/start') {
-        startPayload = parseStartPayload(argumentSlice);
+        startPayload = parseStartPayload(argumentSlice) ?? startPayload;
       }
 
       if (normalizedCommand === '/broadcast') {
