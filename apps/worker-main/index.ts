@@ -570,24 +570,95 @@ const createRequestHandler = (env: WorkerEnv) => {
   });
   const adminRoutes = createAdminRoutes(env, composition, adminAccess, adminErrorRecorder);
 
-  return createRouter({
+  const transformPayload = createTransformPayload(env, composition, adminAccess, adminErrorRecorder);
+
+  const router = createRouter({
     dialogEngine: composition.dialogEngine,
     messaging: composition.ports.messaging,
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
-    transformPayload: createTransformPayload(env, composition, adminAccess, adminErrorRecorder),
+    transformPayload,
     admin: adminRoutes,
   });
+
+  return { router, transformPayload };
+};
+
+type RequestHandlerResult = ReturnType<typeof createRequestHandler>;
+
+type RouterCacheEntry = RequestHandlerResult & { version?: string | number };
+
+const CACHE_VERSION_KEYS = [
+  'WORKER_VERSION',
+  'ENV_VERSION',
+  'ENVIRONMENT_VERSION',
+  'CONFIG_VERSION',
+  'CACHE_VERSION',
+  'BINDINGS_VERSION',
+];
+
+const toCacheVersionValue = (value: unknown): string | number | undefined => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  return undefined;
+};
+
+const getEnvironmentVersion = (env: WorkerEnv): string | number | undefined => {
+  for (const key of CACHE_VERSION_KEYS) {
+    const candidate = toCacheVersionValue((env as Record<string, unknown>)[key]);
+    if (candidate !== undefined) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+};
+
+let routerCache: WeakMap<WorkerEnv, RouterCacheEntry> = new WeakMap();
+
+const getCachedRequestHandler = (env: WorkerEnv): RouterCacheEntry => {
+  const version = getEnvironmentVersion(env);
+  const cached = routerCache.get(env);
+
+  if (cached && cached.version === version) {
+    return cached;
+  }
+
+  const entry = createRequestHandler(env);
+  const enriched: RouterCacheEntry = {
+    ...entry,
+    version,
+  };
+
+  routerCache.set(env, enriched);
+  return enriched;
+};
+
+const clearRouterCache = (env?: WorkerEnv) => {
+  if (env) {
+    routerCache.delete(env);
+    return;
+  }
+
+  routerCache = new WeakMap();
 };
 
 export default {
   async fetch(request: Request, env: WorkerEnv, _ctx: WorkerExecutionContext): Promise<Response> {
-    const router = createRequestHandler(env);
+    const { router } = getCachedRequestHandler(env);
     return router.handle(request);
   },
 };
 
 export const __internal = {
   parsePromptVariables,
+  clearRouterCache,
 };

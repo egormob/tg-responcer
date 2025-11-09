@@ -222,3 +222,150 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendBroadcastMock).not.toHaveBeenCalled();
   });
 });
+
+describe('worker integration for broadcast command', () => {
+  it('preserves pending broadcast session between webhook requests', async () => {
+    vi.resetModules();
+
+    const handleMessage = vi.fn();
+    const messaging = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+    const storage = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn(),
+      getRecentMessages: vi.fn(),
+    };
+    const ai = { reply: vi.fn().mockResolvedValue({ text: 'ok', metadata: {} }) };
+    const rateLimit = { checkAndIncrement: vi.fn().mockResolvedValue('ok') };
+
+    const composeWorkerMock = vi.fn(({ adapters }: { adapters?: Record<string, unknown> }) => ({
+      dialogEngine: { handleMessage },
+      ports: {
+        messaging: (adapters?.messaging as typeof messaging | undefined) ?? messaging,
+        storage: (adapters?.storage as typeof storage | undefined) ?? storage,
+        ai: (adapters?.ai as typeof ai | undefined) ?? ai,
+        rateLimit: (adapters?.rateLimit as typeof rateLimit | undefined) ?? rateLimit,
+      },
+      webhookSecret: 'secret',
+    }));
+
+    vi.doMock('../../../composition', () => ({ composeWorker: composeWorkerMock }));
+    vi.doMock('../../../adapters', () => ({
+      createTelegramMessagingAdapter: vi.fn(() => messaging),
+      createOpenAIResponsesAdapter: vi.fn(() => ai),
+      createD1StorageAdapter: vi.fn(() => storage),
+      createKvRateLimitAdapter: vi.fn(() => rateLimit),
+    }));
+
+    const module = await import('../../../index');
+    module.__internal.clearRouterCache();
+    const worker = module.default;
+
+    const adminKv = {
+      get: vi.fn().mockResolvedValue(JSON.stringify({ whitelist: ['admin-1'] })),
+      put: vi.fn(),
+      list: vi.fn().mockResolvedValue({ keys: [] }),
+      delete: vi.fn(),
+    };
+
+    const env = {
+      TELEGRAM_WEBHOOK_SECRET: 'secret',
+      TELEGRAM_BOT_TOKEN: 'bot-token',
+      TELEGRAM_BOT_USERNAME: 'demo_bot',
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_MODEL: 'gpt-test',
+      BROADCAST_ENABLED: 'true',
+      BROADCAST_RECIPIENTS: JSON.stringify([{ chatId: 'subscriber-1' }]),
+      ADMIN_TG_IDS: adminKv,
+      ENV_VERSION: '1',
+    } as Record<string, unknown>;
+
+    const ctx = { waitUntil: vi.fn() } as { waitUntil(promise: Promise<unknown>): void };
+
+    const commandUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 100,
+        date: 1_710_000_000,
+        text: '/broadcast',
+        entities: [{ type: 'bot_command', offset: 0, length: '/broadcast'.length }],
+        from: { id: 'admin-1', first_name: 'Admin' },
+        chat: { id: 'chat-1', type: 'private' },
+        message_thread_id: 77,
+      },
+    };
+
+    const commandResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(commandUpdate),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(commandResponse.status).toBe(200);
+    await expect(commandResponse.json()).resolves.toEqual({ status: 'awaiting_text' });
+    expect(composeWorkerMock).toHaveBeenCalledTimes(1);
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: '77',
+      text: [
+        'Введите текст рассылки (до 4096 символов).',
+        'Следующее сообщение уйдёт всем получателям минимальной модели.',
+      ].join('\n'),
+    });
+
+    messaging.sendText.mockClear();
+
+    const broadcastTextUpdate = {
+      update_id: 2,
+      message: {
+        message_id: 101,
+        date: 1_710_000_010,
+        text: 'Всем привет',
+        from: { id: 'admin-1', first_name: 'Admin' },
+        chat: { id: 'chat-1', type: 'private' },
+        message_thread_id: 77,
+      },
+    };
+
+    const broadcastResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(broadcastTextUpdate),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(broadcastResponse.status).toBe(200);
+    await expect(broadcastResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(composeWorkerMock).toHaveBeenCalledTimes(1);
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: '77',
+      text: [
+        '📣 Рассылка отправлена.',
+        'Получателей: 1.',
+      ].join('\n'),
+    });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'subscriber-1',
+      threadId: undefined,
+      text: 'Всем привет',
+    });
+
+    expect(adminKv.get).toHaveBeenCalledWith('whitelist', 'text');
+
+    vi.resetModules();
+  });
+});
