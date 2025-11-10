@@ -8,7 +8,11 @@ import type {
   TransformPayloadResult,
 } from '../../http/router';
 import type { StoragePort } from '../../ports';
-import { knownUsersCache, type KnownUser } from './known-users-cache';
+import {
+  createKnownUsersCache,
+  type KnownUser,
+  type KnownUsersCache,
+} from './known-users-cache';
 
 const applySnapshotIdField = (
   snapshot: Record<string, unknown>,
@@ -93,12 +97,17 @@ const handledResult = (response?: Response): HandledWebhookResult => ({
     }),
 });
 
+export type TelegramWebhookHandler = TransformPayload & {
+  knownUsers: KnownUsersCache;
+};
+
 export const createTelegramWebhookHandler = (
   options: CreateTelegramWebhookHandlerOptions,
-): TransformPayload => {
+): TelegramWebhookHandler => {
   const { storage, now = () => new Date(), ...transformOptions } = options;
   // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
   // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
+  const knownUsersCache = createKnownUsersCache();
 
   const forgetUser = (userId: unknown) => {
     if (typeof userId === 'string') {
@@ -122,7 +131,10 @@ export const createTelegramWebhookHandler = (
     knownUsersCache.remember(userId, { utmSource });
   };
 
-  return async (payload: unknown, context?: TransformPayloadContext) => {
+  const handler: TransformPayload = async (
+    payload: unknown,
+    context?: TransformPayloadContext,
+  ) => {
     // eslint-disable-next-line no-console
     console.info('[utm-tracking] incoming payload', safePayloadSnapshot(payload));
 
@@ -209,4 +221,6 @@ export const createTelegramWebhookHandler = (
 
     return result;
   };
+
+  return Object.assign(handler, { knownUsers: knownUsersCache });
 };

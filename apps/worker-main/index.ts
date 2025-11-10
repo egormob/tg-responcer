@@ -26,7 +26,7 @@ import {
   createTelegramExportCommandHandler,
   createTelegramBroadcastCommandHandler,
   createTelegramWebhookHandler,
-  knownUsersCache,
+  type TelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
   type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
@@ -381,6 +381,7 @@ const createAdminRoutes = (
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
+  knownUsers: TelegramWebhookHandler['knownUsers'],
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -413,7 +414,7 @@ const createAdminRoutes = (
       env,
     }),
     knownUsersClear: createKnownUsersClearRoute({
-      cache: knownUsersCache,
+      cache: knownUsers,
     }),
   };
 
@@ -439,7 +440,7 @@ const createTransformPayload = (
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
-) => {
+): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
 
@@ -557,8 +558,7 @@ const createTransformPayload = (
     features: webhookFeatures,
   });
 
-  return (payload: unknown, context?: Parameters<typeof telegramWebhookHandler>[1]) =>
-    telegramWebhookHandler(payload, context);
+  return telegramWebhookHandler;
 };
 
 const createRequestHandler = (env: WorkerEnv) => {
@@ -582,9 +582,19 @@ const createRequestHandler = (env: WorkerEnv) => {
     logger: console,
     now: () => new Date(),
   });
-  const adminRoutes = createAdminRoutes(env, composition, adminAccess, adminErrorRecorder);
-
-  const transformPayload = createTransformPayload(env, composition, adminAccess, adminErrorRecorder);
+  const transformPayload = createTransformPayload(
+    env,
+    composition,
+    adminAccess,
+    adminErrorRecorder,
+  );
+  const adminRoutes = createAdminRoutes(
+    env,
+    composition,
+    adminAccess,
+    adminErrorRecorder,
+    transformPayload.knownUsers,
+  );
 
   const router = createRouter({
     dialogEngine: composition.dialogEngine,
