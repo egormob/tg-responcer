@@ -1,3 +1,9 @@
 # 2025-11-07T12:29:05Z
 > tg-responcer@0.1.0 check:roadmap
 > node scripts/check-roadmap.mjs
+# 2025-11-10T15:32:39Z
+> npm run check:roadmap
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+> tg-responcer@0.1.0 check:roadmap
+> node scripts/check-roadmap.mjs
+# Комментарий: проверка прошла, требуются ручные smoke-тесты self-test/диплинк/рассылка после фиксов Telegram ID.
