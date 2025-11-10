@@ -10,6 +10,7 @@
 ## 2025-11-11 — Telegram 400 из-за усечённого chat_id
 - См. расследование: [issues/2025-11-11-telegram-id-truncation.md](issues/2025-11-11-telegram-id-truncation.md).
 - Следующая диагностика должна проверять корректность BigInt-совместимого парсинга webhook и отсутствие повторных 400-ответов.
+- 2025-11-16: зафиксирован повторный инцидент, требующий lossless-парсера Telegram ID; подробности в [issues/2025-11-16-telegram-id-lossless-parser.md](issues/2025-11-16-telegram-id-lossless-parser.md).
 
 ## 2025-11-09 — Диалог зависает при 400 от transformPayload
 - См. расследование: [issues/2025-11-09-dialog-freeze.md](issues/2025-11-09-dialog-freeze.md).
