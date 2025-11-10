@@ -118,6 +118,9 @@ describe('createTelegramWebhookHandler', () => {
         updatedAt: new Date('2024-02-01T00:00:00.000Z'),
       }),
     );
+    const savePayload = storage.saveUser.mock.calls[0]?.[0] as { userId?: unknown } | undefined;
+    expect(savePayload?.userId).toBe(userId);
+    expect(typeof savePayload?.userId).toBe('string');
 
     const followUp: TelegramUpdate = {
       update_id: 3,

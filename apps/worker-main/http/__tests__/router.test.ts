@@ -23,6 +23,13 @@ describe('http router', () => {
     saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
   }) as unknown as StoragePort;
 
+  const createTypingIndicatorMock = (messaging: ReturnType<typeof createMessagingMock>) => ({
+    runWithTyping: vi.fn(async ({ chatId, threadId }, run) => {
+      await messaging.sendTyping({ chatId, threadId });
+      return run();
+    }),
+  });
+
   it('responds with ok for healthz route', async () => {
     const router = createRouter({
       dialogEngine: createDialogEngineMock(),
@@ -190,6 +197,72 @@ describe('http router', () => {
     expect(passedMessage.chat.threadId).toBe(threadId);
     expect(passedMessage.user.userId).toBe('9223372036854775809');
     expect(passedMessage.messageId).toBe('100');
+  });
+
+  it('keeps large identifiers when invoking typing indicator for telegram updates', async () => {
+    const messaging = createMessagingMock();
+    messaging.sendTyping = vi.fn().mockResolvedValue(undefined);
+    const typingIndicator = createTypingIndicatorMock(messaging);
+
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok', messageId: '500' },
+    });
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload: createTelegramWebhookHandler({
+        storage: createStorageMock(),
+      }),
+      typingIndicator,
+    });
+
+    const chatId = '-1002003004005006007';
+    const threadId = '9223372036854775807';
+    const rawUpdate = JSON.stringify({
+      update_id: '42',
+      message: {
+        message_id: '600',
+        date: 1_710_000_000,
+        text: 'ping',
+        message_thread_id: threadId,
+        chat: {
+          id: chatId,
+          type: 'supergroup',
+        },
+        from: {
+          id: '9223372036854775809',
+          first_name: 'Stringer',
+        },
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: rawUpdate,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(typingIndicator.runWithTyping).toHaveBeenCalledWith(
+      { chatId, threadId },
+      expect.any(Function),
+    );
+    expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId, threadId });
+
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    const message = handleMessage.mock.calls[0]?.[0];
+    expect(message).toBeDefined();
+    if (!message) {
+      throw new Error('Expected message to be passed to dialog engine');
+    }
+    expect(message.chat.id).toBe(chatId);
+    expect(message.chat.threadId).toBe(threadId);
+    expect(message.user.userId).toBe('9223372036854775809');
   });
 
   it('returns bad request when transform detects unsafe telegram identifiers', async () => {
