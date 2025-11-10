@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../ports';
+import { applyTelegramIdLogFields } from './telegram-ids';
 
 const DEFAULT_FALLBACK_TEXT = '⚠️ → 🔁💬';
 
@@ -53,6 +54,12 @@ export async function safeWebhookHandler<T>(
     const fallback = fallbackText ?? DEFAULT_FALLBACK_TEXT;
 
     if (chat.id) {
+      const fallbackLog: Record<string, unknown> = { route: 'safe_webhook_fallback' };
+      applyTelegramIdLogFields(fallbackLog, 'chatId', chat.id, { includeValue: false });
+      if (chat.threadId) {
+        applyTelegramIdLogFields(fallbackLog, 'threadId', chat.threadId, { includeValue: false });
+      }
+
       try {
         await messaging.sendText({
           chatId: chat.id,
@@ -60,10 +67,13 @@ export async function safeWebhookHandler<T>(
           text: fallback,
         });
         // eslint-disable-next-line no-console
-        console.info('[safe] fallback sent');
+        console.info('[safe] fallback sent', fallbackLog);
       } catch (sendError) {
         // eslint-disable-next-line no-console
-        console.error('[safe][fallback][sendText][error]', String(sendError));
+        console.error('[safe][fallback][sendText][error]', {
+          ...fallbackLog,
+          error: String(sendError),
+        });
       }
     }
 

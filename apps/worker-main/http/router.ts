@@ -2,6 +2,7 @@ import { DialogEngine, type IncomingMessage } from '../core';
 import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
+import { applyTelegramIdLogFields } from './telegram-ids';
 import { parseTelegramUpdateBody } from './telegram-payload';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
@@ -45,6 +46,11 @@ export interface HandledWebhookResult {
 export interface MessageWebhookResult {
   kind: 'message';
   message: IncomingMessage;
+  chatIdRaw?: unknown;
+  chatIdNormalized?: string;
+  fromId?: unknown;
+  messageId?: string;
+  route?: string;
 }
 
 export interface NonTextWebhookResult {
@@ -98,6 +104,91 @@ const parseDate = (value: unknown): Date => {
   }
 
   return new Date();
+};
+
+const extractUpdateId = (payload: unknown): string | number | undefined => {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+
+  const raw = (payload as Record<string, unknown>).update_id;
+
+  if (typeof raw === 'string') {
+    return raw;
+  }
+
+  if (typeof raw === 'number' && Number.isSafeInteger(raw)) {
+    return raw;
+  }
+
+  return undefined;
+};
+
+type MessagingAction = 'sendText' | 'sendTyping';
+
+interface MessagingLogDetails {
+  action: MessagingAction;
+  route: string;
+  updateId?: string | number;
+  chatIdRaw?: unknown;
+  chatIdNormalized?: string;
+  fromId?: unknown;
+  messageId?: string;
+}
+
+const createMessagingLogFields = (details: MessagingLogDetails) => {
+  const log: Record<string, unknown> = {
+    action: details.action,
+    route: details.route,
+  };
+
+  if (details.updateId !== undefined) {
+    log.updateId = details.updateId;
+  }
+
+  if (details.chatIdRaw !== undefined) {
+    log.chatIdRawType = typeof details.chatIdRaw;
+    if (typeof details.chatIdRaw === 'string' || typeof details.chatIdRaw === 'bigint') {
+      applyTelegramIdLogFields(log, 'chatIdRaw', details.chatIdRaw, { includeValue: false });
+    }
+  }
+
+  if (details.chatIdNormalized) {
+    applyTelegramIdLogFields(log, 'chatIdNormalized', details.chatIdNormalized, {
+      includeValue: false,
+    });
+  }
+
+  if (details.fromId !== undefined) {
+    applyTelegramIdLogFields(log, 'fromId', details.fromId, { includeValue: false });
+  }
+
+  if (details.messageId !== undefined) {
+    applyTelegramIdLogFields(log, 'messageId', details.messageId, { includeValue: false });
+  }
+
+  return log;
+};
+
+const logMessagingCall = async <T>(
+  details: MessagingLogDetails,
+  call: () => Promise<T>,
+): Promise<T> => {
+  const log = createMessagingLogFields(details);
+  try {
+    const result = await call();
+    // eslint-disable-next-line no-console
+    console.info(`[router][${details.action}] success`, { ...log, status: 'ok' });
+    return result;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`[router][${details.action}] error`, {
+      ...log,
+      status: 'error',
+      error: String(error),
+    });
+    throw error;
+  }
 };
 
 export const parseIncomingMessage = (payload: unknown): IncomingMessage => {
@@ -263,14 +354,17 @@ export const createRouter = (options: RouterOptions) => {
     }
 
     let payload: unknown;
+    let updateId: string | number | undefined;
     try {
       const rawBody = await request.text();
       payload = parseTelegramUpdateBody(rawBody);
+      updateId = extractUpdateId(payload);
     } catch (error) {
       return new Response('Invalid JSON payload', { status: 400 });
     }
 
     let message: IncomingMessage;
+    let messageLogDetails: MessagingLogDetails | undefined;
     try {
       const transformed = await transformPayload(payload, context);
 
@@ -283,11 +377,20 @@ export const createRouter = (options: RouterOptions) => {
       if (isNonTextWebhookResult(transformed)) {
         const text = transformed.reply === 'voice' ? '🔇  👉📝' : '🖼️❌  👉📝';
         try {
-          await options.messaging.sendText({
-            chatId: transformed.chat.id,
-            threadId: transformed.chat.threadId,
-            text,
-          });
+          await logMessagingCall(
+            {
+              action: 'sendText',
+              route: transformed.reply === 'voice' ? 'non_text_voice' : 'non_text_media',
+              updateId,
+              chatIdNormalized: transformed.chat.id,
+            },
+            () =>
+              options.messaging.sendText({
+                chatId: transformed.chat.id,
+                threadId: transformed.chat.threadId,
+                text,
+              }),
+          );
         } catch (error) {
           // eslint-disable-next-line no-console
           console.warn('[router] failed to send non-text reminder', error);
@@ -297,8 +400,25 @@ export const createRouter = (options: RouterOptions) => {
 
       if (isMessageWebhookResult(transformed)) {
         message = transformed.message;
+        messageLogDetails = {
+          action: 'sendText',
+          route: transformed.route ?? 'message',
+          updateId,
+          chatIdRaw: transformed.chatIdRaw,
+          chatIdNormalized: transformed.chatIdNormalized ?? transformed.message.chat.id,
+          fromId: transformed.fromId ?? transformed.message.user.userId,
+          messageId: transformed.messageId ?? transformed.message.messageId,
+        };
       } else if (isIncomingMessageCandidate(transformed)) {
         message = transformed;
+        messageLogDetails = {
+          action: 'sendText',
+          route: 'incoming_message',
+          updateId,
+          chatIdNormalized: transformed.chat.id,
+          fromId: transformed.user.userId,
+          messageId: transformed.messageId,
+        };
       } else {
         throw new Error('Transform payload returned invalid result');
       }
@@ -332,11 +452,25 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         try {
-          await options.messaging.sendText({
-            chatId: message.chat.id,
-            threadId: message.chat.threadId,
-            text: RATE_LIMIT_FALLBACK_TEXT,
-          });
+          await logMessagingCall(
+            {
+              ...(messageLogDetails ?? {
+                action: 'sendText',
+                route: 'rate_limit_fallback',
+                updateId,
+                chatIdNormalized: message.chat.id,
+                fromId: message.user.userId,
+                messageId: message.messageId,
+              }),
+              route: 'rate_limit_fallback',
+            },
+            () =>
+              options.messaging.sendText({
+                chatId: message.chat.id,
+                threadId: message.chat.threadId,
+                text: RATE_LIMIT_FALLBACK_TEXT,
+              }),
+          );
         } catch (error) {
           // eslint-disable-next-line no-console
           console.warn('[router] failed to send rate limit fallback', error);

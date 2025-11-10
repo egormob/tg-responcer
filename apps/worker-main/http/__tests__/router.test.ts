@@ -194,6 +194,7 @@ describe('http router', () => {
       throw new Error('Expected message to be passed to dialog engine');
     }
     expect(passedMessage.chat.id).toBe(chatId);
+    expect(typeof passedMessage.chat.id).toBe('string');
     expect(passedMessage.chat.threadId).toBe(threadId);
     expect(passedMessage.user.userId).toBe('9223372036854775809');
     expect(passedMessage.messageId).toBe('100');
