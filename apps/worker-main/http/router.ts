@@ -159,6 +159,7 @@ export interface RouterOptions {
     envz?: (request: Request) => Promise<Response>;
     accessDiagnostics?: (request: Request) => Promise<Response>;
     diag?: (request: Request) => Promise<Response>;
+    knownUsersClear?: (request: Request) => Promise<Response>;
     broadcastToken?: string;
     broadcast?: (request: Request) => Promise<Response>;
   };
@@ -452,6 +453,19 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         return options.admin.envz(auth.request);
+      }
+
+      if (pathname === '/admin/known-users/clear') {
+        if (!options.admin?.knownUsersClear) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.knownUsersClear(auth.request);
       }
 
       if (pathname === '/admin/diag') {

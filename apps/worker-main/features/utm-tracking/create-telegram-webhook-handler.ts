@@ -8,6 +8,7 @@ import type {
   TransformPayloadResult,
 } from '../../http/router';
 import type { StoragePort } from '../../ports';
+import { knownUsersCache, type KnownUser } from './known-users-cache';
 
 const applySnapshotIdField = (
   snapshot: Record<string, unknown>,
@@ -74,10 +75,6 @@ const safePayloadSnapshot = (payload: unknown) => {
   return snapshot;
 };
 
-interface KnownUser {
-  utmSource?: string;
-}
-
 export interface CreateTelegramWebhookHandlerOptions extends TelegramWebhookOptions {
   storage: StoragePort;
   now?: () => Date;
@@ -102,13 +99,12 @@ export const createTelegramWebhookHandler = (
   const { storage, now = () => new Date(), ...transformOptions } = options;
   // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
   // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
-  const knownUsers = new Map<string, KnownUser>();
 
   const forgetUser = (userId: unknown) => {
     if (typeof userId === 'string') {
-      knownUsers.delete(userId);
+      knownUsersCache.forget(userId);
     } else {
-      knownUsers.clear();
+      knownUsersCache.clear();
     }
   };
 
@@ -123,7 +119,7 @@ export const createTelegramWebhookHandler = (
       return;
     }
 
-    knownUsers.set(userId, { utmSource });
+    knownUsersCache.remember(userId, { utmSource });
   };
 
   return async (payload: unknown, context?: TransformPayloadContext) => {
@@ -157,7 +153,7 @@ export const createTelegramWebhookHandler = (
       }
 
       const userId = userIdRaw;
-      const existing = knownUsers.get(userId);
+      const existing = knownUsersCache.get(userId);
       const incomingUtm = message.user.utmSource;
 
       if (!existing) {

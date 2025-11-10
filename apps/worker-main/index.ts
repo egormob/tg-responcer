@@ -18,12 +18,14 @@ import {
   createCsvExportHandler,
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
+  createKnownUsersClearRoute,
   createImmediateBroadcastSender,
   createRateLimitNotifier,
   createSelfTestRoute,
   createTelegramExportCommandHandler,
   createTelegramBroadcastCommandHandler,
   createTelegramWebhookHandler,
+  knownUsersCache,
   type AdminExportRateLimitKvNamespace,
   type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
@@ -400,6 +402,9 @@ const createAdminRoutes = (
     }),
     diag: createBindingsDiagnosticsRoute({
       storage: composition.ports.storage,
+    }),
+    knownUsersClear: createKnownUsersClearRoute({
+      cache: knownUsersCache,
     }),
   };
 

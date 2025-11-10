@@ -791,6 +791,39 @@ describe('http router', () => {
     expect(envz).toHaveBeenCalledTimes(1);
   });
 
+  it('requires admin token for known users clear route', async () => {
+    const knownUsersClear = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true, cleared: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        knownUsersClear,
+      },
+    });
+
+    const unauthorized = await router.handle(
+      new Request('https://example.com/admin/known-users/clear'),
+    );
+    expect(unauthorized.status).toBe(401);
+    expect(knownUsersClear).not.toHaveBeenCalled();
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/known-users/clear', {
+        headers: { 'x-admin-token': 'secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(knownUsersClear).toHaveBeenCalledTimes(1);
+  });
+
   it('delegates admin diag route when configured', async () => {
     const diag = vi.fn().mockResolvedValue(new Response('diag', { status: 200 }));
     const router = createRouter({

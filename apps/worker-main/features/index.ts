@@ -87,3 +87,8 @@ export {
   createTelegramWebhookHandler,
   type CreateTelegramWebhookHandlerOptions,
 } from './utm-tracking/create-telegram-webhook-handler';
+export {
+  knownUsersCache,
+  type KnownUsersCache,
+  type KnownUser,
+} from './utm-tracking/known-users-cache';
