@@ -22,8 +22,16 @@ export interface RateLimitNotificationDetails {
   ttlMs: number;
 }
 
+export interface RateLimitNotifierNotificationResult {
+  handled: boolean;
+}
+
 export interface RateLimitNotifier {
-  notify(input: { userId: string; chatId: string; threadId?: string }): Promise<void>;
+  notify(input: {
+    userId: string;
+    chatId: string;
+    threadId?: string;
+  }): Promise<RateLimitNotifierNotificationResult>;
 }
 
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -144,6 +152,8 @@ export const createRateLimitNotifier = (
           limit: options.limit,
           ttlMs,
         });
+
+        return { handled: true };
       } catch (error) {
         logger.error('failed to send rate limit notification', {
           userId: input.userId,
@@ -156,6 +166,8 @@ export const createRateLimitNotifier = (
               ? { name: error.name, message: error.message }
               : { message: 'Unknown error' },
         });
+
+        return { handled: false };
       }
     },
   };
