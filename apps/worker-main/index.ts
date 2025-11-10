@@ -33,7 +33,6 @@ import {
 import {
   createRouter,
   createTypingIndicator,
-  transformTelegramUpdate,
   type RouterOptions,
   type TypingIndicator,
   type TelegramAdminCommandContext,

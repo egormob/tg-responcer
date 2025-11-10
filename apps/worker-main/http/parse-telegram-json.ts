@@ -1,4 +1,4 @@
-const wrapLargeIntegers = (input: string): string => {
+const quoteIntegerTokens = (input: string): string => {
   let result = '';
   let index = 0;
   const length = input.length;
@@ -58,18 +58,21 @@ const wrapLargeIntegers = (input: string): string => {
 
       const nextChar = input[end];
       const prevChar = start > 0 ? input[start - 1] : undefined;
-      if (nextChar === '.' || nextChar === 'e' || nextChar === 'E' || prevChar === 'e' || prevChar === 'E') {
+      if (
+        nextChar === '.'
+        || nextChar === 'e'
+        || nextChar === 'E'
+        || prevChar === 'e'
+        || prevChar === 'E'
+        || prevChar === '.'
+      ) {
         result += input.slice(start, end);
         index = end;
         continue;
       }
 
       const numberText = input.slice(start, end);
-      if (digits >= 15) {
-        result += `"${numberText}"`;
-      } else {
-        result += numberText;
-      }
+      result += `"${numberText}"`;
       index = end;
       continue;
     }
@@ -81,9 +84,9 @@ const wrapLargeIntegers = (input: string): string => {
   return result;
 };
 
-export const parseJsonWithLargeIntegers = (raw: string): unknown => {
-  const prepared = wrapLargeIntegers(raw);
+export const parseTelegramJson = (raw: string): unknown => {
+  const prepared = quoteIntegerTokens(raw);
   return JSON.parse(prepared);
 };
 
-export { wrapLargeIntegers };
+export { quoteIntegerTokens };

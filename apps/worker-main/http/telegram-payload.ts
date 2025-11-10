@@ -1,4 +1,3 @@
-import { parseJsonWithLargeIntegers } from './parse-json-with-large-integers';
+import { parseTelegramJson } from './parse-telegram-json';
 
-export const parseTelegramUpdateBody = (rawBody: string): unknown =>
-  parseJsonWithLargeIntegers(rawBody);
+export const parseTelegramUpdateBody = (rawBody: string): unknown => parseTelegramJson(rawBody);

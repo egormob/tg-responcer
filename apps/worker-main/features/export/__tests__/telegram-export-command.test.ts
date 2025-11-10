@@ -57,7 +57,8 @@ describe('createTelegramExportCommandHandler', () => {
       store: Map<string, { value: string; expirationTtl?: number }>;
     } = {
       store,
-      async get(key: string, _type: 'text') {
+      async get(key: string, type: 'text') {
+        void type;
         const record = store.get(key);
         return record ? record.value : null;
       },

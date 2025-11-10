@@ -582,7 +582,7 @@ describe('createD1StorageAdapter', () => {
       .mockRejectedValueOnce(new Error('temporary outage'))
       .mockResolvedValue({ success: true });
 
-    const statement: any = {};
+    const statement: Record<string, unknown> = {};
     const bind = vi.fn(() => statement);
 
     Object.assign(statement, {
@@ -624,7 +624,7 @@ describe('createD1StorageAdapter', () => {
 
     const run = vi.fn().mockRejectedValue(new Error('d1 down'));
 
-    const statement: any = {};
+    const statement: Record<string, unknown> = {};
     const bind = vi.fn(() => statement);
 
     Object.assign(statement, {

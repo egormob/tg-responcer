@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { parseTelegramUpdateBody } from '../telegram-payload';
 
 describe('parseTelegramUpdateBody', () => {
-  it('parses regular JSON without modifications', () => {
+  it('quotes integer values as strings', () => {
     const payload = parseTelegramUpdateBody('{"id":123,"text":"hello"}');
-    expect(payload).toEqual({ id: 123, text: 'hello' });
+    expect(payload).toEqual({ id: '123', text: 'hello' });
   });
 
   it('converts large integers to strings', () => {
@@ -23,7 +23,7 @@ describe('parseTelegramUpdateBody', () => {
       '{"items":[1,12345678901234567890,{"id":-12345678901234567890}]}'
     );
     expect(payload).toEqual({
-      items: [1, '12345678901234567890', { id: '-12345678901234567890' }],
+      items: ['1', '12345678901234567890', { id: '-12345678901234567890' }],
     });
   });
 
