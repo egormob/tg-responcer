@@ -143,7 +143,7 @@ export const createTelegramWebhookHandler = (
     if (isMessageResult(result)) {
       const { message } = result;
 
-      const handledByFeature = await transformOptions.features?.handleMessage?.(message);
+      const handledByFeature = await transformOptions.features?.handleMessage?.(message, context);
       if (handledByFeature) {
         if (handledByFeature instanceof Response) {
           return handledResult(handledByFeature);

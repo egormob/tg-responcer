@@ -51,43 +51,43 @@ export const createImmediateBroadcastSender = (
   const recipients = options.recipients.filter((recipient) => recipient.chatId.trim().length > 0);
 
   return async ({ text, requestedBy }) => {
-    const deliveries: BroadcastSendResultDelivery[] = [];
+    const deliveries: BroadcastSendResultDelivery[] = await Promise.all(
+      recipients.map(async (recipient) => {
+        try {
+          const result = await options.messaging.sendText({
+            chatId: recipient.chatId,
+            threadId: recipient.threadId,
+            text,
+          });
 
-    for (const recipient of recipients) {
-      try {
-        const result = await options.messaging.sendText({
-          chatId: recipient.chatId,
-          threadId: recipient.threadId,
-          text,
-        });
+          options.logger?.info?.('broadcast delivered', {
+            requestedBy,
+            chatId: recipient.chatId,
+            threadId: recipient.threadId ?? null,
+            messageId: result?.messageId ?? null,
+          });
 
-        options.logger?.info?.('broadcast delivered', {
-          requestedBy,
-          chatId: recipient.chatId,
-          threadId: recipient.threadId ?? null,
-          messageId: result?.messageId ?? null,
-        });
+          return {
+            recipient,
+            messageId: result?.messageId,
+          } satisfies BroadcastSendResultDelivery;
+        } catch (error) {
+          const details = toErrorDetails(error);
 
-        deliveries.push({
-          recipient,
-          messageId: result?.messageId,
-        });
-      } catch (error) {
-        const details = toErrorDetails(error);
+          options.logger?.error?.('broadcast delivery failed', {
+            requestedBy,
+            chatId: recipient.chatId,
+            threadId: recipient.threadId ?? null,
+            error: details,
+          });
 
-        options.logger?.error?.('broadcast delivery failed', {
-          requestedBy,
-          chatId: recipient.chatId,
-          threadId: recipient.threadId ?? null,
-          error: details,
-        });
-
-        deliveries.push({
-          recipient,
-          error: details,
-        });
-      }
-    }
+          return {
+            recipient,
+            error: details,
+          } satisfies BroadcastSendResultDelivery;
+        }
+      }),
+    );
 
     const delivered = deliveries.filter((entry) => !entry.error).length;
     const failed = deliveries.length - delivered;
