@@ -315,6 +315,27 @@ describe('createTelegramMessagingAdapter', () => {
     );
   });
 
+  it('rejects sendTyping when chat id is not a string', async () => {
+    const errorMock = vi.fn();
+    const adapter = createAdapter({
+      logger: { error: errorMock },
+    });
+
+    await expect(
+      adapter.sendTyping({ chatId: 123 as unknown as string }),
+    ).rejects.toThrowError('telegram-adapter expected chat_id to be a string');
+
+    expect(errorMock).toHaveBeenCalledWith(
+      'telegram-adapter non-string identifier',
+      expect.objectContaining({
+        method: 'sendChatAction',
+        field: 'chat_id',
+        value: 123,
+        valueType: 'number',
+      }),
+    );
+  });
+
   it('deletes message with retries', async () => {
     fetchMock
       .mockResolvedValueOnce(

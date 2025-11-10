@@ -182,6 +182,73 @@ describe('createTelegramWebhookHandler', () => {
     expect(result.message.user.utmSource).toBe('src_DEMO');
   });
 
+  it('drops cached utm source when user id is corrupted to non-string', async () => {
+    const storage = createStorageMock();
+    let corruptNextMessage = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: {
+        async handleMessage(message) {
+          if (corruptNextMessage && message.text === 'ping') {
+            corruptNextMessage = false;
+            (message.user as { userId: unknown }).userId = 55 as unknown as string;
+          }
+        },
+      },
+    });
+
+    try {
+      await handler(createStartUpdate('src_CORRUPT'));
+
+      const followUp: TelegramUpdate = {
+        update_id: 10,
+        message: {
+          ...baseUpdate.message!,
+          message_id: '113',
+          date: '1710000300',
+          text: 'ping',
+          entities: undefined,
+        },
+      };
+
+      const firstResult = await handler(followUp);
+      expect(firstResult.kind).toBe('message');
+      expect(consoleError).toHaveBeenCalledWith(
+        '[utm-tracking] message with non-string user id',
+        expect.objectContaining({
+          userId: 55,
+          userIdType: 'number',
+        }),
+      );
+
+      consoleError.mockClear();
+
+      const secondFollowUp: TelegramUpdate = {
+        update_id: 11,
+        message: {
+          ...baseUpdate.message!,
+          message_id: '114',
+          date: '1710000400',
+          text: 'ping',
+          entities: undefined,
+        },
+      };
+
+      const secondResult = await handler(secondFollowUp);
+      expect(secondResult.kind).toBe('message');
+      if (secondResult.kind !== 'message') {
+        throw new Error('Expected message result');
+      }
+
+      expect(secondResult.message.user.utmSource).toBeUndefined();
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('stores utmSource from mini app start payload', async () => {
     const storage = createStorageMock();
     const handler = createTelegramWebhookHandler({

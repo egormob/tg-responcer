@@ -23,7 +23,7 @@ export interface MessagingPort {
    *   работу даже без typing-индикации.
    */
   sendTyping(input: {
-    chatId: string;
+    chatId: string; // Передаём каноническую строку Telegram без числовых преобразований.
     threadId?: string;
   }): Promise<void>;
 
@@ -40,7 +40,7 @@ export interface MessagingPort {
    *   не отклонял сообщение.
    */
   sendText(input: {
-    chatId: string;
+    chatId: string; // Строго строковый идентификатор; адаптер не делает String(value).
     threadId?: string;
     text: string;
   }): Promise<{ messageId?: string }>;
@@ -72,7 +72,7 @@ export interface MessagingPort {
    *   чтобы операция считалась идемпотентной.
    */
   deleteMessage(input: {
-    chatId: string;
+    chatId: string; // Любые number/bigint нужно конвертировать заранее.
     messageId: string;
     threadId?: string;
   }): Promise<void>;

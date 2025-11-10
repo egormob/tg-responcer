@@ -9,6 +9,22 @@ import type {
 } from '../../http/router';
 import type { StoragePort } from '../../ports';
 
+const applySnapshotIdField = (
+  snapshot: Record<string, unknown>,
+  field: string,
+  value: unknown,
+) => {
+  if (typeof value === 'string') {
+    applyTelegramIdLogFields(snapshot, field, value);
+    return;
+  }
+
+  if (value !== undefined) {
+    snapshot[field] = value;
+    snapshot[`${field}Type`] = typeof value;
+  }
+};
+
 const safePayloadSnapshot = (payload: unknown) => {
   if (typeof payload !== 'object' || payload === null) {
     return { type: typeof payload };
@@ -50,10 +66,10 @@ const safePayloadSnapshot = (payload: unknown) => {
     hasWebAppData: typeof message?.web_app_data === 'object' && message?.web_app_data !== null,
   };
 
-  applyTelegramIdLogFields(snapshot, 'messageId', message?.message_id);
-  applyTelegramIdLogFields(snapshot, 'chatId', chat?.id);
-  applyTelegramIdLogFields(snapshot, 'fromId', from?.id);
-  applyTelegramIdLogFields(snapshot, 'threadId', message?.message_thread_id);
+  applySnapshotIdField(snapshot, 'messageId', message?.message_id);
+  applySnapshotIdField(snapshot, 'chatId', chat?.id);
+  applySnapshotIdField(snapshot, 'fromId', from?.id);
+  applySnapshotIdField(snapshot, 'threadId', message?.message_thread_id);
 
   return snapshot;
 };
@@ -84,9 +100,29 @@ export const createTelegramWebhookHandler = (
   options: CreateTelegramWebhookHandlerOptions,
 ): TransformPayload => {
   const { storage, now = () => new Date(), ...transformOptions } = options;
+  // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
+  // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
   const knownUsers = new Map<string, KnownUser>();
 
-  const rememberUser = (userId: string, utmSource: string | undefined) => {
+  const forgetUser = (userId: unknown) => {
+    if (typeof userId === 'string') {
+      knownUsers.delete(userId);
+    } else {
+      knownUsers.clear();
+    }
+  };
+
+  const rememberUser = (userId: unknown, utmSource: string | undefined) => {
+    if (typeof userId !== 'string') {
+      // eslint-disable-next-line no-console
+      console.error('[utm-tracking] refused to cache non-string user id', {
+        userId,
+        userIdType: typeof userId,
+      });
+      forgetUser(userId);
+      return;
+    }
+
     knownUsers.set(userId, { utmSource });
   };
 
@@ -108,7 +144,19 @@ export const createTelegramWebhookHandler = (
         return handledResult();
       }
 
-      const userId = message.user.userId;
+      const userIdRaw: unknown = message.user.userId;
+
+      if (typeof userIdRaw !== 'string') {
+        // eslint-disable-next-line no-console
+        console.error('[utm-tracking] message with non-string user id', {
+          userId: userIdRaw,
+          userIdType: typeof userIdRaw,
+        });
+        forgetUser(userIdRaw);
+        return result;
+      }
+
+      const userId = userIdRaw;
       const existing = knownUsers.get(userId);
       const incomingUtm = message.user.utmSource;
 
