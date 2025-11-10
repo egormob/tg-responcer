@@ -87,10 +87,12 @@ export {
 } from './admin-diagnostics';
 export {
   createTelegramWebhookHandler,
+  type TelegramWebhookHandler,
   type CreateTelegramWebhookHandlerOptions,
 } from './utm-tracking/create-telegram-webhook-handler';
 export {
-  knownUsersCache,
+  createKnownUsersCache,
   type KnownUsersCache,
   type KnownUser,
+  type KnownUsersSnapshot,
 } from './utm-tracking/known-users-cache';

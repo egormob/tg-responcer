@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createTelegramWebhookHandler } from '../create-telegram-webhook-handler';
 import type { StoragePort } from '../../../ports';
 import type { TelegramUpdate } from '../../../http/telegram-webhook';
-import { knownUsersCache } from '../known-users-cache';
+import { describeTelegramIdForLogs } from '../../../http/telegram-ids';
+import { createKnownUsersClearRoute } from '../../admin-diagnostics/known-users-route';
 
 const createStorageMock = () => ({
   saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
@@ -44,10 +45,6 @@ const createStartUpdate = (payload: string | undefined): TelegramUpdate => {
 };
 
 describe('createTelegramWebhookHandler', () => {
-  beforeEach(() => {
-    knownUsersCache.clear();
-  });
-
   it('stores utmSource on first /start payload', async () => {
     const storage = createStorageMock();
     const handler = createTelegramWebhookHandler({
@@ -190,6 +187,56 @@ describe('createTelegramWebhookHandler', () => {
     expect(result.message.user.utmSource).toBe('src_DEMO');
   });
 
+  it('exposes shared known users cache used by admin route clearing', async () => {
+    const storage = createStorageMock();
+    const handler = createTelegramWebhookHandler({
+      storage,
+      now: () => new Date('2024-02-01T00:00:00.000Z'),
+    });
+
+    await handler(createStartUpdate('src_DEMO'));
+
+    const followUp: TelegramUpdate = {
+      ...baseUpdate,
+      message: {
+        ...baseUpdate.message!,
+        text: 'follow up after cache clear',
+      },
+    };
+
+    const route = createKnownUsersClearRoute({ cache: handler.knownUsers });
+    const response = await route(new Request('https://example.com/admin/known-users/clear'));
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      cleared: number;
+      size: number;
+      userIdHashes: string[];
+    };
+
+    const expectedHash = describeTelegramIdForLogs('55')?.hash;
+    if (!expectedHash) {
+      throw new Error('Expected hash for Telegram user id 55');
+    }
+
+    expect(payload).toEqual({
+      ok: true,
+      cleared: 1,
+      size: 1,
+      userIdHashes: [expectedHash],
+    });
+
+    const result = await handler(followUp);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.utmSource).toBeUndefined();
+  });
+
   it('drops cached utm source when user id is corrupted to non-string', async () => {
     const storage = createStorageMock();
     let corruptNextMessage = true;
@@ -305,10 +352,6 @@ describe('createTelegramWebhookHandler', () => {
 });
 
 describe('worker integration with cached router', () => {
-  beforeEach(() => {
-    knownUsersCache.clear();
-  });
-
   it('reuses stored utmSource across sequential webhook requests', async () => {
     vi.resetModules();
 

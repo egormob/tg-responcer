@@ -2,14 +2,20 @@ export interface KnownUser {
   utmSource?: string;
 }
 
+export interface KnownUsersSnapshot {
+  size: number;
+  userIds: string[];
+}
+
 export interface KnownUsersCache {
   remember(userId: string, user: KnownUser): void;
   forget(userId: string): void;
   get(userId: string): KnownUser | undefined;
   clear(): number;
+  snapshot(): KnownUsersSnapshot;
 }
 
-const createKnownUsersCache = (): KnownUsersCache => {
+export const createKnownUsersCache = (): KnownUsersCache => {
   const knownUsers = new Map<string, KnownUser>();
 
   return {
@@ -27,7 +33,11 @@ const createKnownUsersCache = (): KnownUsersCache => {
       knownUsers.clear();
       return cleared;
     },
+    snapshot() {
+      return {
+        size: knownUsers.size,
+        userIds: Array.from(knownUsers.keys()),
+      };
+    },
   };
 };
-
-export const knownUsersCache = createKnownUsersCache();
