@@ -1,5 +1,6 @@
 import type { StoragePort } from '../../ports';
 import { json } from '../../shared/json-response';
+import { getLastTelegramUpdateSnapshot } from '../../http/telegram-webhook';
 
 export interface CreateBindingsDiagnosticsRouteOptions {
   storage: StoragePort;
@@ -68,6 +69,7 @@ export const createBindingsDiagnosticsRoute = (options: CreateBindingsDiagnostic
             status: null,
             description: 'TELEGRAM_BOT_TOKEN is not configured',
             tokenMasked: maskedToken,
+            lastWebhookSnapshot: getLastTelegramUpdateSnapshot(),
           },
           { status: 500 },
         );
@@ -113,6 +115,7 @@ export const createBindingsDiagnosticsRoute = (options: CreateBindingsDiagnostic
             status: response.status,
             description,
             tokenMasked: maskedToken,
+            lastWebhookSnapshot: getLastTelegramUpdateSnapshot(),
           },
           { status: ok ? 200 : 502 },
         );
@@ -126,6 +129,7 @@ export const createBindingsDiagnosticsRoute = (options: CreateBindingsDiagnostic
             status: null,
             description: message,
             tokenMasked: maskedToken,
+            lastWebhookSnapshot: getLastTelegramUpdateSnapshot(),
           },
           { status: 502 },
         );
@@ -209,6 +213,7 @@ export const createBindingsDiagnosticsRoute = (options: CreateBindingsDiagnostic
         getRecentMessages: recentMessagesCount !== undefined ? { count: recentMessagesCount } : undefined,
       },
       errors,
+      lastWebhookSnapshot: getLastTelegramUpdateSnapshot(),
     };
 
     if (ok) {

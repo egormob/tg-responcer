@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../ports';
+import { noteTelegramSnapshot, recordTelegramSnapshotAction } from './telegram-webhook';
 import { applyTelegramIdLogFields } from './telegram-ids';
 
 const DEFAULT_FALLBACK_TEXT = '⚠️ → 🔁💬';
@@ -53,6 +54,22 @@ export async function safeWebhookHandler<T>(
     console.error('[safe][error]', { err: String(error) });
     const fallback = fallbackText ?? DEFAULT_FALLBACK_TEXT;
 
+    const snapshotContext: {
+      route: 'safe';
+      failSoft: boolean;
+      chatIdRaw?: string;
+      chatIdUsed?: string;
+    } = { route: 'safe', failSoft: true };
+
+    if (chat.id) {
+      snapshotContext.chatIdRaw = chat.id;
+      snapshotContext.chatIdUsed = chat.id;
+    }
+
+    noteTelegramSnapshot({
+      ...snapshotContext,
+    });
+
     if (chat.id) {
       const fallbackLog: Record<string, unknown> = { route: 'safe_webhook_fallback' };
       applyTelegramIdLogFields(fallbackLog, 'chatId', chat.id, { includeValue: false });
@@ -66,6 +83,15 @@ export async function safeWebhookHandler<T>(
           threadId: chat.threadId,
           text: fallback,
         });
+        recordTelegramSnapshotAction({
+          route: 'safe',
+          chatIdRaw: chat.id,
+          chatIdUsed: chat.id,
+          action: 'sendText',
+          ok: true,
+          statusCode: 200,
+          description: 'OK',
+        });
         // eslint-disable-next-line no-console
         console.info('[safe] fallback sent', fallbackLog);
       } catch (sendError) {
@@ -73,6 +99,21 @@ export async function safeWebhookHandler<T>(
         console.error('[safe][fallback][sendText][error]', {
           ...fallbackLog,
           error: String(sendError),
+        });
+        const statusCandidate = (sendError as { status?: unknown }).status;
+        const descriptionCandidate = (sendError as { description?: unknown }).description;
+        recordTelegramSnapshotAction({
+          route: 'safe',
+          chatIdRaw: chat.id,
+          chatIdUsed: chat.id,
+          action: 'sendText',
+          ok: false,
+          statusCode: typeof statusCandidate === 'number' ? statusCandidate : null,
+          description:
+            typeof descriptionCandidate === 'string' && descriptionCandidate.trim().length > 0
+              ? descriptionCandidate
+              : undefined,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
         });
       }
     }

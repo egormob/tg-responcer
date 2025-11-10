@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MessagingPort } from '../../ports';
+import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
 import { safeWebhookHandler } from '../safe-webhook';
 
 describe('safeWebhookHandler', () => {
+  beforeEach(() => {
+    resetLastTelegramUpdateSnapshot();
+  });
+
   const createMessagingMock = () => ({
     sendTyping: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({}),
