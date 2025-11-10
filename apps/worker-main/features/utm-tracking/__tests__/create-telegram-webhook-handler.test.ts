@@ -80,7 +80,7 @@ describe('createTelegramWebhookHandler', () => {
     });
 
     const userId = '9223372036854775807';
-    const chatId = '9223372036854775808';
+    const chatId = '-100123456789012345';
     const threadId = '9223372036854775809';
 
     const startUpdate: TelegramUpdate = {
@@ -90,6 +90,7 @@ describe('createTelegramWebhookHandler', () => {
         date: 1_710_000_100,
         text: '/start src_BIG',
         message_thread_id: threadId,
+        migrate_to_chat_id: '-100987654321098765',
         entities: [{ type: 'bot_command', offset: 0, length: '/start'.length }],
         from: {
           id: userId,
@@ -120,6 +121,7 @@ describe('createTelegramWebhookHandler', () => {
         date: 1_710_000_200,
         text: 'ping',
         message_thread_id: threadId,
+        migrate_to_chat_id: '-100987654321098765',
         from: {
           id: userId,
           first_name: 'String',

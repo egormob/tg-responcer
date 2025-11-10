@@ -243,6 +243,78 @@ describe('createTelegramMessagingAdapter', () => {
     ).rejects.toThrow(/exceeds maximum length/i);
   });
 
+  it('logs description and parameters for non-retryable sendText errors', async () => {
+    const errorMock = vi.fn();
+    const chatId = '-100123456789012345';
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          description: 'Bad Request: chat not found',
+          parameters: { migrate_to_chat_id: -1009876543210 },
+        }),
+        { status: 400 },
+      ),
+    );
+
+    const adapter = createAdapter({
+      logger: {
+        error: errorMock,
+      },
+    });
+
+    await expect(adapter.sendText({ chatId, text: 'ping' })).rejects.toThrow(/Bad Request/);
+
+    expect(errorMock).toHaveBeenCalledTimes(1);
+    expect(errorMock).toHaveBeenCalledWith(
+      'telegram-adapter exhausted retries',
+      expect.objectContaining({
+        chat_id: chatId,
+        description: 'Bad Request: chat not found',
+        parameters: { migrate_to_chat_id: -1009876543210 },
+      }),
+    );
+  });
+
+  it('includes Telegram metadata when swallowing typing errors', async () => {
+    const warnMock = vi.fn();
+    const chatId = '-100222222222222222';
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          description: 'Chat migrated',
+          parameters: { migrate_to_chat_id: -100333333333333333 },
+        }),
+        { status: 400 },
+      ),
+    );
+
+    const adapter = createAdapter({
+      logger: {
+        warn: warnMock,
+      },
+    });
+
+    await expect(
+      adapter.sendTyping({
+        chatId,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock).toHaveBeenCalledWith(
+      'telegram-adapter request failed',
+      expect.objectContaining({
+        chat_id: chatId,
+        description: 'Chat migrated',
+        parameters: { migrate_to_chat_id: -100333333333333333 },
+      }),
+    );
+  });
+
   it('deletes message with retries', async () => {
     fetchMock
       .mockResolvedValueOnce(
