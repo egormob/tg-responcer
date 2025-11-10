@@ -6,7 +6,7 @@ import type {
   TransformPayloadResult,
 } from './router';
 import { parseStartPayload } from '../features/utm-tracking/parse-start-payload';
-import { toTelegramIdString } from './telegram-ids';
+import { applyTelegramIdLogFields, toTelegramIdString } from './telegram-ids';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -89,20 +89,47 @@ const snapshotUpdate = (update: unknown) => {
       ? (message.from as Record<string, unknown>)
       : undefined;
 
-  return {
+  const snapshot: Record<string, unknown> = {
     updateId: toOptionalSafeInteger(record.update_id),
-    messageId: toIdString(message?.message_id),
-    chatId: toIdString(chat?.id),
     chatType: typeof chat?.type === 'string' ? chat.type : undefined,
-    fromId: toIdString(from?.id),
     hasText: typeof message?.text === 'string',
     hasWebAppData: typeof message?.web_app_data === 'object' && message?.web_app_data !== null,
     hasStartapp: typeof record.startapp === 'string' && record.startapp.length > 0,
   };
+
+  applyTelegramIdLogFields(snapshot, 'messageId', message?.message_id);
+  applyTelegramIdLogFields(snapshot, 'chatId', chat?.id);
+  applyTelegramIdLogFields(snapshot, 'fromId', from?.id);
+  applyTelegramIdLogFields(snapshot, 'threadId', message?.message_thread_id);
+
+  return snapshot;
+};
+
+const toUnixTimestampSeconds = (value: unknown): number | undefined => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!INTEGER_PATTERN.test(trimmed)) {
+      return undefined;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : undefined;
+  }
+
+  if (typeof value === 'bigint') {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
 };
 
 const toDate = (value: unknown): Date => {
-  const timestamp = toOptionalSafeInteger(value);
+  const timestamp = toUnixTimestampSeconds(value);
   if (typeof timestamp === 'number') {
     const date = new Date(timestamp * 1000);
     if (!Number.isNaN(date.getTime())) {
@@ -174,7 +201,7 @@ export interface TelegramMessageEntity {
 }
 
 export interface TelegramUser {
-  id: number | string | bigint;
+  id: string | bigint;
   is_bot?: boolean;
   is_premium?: boolean;
   first_name?: string;
@@ -184,20 +211,20 @@ export interface TelegramUser {
 }
 
 export interface TelegramChat {
-  id: number | string | bigint;
+  id: string | bigint;
   type?: string;
   title?: string;
   username?: string;
 }
 
 export interface TelegramMessage {
-  message_id: number | string | bigint;
-  date?: number;
+  message_id: string | bigint;
+  date?: number | string;
   text?: string;
   caption?: string;
   from?: TelegramUser;
   chat: TelegramChat;
-  message_thread_id?: number | string | bigint;
+  message_thread_id?: string | bigint;
   entities?: TelegramMessageEntity[];
   voice?: unknown;
   video?: unknown;
@@ -546,13 +573,17 @@ export const transformTelegramUpdate = async (
   };
 
   // eslint-disable-next-line no-console
-  console.info('[telegram-webhook] normalized message', {
+  const normalizedLog: Record<string, unknown> = {
     updateId: update.update_id,
-    chatId: incoming.chat.id,
-    threadId: incoming.chat.threadId,
-    userId: incoming.user.userId,
     hasStartPayload: Boolean(startPayload),
-  });
+  };
+
+  applyTelegramIdLogFields(normalizedLog, 'chatId', incoming.chat.id);
+  applyTelegramIdLogFields(normalizedLog, 'threadId', incoming.chat.threadId);
+  applyTelegramIdLogFields(normalizedLog, 'userId', incoming.user.userId);
+  applyTelegramIdLogFields(normalizedLog, 'messageId', incoming.messageId);
+
+  console.info('[telegram-webhook] normalized message', normalizedLog);
 
   return result;
 };
