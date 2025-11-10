@@ -32,6 +32,10 @@ describe('createSelfTestRoute', () => {
       openAiUsedOutputText: true,
       errors: [],
       telegramMessageId: '42',
+      telegramStatus: 200,
+      telegramDescription: 'OK',
+      telegramChatId: '123',
+      telegramChatIdSource: 'query',
     });
 
     expect(ai.reply).toHaveBeenCalledWith({
@@ -63,6 +67,10 @@ describe('createSelfTestRoute', () => {
     expect(payload.openAiOk).toBe(false);
     expect(payload.telegramOk).toBe(true);
     expect(payload.errors).toContain('openai: boom');
+    expect(payload.telegramStatus).toBe(200);
+    expect(payload.telegramDescription).toBe('OK');
+    expect(payload.telegramChatId).toBe('123');
+    expect(payload.telegramChatIdSource).toBe('query');
   });
 
   it('fails Telegram check when chatId is missing', async () => {
@@ -84,9 +92,41 @@ describe('createSelfTestRoute', () => {
 
     expect(payload.openAiOk).toBe(true);
     expect(payload.telegramOk).toBe(false);
-    expect(payload.errors).toContain('telegram: chatId query parameter is required');
+    expect(payload.errors).toContain('telegram: chatId query parameter is required and whitelist is empty');
+    expect(payload.telegramChatId).toBeUndefined();
+    expect(payload.telegramChatIdSource).toBeUndefined();
     expect(messaging.sendTyping).not.toHaveBeenCalled();
     expect(messaging.sendText).not.toHaveBeenCalled();
+  });
+
+  it('uses whitelisted chat id when query param missing', async () => {
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
+    };
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'fallback-1' }),
+      editMessageText: vi.fn(),
+      deleteMessage: vi.fn(),
+    };
+
+    const route = createSelfTestRoute({
+      ai,
+      messaging,
+      now: () => 3000,
+      getDefaultChatId: async () => ' 555 ',
+    });
+
+    const response = await route(createRequest(''));
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.telegramOk).toBe(true);
+    expect(payload.telegramChatId).toBe('555');
+    expect(payload.telegramChatIdSource).toBe('whitelist');
+    expect(payload.telegramStatus).toBe(200);
+    expect(payload.telegramDescription).toBe('OK');
+    expect(payload.errors).toEqual([]);
   });
 
   it('captures Telegram errors', async () => {
@@ -109,6 +149,9 @@ describe('createSelfTestRoute', () => {
     expect(payload.openAiOk).toBe(true);
     expect(payload.telegramOk).toBe(false);
     expect(payload.errors).toContain('telegram: telegram failure');
+    expect(payload.telegramDescription).toBe('telegram failure');
+    expect(payload.telegramChatId).toBe('789');
+    expect(payload.telegramChatIdSource).toBe('query');
   });
 
   it('treats noop AI response as OpenAI failure', async () => {
@@ -128,6 +171,9 @@ describe('createSelfTestRoute', () => {
 
     expect(payload.openAiOk).toBe(false);
     expect(payload.errors).toContain('openai: noop adapter response');
+    expect(payload.telegramStatus).toBe(200);
+    expect(payload.telegramChatId).toBe('123');
+    expect(payload.telegramChatIdSource).toBe('query');
   });
 
   it('runs storage diagnostics when q=utm', async () => {

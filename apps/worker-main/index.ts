@@ -22,6 +22,7 @@ import {
   createImmediateBroadcastSender,
   createRateLimitNotifier,
   createSelfTestRoute,
+  readAdminWhitelist,
   createTelegramExportCommandHandler,
   createTelegramBroadcastCommandHandler,
   createTelegramWebhookHandler,
@@ -392,6 +393,13 @@ const createAdminRoutes = (
       ai: composition.ports.ai,
       messaging: composition.ports.messaging,
       storage: composition.ports.storage,
+      getDefaultChatId:
+        env.ADMIN_TG_IDS
+          ? async () => {
+              const snapshot = await readAdminWhitelist(env.ADMIN_TG_IDS);
+              return snapshot.ids[0];
+            }
+          : undefined,
     }),
     envz: createEnvzRoute({ env }),
     accessDiagnostics: createAccessDiagnosticsRoute({
@@ -402,6 +410,7 @@ const createAdminRoutes = (
     }),
     diag: createBindingsDiagnosticsRoute({
       storage: composition.ports.storage,
+      env,
     }),
     knownUsersClear: createKnownUsersClearRoute({
       cache: knownUsersCache,

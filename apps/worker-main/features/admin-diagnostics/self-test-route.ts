@@ -6,6 +6,7 @@ export interface CreateSelfTestRouteOptions {
   messaging: MessagingPort;
   storage?: StoragePort;
   now?: () => number;
+  getDefaultChatId?: () => Promise<string | undefined>;
 }
 
 const defaultNow = () => Date.now();
@@ -96,7 +97,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       return runUtmDiagnostics();
     }
 
-    const chatIdParam = url.searchParams.get('chatId') ?? url.searchParams.get('chat_id');
+    const chatIdParamRaw = url.searchParams.get('chatId') ?? url.searchParams.get('chat_id');
+    const chatIdParam = typeof chatIdParamRaw === 'string' ? chatIdParamRaw.trim() : undefined;
     const threadIdParam = url.searchParams.get('threadId') ?? url.searchParams.get('thread_id') ?? undefined;
     const textParam = url.searchParams.get('text') ?? 'Self-test ping';
 
@@ -138,19 +140,42 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     let telegramOk = false;
     let telegramLatencyMs: number | undefined;
     let telegramMessageId: string | undefined;
+    let telegramStatus: number | undefined;
+    let telegramDescription: string | undefined;
+    let telegramChatId: string | undefined;
+    let telegramChatIdSource: 'query' | 'whitelist' | undefined;
 
-    if (!chatIdParam) {
-      errors.push('telegram: chatId query parameter is required');
+    if (chatIdParam && chatIdParam.length > 0) {
+      telegramChatId = chatIdParam;
+      telegramChatIdSource = 'query';
+    } else if (options.getDefaultChatId) {
+      try {
+        const fallbackChatId = await options.getDefaultChatId();
+        if (typeof fallbackChatId === 'string') {
+          const trimmedFallback = fallbackChatId.trim();
+          if (trimmedFallback.length > 0) {
+            telegramChatId = trimmedFallback;
+            telegramChatIdSource = 'whitelist';
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`telegram: failed to resolve admin chatId (${message})`);
+      }
+    }
+
+    if (!telegramChatId) {
+      errors.push('telegram: chatId query parameter is required and whitelist is empty');
     } else {
       const telegramStartedAt = now();
       try {
         await options.messaging.sendTyping({
-          chatId: chatIdParam,
+          chatId: telegramChatId,
           threadId: threadIdParam ?? undefined,
         });
 
         const result = await options.messaging.sendText({
-          chatId: chatIdParam,
+          chatId: telegramChatId,
           threadId: threadIdParam ?? undefined,
           text: textParam,
         });
@@ -158,8 +183,25 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         telegramOk = true;
         telegramLatencyMs = Math.max(0, now() - telegramStartedAt);
         telegramMessageId = result.messageId;
+        telegramStatus = 200;
+        telegramDescription = 'OK';
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const status = (error as { status?: unknown }).status;
+        const description = (error as { description?: unknown }).description;
+
+        if (typeof status === 'number' && Number.isFinite(status)) {
+          telegramStatus = status;
+        }
+
+        if (typeof description === 'string' && description.trim().length > 0) {
+          telegramDescription = description;
+        }
+
+        if (telegramDescription === undefined) {
+          telegramDescription = message;
+        }
+
         errors.push(`telegram: ${message}`);
       }
     }
@@ -184,6 +226,22 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
 
     if (telegramMessageId !== undefined) {
       responseBody.telegramMessageId = telegramMessageId;
+    }
+
+    if (telegramStatus !== undefined) {
+      responseBody.telegramStatus = telegramStatus;
+    }
+
+    if (telegramDescription !== undefined) {
+      responseBody.telegramDescription = telegramDescription;
+    }
+
+    if (telegramChatId !== undefined) {
+      responseBody.telegramChatId = telegramChatId;
+    }
+
+    if (telegramChatIdSource !== undefined) {
+      responseBody.telegramChatIdSource = telegramChatIdSource;
     }
 
     const hasErrors = errors.length > 0;
