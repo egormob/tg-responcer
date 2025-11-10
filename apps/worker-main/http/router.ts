@@ -185,7 +185,7 @@ export interface RouterHandleContext {
 export const createRouter = (options: RouterOptions) => {
   const transformPayload =
     options.transformPayload ??
-    (async (payload: unknown, _context?: TransformPayloadContext) => parseIncomingMessage(payload));
+    (async (payload: unknown) => parseIncomingMessage(payload));
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
   const handleNotFound = () => new Response('Not Found', { status: 404 });

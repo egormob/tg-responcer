@@ -1,4 +1,5 @@
 import { transformTelegramUpdate, type TelegramWebhookOptions } from '../../http/telegram-webhook';
+import { toTelegramIdString } from '../../http/telegram-ids';
 import type {
   HandledWebhookResult,
   MessageWebhookResult,
@@ -27,24 +28,23 @@ const safePayloadSnapshot = (payload: unknown) => {
       ? (message.from as Record<string, unknown>)
       : undefined;
 
-  const toIdString = (value: unknown): string | undefined => {
-    if (typeof value === 'string') {
-      return value;
+  const toIdString = toTelegramIdString;
+
+  const toOptionalSafeInteger = (value: unknown): number | undefined => {
+    if (typeof value === 'number') {
+      return Number.isSafeInteger(value) ? value : undefined;
     }
 
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.trunc(value).toString(10);
-    }
-
-    if (typeof value === 'bigint') {
-      return value.toString(10);
+    if (typeof value === 'string' && /^-?\d+$/u.test(value)) {
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) ? parsed : undefined;
     }
 
     return undefined;
   };
 
   return {
-    updateId: typeof record.update_id === 'number' ? record.update_id : undefined,
+    updateId: toOptionalSafeInteger(record.update_id),
     hasMessage: Boolean(message),
     messageId: toIdString(message?.message_id),
     chatId: toIdString(chat?.id),

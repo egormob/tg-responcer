@@ -1,5 +1,6 @@
 import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
+import { toTelegramIdString } from '../../http/telegram-ids';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
 import {
@@ -41,20 +42,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
 const toIdString = (value: unknown): string | undefined => {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+  const asString = toTelegramIdString(value);
+  if (typeof asString !== 'string') {
+    return undefined;
   }
 
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value).toString(10);
-  }
-
-  if (typeof value === 'bigint') {
-    return value.toString(10);
-  }
-
-  return undefined;
+  const trimmed = asString.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 };
 
 const parseTimestamp = (value: unknown): Date | undefined => {

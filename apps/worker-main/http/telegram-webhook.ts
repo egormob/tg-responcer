@@ -6,17 +6,13 @@ import type {
   TransformPayloadResult,
 } from './router';
 import { parseStartPayload } from '../features/utm-tracking/parse-start-payload';
+import { toTelegramIdString } from './telegram-ids';
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json; charset=utf-8' },
     ...init,
   });
-
-const handledOk = (): HandledWebhookResult => ({
-  kind: 'handled',
-  response: jsonResponse({ status: 'ok' }, { status: 200 }),
-});
 
 const handledIgnored = (): HandledWebhookResult => ({
   kind: 'handled',
@@ -43,20 +39,35 @@ const toOptionalTrimmedString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const toIdString = (value: unknown): string | undefined => {
-  if (typeof value === 'string') {
-    return value;
+const toIdString = toTelegramIdString;
+
+const INTEGER_PATTERN = /^-?\d+$/u;
+
+const toOptionalSafeInteger = (value: unknown): number | undefined => {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : undefined;
   }
 
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value).toString(10);
+  if (typeof value === 'string' && INTEGER_PATTERN.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
   }
 
   if (typeof value === 'bigint') {
-    return value.toString(10);
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
   }
 
   return undefined;
+};
+
+const requireSafeInteger = (value: unknown, field: string): number => {
+  const parsed = toOptionalSafeInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`Invalid ${field}`);
+  }
+
+  return parsed;
 };
 
 const snapshotUpdate = (update: unknown) => {
@@ -79,7 +90,7 @@ const snapshotUpdate = (update: unknown) => {
       : undefined;
 
   return {
-    updateId: typeof record.update_id === 'number' ? record.update_id : undefined,
+    updateId: toOptionalSafeInteger(record.update_id),
     messageId: toIdString(message?.message_id),
     chatId: toIdString(chat?.id),
     chatType: typeof chat?.type === 'string' ? chat.type : undefined,
@@ -91,8 +102,9 @@ const snapshotUpdate = (update: unknown) => {
 };
 
 const toDate = (value: unknown): Date => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const date = new Date(value * 1000);
+  const timestamp = toOptionalSafeInteger(value);
+  if (typeof timestamp === 'number') {
+    const date = new Date(timestamp * 1000);
     if (!Number.isNaN(date.getTime())) {
       return date;
     }
@@ -120,7 +132,7 @@ const createUserMetadata = (source: TelegramUser): Record<string, unknown> | und
 };
 
 const extractCommandEntity = (message: TelegramMessage): TelegramMessageEntity | undefined =>
-  message.entities?.find((entity) => entity.type === 'bot_command' && entity.offset === 0);
+  message.entities?.find((entity) => entity.type === 'bot_command');
 
 const stripCommandMention = (command: string): string => {
   const atIndex = command.indexOf('@');
@@ -157,8 +169,8 @@ const normalizeCommand = (command: string): string => stripCommandMention(comman
 
 export interface TelegramMessageEntity {
   type: string;
-  offset: number;
-  length: number;
+  offset: number | string;
+  length: number | string;
 }
 
 export interface TelegramUser {
@@ -318,7 +330,9 @@ export const transformTelegramUpdate = async (
     throw new Error('Telegram update must be an object');
   }
 
-  const update = payload as TelegramUpdate;
+  const updateRecord = payload as Record<string, unknown>;
+  const updateId = requireSafeInteger(updateRecord.update_id, 'update_id');
+  const update = { ...updateRecord, update_id: updateId } as TelegramUpdate;
   // eslint-disable-next-line no-console
   console.info('[telegram-webhook] incoming update', snapshotUpdate(update));
   const message = findRelevantMessage(update);
@@ -367,6 +381,8 @@ export const transformTelegramUpdate = async (
   }
 
   const commandEntity = extractCommandEntity(message);
+  const commandOffset = commandEntity ? toOptionalSafeInteger(commandEntity.offset) : undefined;
+  const commandLength = commandEntity ? toOptionalSafeInteger(commandEntity.length) : undefined;
 
   const extractStartPayloadFromInitData = (initData: string | undefined): string | undefined => {
     if (!initData) {
@@ -432,16 +448,18 @@ export const transformTelegramUpdate = async (
 
   let startPayload: string | undefined = startPayloadFromMiniApp;
 
-  if (commandEntity) {
-    const rawCommand = incoming.text.slice(
-      commandEntity.offset,
-      commandEntity.offset + commandEntity.length,
-    );
+  if (
+    commandEntity
+    && commandOffset === 0
+    && typeof commandLength === 'number'
+    && commandLength > 0
+  ) {
+    const rawCommand = incoming.text.slice(commandOffset, commandOffset + commandLength);
 
     if (rawCommand.length > 0 && isCommandForThisBot(rawCommand, options.botUsername)) {
       const normalizedCommand = normalizeCommand(rawCommand);
 
-      const argumentSlice = incoming.text.slice(commandEntity.offset + commandEntity.length);
+      const argumentSlice = incoming.text.slice(commandOffset + commandLength);
       const argumentText = argumentSlice.trim();
 
       if (normalizedCommand === '/start') {

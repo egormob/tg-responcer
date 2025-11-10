@@ -1,4 +1,4 @@
-const PAYLOAD_PATTERN = /^src(?:_|\.)[a-zA-Z0-9._+\-]{1,60}$/;
+const PAYLOAD_PATTERN = /^src(?:_|\.)[a-zA-Z0-9._+-]{1,60}$/;
 
 export const parseStartPayload = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') {
