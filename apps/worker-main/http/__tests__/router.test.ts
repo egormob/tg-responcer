@@ -5,6 +5,7 @@ import type { MessagingPort, StoragePort } from '../../ports';
 import { createTelegramWebhookHandler } from '../../features';
 import { createTelegramBroadcastCommandHandler } from '../../features/broadcast';
 import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
+import * as telegramPayload from '../telegram-payload';
 
 describe('http router', () => {
   const createDialogEngineMock = () => ({
@@ -130,7 +131,7 @@ describe('http router', () => {
     });
   });
 
-  it('preserves string thread identifiers when sending rate limit fallback', async () => {
+  it('preserves large identifiers when sending rate limit fallback', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const messaging = createMessagingMock();
     const router = createRouter({
@@ -142,16 +143,17 @@ describe('http router', () => {
       }),
     });
 
-    const chatId = '9223372036854775807';
+    const chatId = '-100123456789012345';
     const threadId = '9223372036854775808';
-
-    const update = {
-      update_id: 1,
+    const migrateToChatId = '-100987654321098765';
+    const rawUpdate = JSON.stringify({
+      update_id: '1',
       message: {
         message_id: '100',
         date: 1_710_000_000,
         text: 'hello',
         message_thread_id: threadId,
+        migrate_to_chat_id: migrateToChatId,
         chat: {
           id: chatId,
           type: 'supergroup',
@@ -161,13 +163,13 @@ describe('http router', () => {
           first_name: 'Thread',
         },
       },
-    };
+    });
 
     const response = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(update),
+        body: rawUpdate,
       }),
     );
 
@@ -177,6 +179,68 @@ describe('http router', () => {
       threadId,
       text: RATE_LIMIT_FALLBACK_TEXT,
     });
+
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    const passedMessage = handleMessage.mock.calls[0]?.[0];
+    expect(passedMessage).toBeDefined();
+    if (!passedMessage) {
+      throw new Error('Expected message to be passed to dialog engine');
+    }
+    expect(passedMessage.chat.id).toBe(chatId);
+    expect(passedMessage.chat.threadId).toBe(threadId);
+    expect(passedMessage.user.userId).toBe('9223372036854775809');
+    expect(passedMessage.messageId).toBe('100');
+  });
+
+  it('returns bad request when transform detects unsafe telegram identifiers', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({ status: 'replied', response: { text: 'ok' } });
+    const messaging = createMessagingMock();
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload: createTelegramWebhookHandler({
+        storage: createStorageMock(),
+      }),
+    });
+
+    const unsafeUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 100,
+        date: 1_710_000_000,
+        text: 'hello',
+        chat: {
+          id: Number.MAX_SAFE_INTEGER + 5,
+          type: 'supergroup',
+        },
+        from: {
+          id: 123,
+          first_name: 'Unsafe',
+        },
+      },
+    };
+
+    const parseSpy = vi
+      .spyOn(telegramPayload, 'parseTelegramUpdateBody')
+      .mockReturnValueOnce(unsafeUpdate as unknown);
+
+    try {
+      const response = await router.handle(
+        new Request('https://example.com/webhook/secret', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.text()).resolves.toContain('UNSAFE_TELEGRAM_ID');
+      expect(messaging.sendText).not.toHaveBeenCalled();
+      expect(handleMessage).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 
   it('notifies rate limit and sends fallback message when notifier is provided', async () => {

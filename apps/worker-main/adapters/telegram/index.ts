@@ -37,16 +37,25 @@ interface TelegramResponse<Result> {
 class TelegramApiError extends Error {
   readonly status: number;
   readonly retryAfterMs?: number;
+  readonly description?: string;
+  readonly parameters?: TelegramResponse<unknown>['parameters'];
 
-  constructor(message: string, status: number, retryAfterMs?: number, cause?: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    retryAfterMs?: number,
+    payload?: TelegramResponse<unknown>,
+  ) {
     super(message);
     this.name = 'TelegramApiError';
     this.status = status;
     this.retryAfterMs = retryAfterMs;
-    if (cause !== undefined) {
+    this.description = payload?.description;
+    this.parameters = payload?.parameters;
+    if (payload !== undefined) {
       try {
         // @ts-expect-error cause is supported in modern runtimes, fallback otherwise
-        this.cause = cause;
+        this.cause = payload;
       } catch (error) {
         // ignore assigning cause when not supported
       }
@@ -112,9 +121,17 @@ const parseTelegramResponse = async <Result>(response: Response): Promise<{
   return { payload, retryAfterMs };
 };
 
-const createErrorDetails = (input: Record<string, unknown>, status?: number) => ({
+type TelegramErrorMetadata = Pick<TelegramResponse<unknown>, 'description' | 'parameters'>;
+
+const createErrorDetails = (
+  input: Record<string, unknown>,
+  status?: number,
+  metadata?: TelegramErrorMetadata,
+) => ({
   ...input,
   status,
+  ...(metadata?.description ? { description: metadata.description } : {}),
+  ...(metadata?.parameters ? { parameters: metadata.parameters } : {}),
 });
 
 const createWait = (optionsWait?: (ms: number) => Promise<void>) =>
@@ -162,7 +179,10 @@ export const createTelegramMessagingAdapter = (
               logger?.warn?.('telegram-adapter request failed', {
                 method,
                 attempt,
-                ...createErrorDetails(body, response.status),
+                ...createErrorDetails(body, response.status, {
+                  description: payload?.description,
+                  parameters: payload?.parameters,
+                }),
               });
               return undefined;
             }
@@ -187,7 +207,13 @@ export const createTelegramMessagingAdapter = (
             logger?.warn?.('telegram-adapter request failed', {
               method,
               attempt,
-              ...createErrorDetails(body, error instanceof TelegramApiError ? error.status : undefined),
+              ...createErrorDetails(
+                body,
+                error instanceof TelegramApiError ? error.status : undefined,
+                error instanceof TelegramApiError
+                  ? { description: error.description, parameters: error.parameters }
+                  : undefined,
+              ),
             });
             return undefined;
           }
@@ -195,7 +221,13 @@ export const createTelegramMessagingAdapter = (
           logger?.error?.('telegram-adapter exhausted retries', {
             method,
             attempt,
-            ...createErrorDetails(body, error instanceof TelegramApiError ? error.status : undefined),
+            ...createErrorDetails(
+              body,
+              error instanceof TelegramApiError ? error.status : undefined,
+              error instanceof TelegramApiError
+                ? { description: error.description, parameters: error.parameters }
+                : undefined,
+            ),
           });
           throw error;
         }

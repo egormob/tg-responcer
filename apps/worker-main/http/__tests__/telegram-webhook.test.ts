@@ -544,4 +544,15 @@ describe('transformTelegramUpdate', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(handleExport).not.toHaveBeenCalled();
   });
+
+  it('throws when incoming identifiers are unsafe integers', async () => {
+    const update = createBaseUpdate();
+    if (!update.message || !update.message.chat) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.chat.id = Number.MAX_SAFE_INTEGER + 2;
+
+    await expect(transformTelegramUpdate(update)).rejects.toThrowError('UNSAFE_TELEGRAM_ID');
+  });
 });
