@@ -79,9 +79,11 @@ export {
   createSelfTestRoute,
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
+  createKnownUsersClearRoute,
   type CreateSelfTestRouteOptions,
   type CreateEnvzRouteOptions,
   type CreateBindingsDiagnosticsRouteOptions,
+  type CreateKnownUsersClearRouteOptions,
 } from './admin-diagnostics';
 export {
   createTelegramWebhookHandler,
