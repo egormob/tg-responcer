@@ -1,0 +1,7 @@
+# 2025-11-16 — Telegram сохраняет длинные идентификаторы как строки
+
+- **Сценарий:** автотест прогоняет webhook через `router.handle` и `createTelegramWebhookHandler`, используя `chat.id` и `message_thread_id` длиной 19 символов.
+- **Покрытие:**
+  - `apps/worker-main/http/__tests__/router.test.ts` — rate limit fallback отправляется с теми же строковыми `chatId`/`threadId`.
+  - `apps/worker-main/features/utm-tracking/__tests__/create-telegram-webhook-handler.test.ts` — UTM-кеш сохраняет `userId` как строку и повторно использует её без преобразования в число.
+- **Результат:** `messaging.sendText` и `storage.saveUser` получают идентификаторы без потери точности; `parseJsonWithLargeIntegers` гарантирует корректное чтение JSON с числами ≥15 символов.

@@ -72,6 +72,78 @@ describe('createTelegramWebhookHandler', () => {
     expect(storage.saveUser).not.toHaveBeenCalled();
   });
 
+  it('keeps string identifiers intact when caching utm data', async () => {
+    const storage = createStorageMock();
+    const handler = createTelegramWebhookHandler({
+      storage,
+      now: () => new Date('2024-02-01T00:00:00.000Z'),
+    });
+
+    const userId = '9223372036854775807';
+    const chatId = '9223372036854775808';
+    const threadId = '9223372036854775809';
+
+    const startUpdate: TelegramUpdate = {
+      update_id: 2,
+      message: {
+        message_id: '111',
+        date: 1_710_000_100,
+        text: '/start src_BIG',
+        message_thread_id: threadId,
+        entities: [{ type: 'bot_command', offset: 0, length: '/start'.length }],
+        from: {
+          id: userId,
+          first_name: 'String',
+        },
+        chat: {
+          id: chatId,
+          type: 'supergroup',
+        },
+      },
+    };
+
+    const waitUntil = vi.fn();
+    const startResult = await handler(startUpdate, { waitUntil });
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    expect(startResult.kind).toBe('message');
+    expect(storage.saveUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId,
+        updatedAt: new Date('2024-02-01T00:00:00.000Z'),
+      }),
+    );
+
+    const followUp: TelegramUpdate = {
+      update_id: 3,
+      message: {
+        message_id: '112',
+        date: 1_710_000_200,
+        text: 'ping',
+        message_thread_id: threadId,
+        from: {
+          id: userId,
+          first_name: 'String',
+        },
+        chat: {
+          id: chatId,
+          type: 'supergroup',
+        },
+      },
+    };
+
+    const followResult = await handler(followUp);
+
+    expect(followResult.kind).toBe('message');
+    if (followResult.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(followResult.message.user.userId).toBe(userId);
+    expect(followResult.message.chat.id).toBe(chatId);
+    expect(followResult.message.chat.threadId).toBe(threadId);
+    expect(followResult.message.user.utmSource).toBe('src_BIG');
+  });
+
   it('skips storage call for invalid payloads', async () => {
     const storage = createStorageMock();
     const handler = createTelegramWebhookHandler({ storage });
