@@ -2,6 +2,7 @@ import { DialogEngine, type IncomingMessage } from '../core';
 import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
+import { parseTelegramUpdateBody } from './telegram-payload';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
 
@@ -262,7 +263,8 @@ export const createRouter = (options: RouterOptions) => {
 
     let payload: unknown;
     try {
-      payload = await request.json();
+      const rawBody = await request.text();
+      payload = parseTelegramUpdateBody(rawBody);
     } catch (error) {
       return new Response('Invalid JSON payload', { status: 400 });
     }
