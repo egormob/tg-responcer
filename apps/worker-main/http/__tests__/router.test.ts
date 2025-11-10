@@ -130,6 +130,55 @@ describe('http router', () => {
     });
   });
 
+  it('preserves string thread identifiers when sending rate limit fallback', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
+    const messaging = createMessagingMock();
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload: createTelegramWebhookHandler({
+        storage: createStorageMock(),
+      }),
+    });
+
+    const chatId = '9223372036854775807';
+    const threadId = '9223372036854775808';
+
+    const update = {
+      update_id: 1,
+      message: {
+        message_id: '100',
+        date: 1_710_000_000,
+        text: 'hello',
+        message_thread_id: threadId,
+        chat: {
+          id: chatId,
+          type: 'supergroup',
+        },
+        from: {
+          id: '9223372036854775809',
+          first_name: 'Thread',
+        },
+      },
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(update),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId,
+      threadId,
+      text: RATE_LIMIT_FALLBACK_TEXT,
+    });
+  });
+
   it('notifies rate limit and sends fallback message when notifier is provided', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const notify = vi.fn().mockResolvedValue(undefined);
