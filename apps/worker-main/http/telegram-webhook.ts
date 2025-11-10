@@ -3,6 +3,7 @@ import type { IncomingMessage } from '../core';
 import type {
   HandledWebhookResult,
   MessageWebhookResult,
+  TransformPayloadContext,
   TransformPayloadResult,
 } from './router';
 import { parseStartPayload } from '../features/utm-tracking/parse-start-payload';
@@ -463,6 +464,7 @@ export interface TelegramWebhookFeatures {
   ) => Promise<Response | void> | Response | void;
   handleMessage?: (
     message: IncomingMessage,
+    context?: TransformPayloadContext,
   ) => Promise<Response | 'handled' | void> | Response | 'handled' | void;
 }
 

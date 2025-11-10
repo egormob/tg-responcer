@@ -30,6 +30,17 @@ describe('http router', () => {
     saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
   }) as unknown as StoragePort;
 
+  const createDeferred = <T>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    return { promise, resolve, reject };
+  };
+
   const createTypingIndicatorMock = (messaging: ReturnType<typeof createMessagingMock>) => ({
     runWithTyping: vi.fn(async ({ chatId, threadId }, run) => {
       await messaging.sendTyping({ chatId, threadId });
@@ -618,9 +629,8 @@ describe('http router', () => {
   it('sends broadcast via telegram command and confirms delivery', async () => {
     const messaging = createMessagingMock();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
-    const sendBroadcast = vi
-      .fn()
-      .mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] });
+    const deferred = createDeferred<{ delivered: number; failed: number; deliveries: unknown[] }>();
+    const sendBroadcast = vi.fn().mockReturnValue(deferred.promise);
 
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
@@ -634,7 +644,7 @@ describe('http router', () => {
       storage: createStorageMock(),
       features: {
         handleAdminCommand: (context) => handler.handleCommand(context),
-        handleMessage: (message) => handler.handleMessage(message),
+        handleMessage: (message, featureContext) => handler.handleMessage(message, featureContext),
       },
     });
 
@@ -690,12 +700,14 @@ describe('http router', () => {
       ].join('\n'),
     });
 
+    const waitUntil = vi.fn();
     const textResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(textUpdate),
       }),
+      { waitUntil },
     );
 
     expect(textResponse.status).toBe(200);
@@ -706,6 +718,22 @@ describe('http router', () => {
       requestedBy: '1010',
     });
 
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    const backgroundTask = waitUntil.mock.calls[0]?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
+      chatId: '4242',
+      threadId: undefined,
+      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
+    });
+
+    expect(messaging.sendText).toHaveBeenCalledTimes(2);
+
+    deferred.resolve({ delivered: 2, failed: 0, deliveries: [] });
+    await backgroundTask;
+
+    expect(messaging.sendText).toHaveBeenCalledTimes(3);
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: '4242',
       threadId: undefined,

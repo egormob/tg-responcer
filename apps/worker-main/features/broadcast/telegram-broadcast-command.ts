@@ -1,6 +1,6 @@
 import { json } from '../../shared';
 import type { IncomingMessage } from '../../core';
-import type { TelegramAdminCommandContext } from '../../http';
+import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
 import {
@@ -41,6 +41,9 @@ const BROADCAST_EMPTY_MESSAGE =
 
 const BROADCAST_FAILURE_MESSAGE =
   'Не удалось отправить рассылку. Попробуйте ещё раз позже или обратитесь к оператору.';
+
+const BROADCAST_STARTED_MESSAGE =
+  '📣 Рассылка запущена. Ожидайте отчёт о доставке.';
 
 const buildSuccessMessage = (delivered: number) =>
   [
@@ -86,6 +89,7 @@ export interface TelegramBroadcastCommandHandler {
   ) => Promise<Response | void> | Response | void;
   handleMessage: (
     message: IncomingMessage,
+    context?: TransformPayloadContext,
   ) => Promise<Response | 'handled' | void> | Response | 'handled' | void;
 }
 
@@ -271,7 +275,10 @@ export const createTelegramBroadcastCommandHandler = (
     return json({ status: 'awaiting_text' }, { status: 200 });
   };
 
-  const handleMessage = async (message: IncomingMessage): Promise<'handled' | void> => {
+  const handleMessage = async (
+    message: IncomingMessage,
+    context?: TransformPayloadContext,
+  ): Promise<'handled' | void> => {
     const currentTime = now().getTime();
     cleanupExpired(currentTime);
 
@@ -350,62 +357,95 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
-    let result: BroadcastSendResult;
+    const requestedBy = message.user.userId;
 
     try {
-      const payload: BroadcastSendInput = {
-        text,
-        requestedBy: message.user.userId,
-      };
-
-      result = await options.sendBroadcast(payload);
-
-      logger.info('broadcast sent via telegram command', {
-        userId: message.user.userId,
-        delivered: result.delivered,
-        failed: result.failed,
+      await options.messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text: BROADCAST_STARTED_MESSAGE,
       });
 
-      try {
-        await options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: createBroadcastResponse(result),
-        });
-      } catch (error) {
-        logger.error('failed to send broadcast confirmation', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          error: toErrorDetails(error),
-        });
-
-        await handleMessagingFailure(message.user.userId, 'broadcast_confirmation', error);
-      }
+      logger.info('broadcast dispatch scheduled via telegram command', {
+        userId: requestedBy,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
     } catch (error) {
-      logger.error('broadcast send failed via telegram command', {
-        userId: message.user.userId,
+      logger.error('failed to send broadcast start notice', {
+        userId: requestedBy,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
         error: toErrorDetails(error),
       });
 
+      await handleMessagingFailure(requestedBy, 'broadcast_start_notice', error);
+    }
+
+    const payload: BroadcastSendInput = {
+      text,
+      requestedBy,
+    };
+
+    const runBroadcast = async () => {
       try {
-        await options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: BROADCAST_FAILURE_MESSAGE,
-        });
-      } catch (sendError) {
-        logger.error('failed to send broadcast failure message', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          error: toErrorDetails(sendError),
+        const result: BroadcastSendResult = await options.sendBroadcast(payload);
+
+        logger.info('broadcast sent via telegram command', {
+          userId: requestedBy,
+          delivered: result.delivered,
+          failed: result.failed,
         });
 
-        await handleMessagingFailure(message.user.userId, 'broadcast_failure_notice', sendError);
+        try {
+          await options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: createBroadcastResponse(result),
+          });
+        } catch (error) {
+          logger.error('failed to send broadcast confirmation', {
+            userId: requestedBy,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+            error: toErrorDetails(error),
+          });
+
+          await handleMessagingFailure(requestedBy, 'broadcast_confirmation', error);
+        }
+      } catch (error) {
+        logger.error('broadcast send failed via telegram command', {
+          userId: requestedBy,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        try {
+          await options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: BROADCAST_FAILURE_MESSAGE,
+          });
+        } catch (sendError) {
+          logger.error('failed to send broadcast failure message', {
+            userId: requestedBy,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+            error: toErrorDetails(sendError),
+          });
+
+          await handleMessagingFailure(requestedBy, 'broadcast_failure_notice', sendError);
+        }
       }
+    };
+
+    const broadcastPromise = runBroadcast();
+
+    if (context?.waitUntil) {
+      context.waitUntil(broadcastPromise);
+    } else {
+      await broadcastPromise;
     }
 
     return 'handled';

@@ -4,7 +4,7 @@ import { createTelegramBroadcastCommandHandler } from '../telegram-broadcast-com
 import type { TelegramAdminCommandContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
-import type { SendBroadcast } from '../minimal-broadcast-service';
+import type { BroadcastSendResult, SendBroadcast } from '../minimal-broadcast-service';
 import type { AdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
 
 const createContext = ({
@@ -48,6 +48,17 @@ const createIncomingMessage = (text: string): IncomingMessage => ({
   messageId: 'incoming-1',
   receivedAt: new Date('2024-01-01T00:01:00Z'),
 });
+
+const createDeferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+};
 
 describe('createTelegramBroadcastCommandHandler', () => {
   const createHandler = ({
@@ -112,17 +123,39 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
   it('sends broadcast when admin provides valid text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 3, failed: 0, deliveries: [] });
+    const deferred = createDeferred<BroadcastSendResult>();
+    const sendBroadcastMock = vi
+      .fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockReturnValue(deferred.promise);
+
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await handler.handleCommand(createContext());
-    const result = await handler.handleMessage(createIncomingMessage('hello everyone'));
 
-    expect(result).toBe('handled');
+    const waitUntil = vi.fn();
+    const resultPromise = handler.handleMessage(
+      createIncomingMessage('hello everyone'),
+      { waitUntil },
+    );
+
+    await expect(resultPromise).resolves.toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'hello everyone',
       requestedBy: 'admin-1',
     });
+
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    const scheduled = waitUntil.mock.calls[0]?.[0];
+    expect(typeof scheduled?.then).toBe('function');
+
+    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
+    });
+
+    deferred.resolve({ delivered: 3, failed: 0, deliveries: [] });
+    await scheduled;
 
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
@@ -215,6 +248,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(result).toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
+    });
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
@@ -391,6 +429,17 @@ describe('worker integration for broadcast command', () => {
 
     messaging.sendText.mockClear();
 
+    const recipientDeferred = createDeferred<{ messageId?: string } | void>();
+    messaging.sendText.mockImplementation(({ chatId, threadId, text: messageText }) => {
+      if (chatId === 'subscriber-1') {
+        return recipientDeferred.promise;
+      }
+
+      return Promise.resolve({
+        messageId: `sent-${chatId}-${threadId ?? 'null'}-${messageText.slice(0, 4)}`,
+      });
+    });
+
     const broadcastTextUpdate = {
       update_id: 2,
       message: {
@@ -417,18 +466,33 @@ describe('worker integration for broadcast command', () => {
     await expect(broadcastResponse.json()).resolves.toEqual({ status: 'ok' });
     expect(composeWorkerMock).toHaveBeenCalledTimes(1);
     expect(handleMessage).not.toHaveBeenCalled();
-    expect(messaging.sendText).toHaveBeenCalledWith({
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+
+    const backgroundTask = ctx.waitUntil.mock.calls[0]?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: '77',
+      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
+    });
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
+      chatId: 'subscriber-1',
+      threadId: undefined,
+      text: 'Всем привет',
+    });
+
+    recipientDeferred.resolve({ messageId: 'delivered-1' });
+    await backgroundTask;
+
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: '77',
       text: [
         '📣 Рассылка отправлена.',
         'Получателей: 1.',
       ].join('\n'),
-    });
-    expect(messaging.sendText).toHaveBeenCalledWith({
-      chatId: 'subscriber-1',
-      threadId: undefined,
-      text: 'Всем привет',
     });
 
     expect(adminKv.get).toHaveBeenCalledWith('whitelist', 'text');
