@@ -9,17 +9,17 @@ import type { TelegramUpdate } from '../telegram-webhook';
 const createBaseUpdate = (): TelegramUpdate => ({
   update_id: 123,
   message: {
-    message_id: 456,
-    date: 1_710_000_000,
+    message_id: '456',
+    date: '1710000000',
     text: 'hello world',
     from: {
-      id: 789,
+      id: '789',
       first_name: 'Test',
       username: 'tester',
       language_code: 'en',
     },
     chat: {
-      id: 555,
+      id: '555',
       type: 'private',
     },
   },

@@ -1,5 +1,5 @@
 import { transformTelegramUpdate, type TelegramWebhookOptions } from '../../http/telegram-webhook';
-import { toTelegramIdString } from '../../http/telegram-ids';
+import { applyTelegramIdLogFields } from '../../http/telegram-ids';
 import type {
   HandledWebhookResult,
   MessageWebhookResult,
@@ -28,8 +28,6 @@ const safePayloadSnapshot = (payload: unknown) => {
       ? (message.from as Record<string, unknown>)
       : undefined;
 
-  const toIdString = toTelegramIdString;
-
   const toOptionalSafeInteger = (value: unknown): number | undefined => {
     if (typeof value === 'number') {
       return Number.isSafeInteger(value) ? value : undefined;
@@ -43,17 +41,21 @@ const safePayloadSnapshot = (payload: unknown) => {
     return undefined;
   };
 
-  return {
+  const snapshot: Record<string, unknown> = {
     updateId: toOptionalSafeInteger(record.update_id),
     hasMessage: Boolean(message),
-    messageId: toIdString(message?.message_id),
-    chatId: toIdString(chat?.id),
     chatType: typeof chat?.type === 'string' ? chat?.type : undefined,
-    fromId: toIdString(from?.id),
     hasText: typeof message?.text === 'string',
     hasCaption: typeof message?.caption === 'string',
     hasWebAppData: typeof message?.web_app_data === 'object' && message?.web_app_data !== null,
   };
+
+  applyTelegramIdLogFields(snapshot, 'messageId', message?.message_id);
+  applyTelegramIdLogFields(snapshot, 'chatId', chat?.id);
+  applyTelegramIdLogFields(snapshot, 'fromId', from?.id);
+  applyTelegramIdLogFields(snapshot, 'threadId', message?.message_thread_id);
+
+  return snapshot;
 };
 
 interface KnownUser {

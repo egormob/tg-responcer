@@ -31,8 +31,8 @@ const createContext = ({
     messageId: '789',
     update: { update_id: 1 },
     message: {
-      message_id: 789,
-      chat: { id: 123 },
+      message_id: '789',
+      chat: { id: '123' },
     } as unknown as TelegramAdminCommandContext['message'],
     incomingMessage: {
       chat: { id: '123', threadId: '456' },

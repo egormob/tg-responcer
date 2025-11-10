@@ -28,8 +28,8 @@ const createContext = ({
     messageId: 'message-1',
     update: { update_id: 1 },
     message: {
-      message_id: 1,
-      chat: { id: 1 },
+      message_id: '1',
+      chat: { id: '1' },
     } as unknown as TelegramAdminCommandContext['message'],
     incomingMessage: {
       chat: { id: 'chat-1', threadId: 'thread-1' },
@@ -356,13 +356,13 @@ describe('worker integration for broadcast command', () => {
     const commandUpdate = {
       update_id: 1,
       message: {
-        message_id: 100,
-        date: 1_710_000_000,
+        message_id: '100',
+        date: '1710000000',
         text: '/broadcast',
         entities: [{ type: 'bot_command', offset: 0, length: '/broadcast'.length }],
         from: { id: 'admin-1', first_name: 'Admin' },
         chat: { id: 'chat-1', type: 'private' },
-        message_thread_id: 77,
+        message_thread_id: '77',
       },
     };
 
@@ -394,12 +394,12 @@ describe('worker integration for broadcast command', () => {
     const broadcastTextUpdate = {
       update_id: 2,
       message: {
-        message_id: 101,
-        date: 1_710_000_010,
+        message_id: '101',
+        date: '1710000010',
         text: 'Всем привет',
         from: { id: 'admin-1', first_name: 'Admin' },
         chat: { id: 'chat-1', type: 'private' },
-        message_thread_id: 77,
+        message_thread_id: '77',
       },
     };
 

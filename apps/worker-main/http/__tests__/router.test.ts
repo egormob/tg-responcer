@@ -207,15 +207,15 @@ describe('http router', () => {
     const unsafeUpdate = {
       update_id: 1,
       message: {
-        message_id: 100,
-        date: 1_710_000_000,
+        message_id: '100',
+        date: '1710000000',
         text: 'hello',
         chat: {
           id: Number.MAX_SAFE_INTEGER + 5,
           type: 'supergroup',
         },
         from: {
-          id: 123,
+          id: '123',
           first_name: 'Unsafe',
         },
       },
@@ -517,10 +517,10 @@ describe('http router', () => {
     const commandUpdate = {
       update_id: 2001,
       message: {
-        message_id: 700,
-        date: Math.trunc(new Date('2024-01-01T00:00:00Z').getTime() / 1000),
-        chat: { id: 4242, type: 'private' },
-        from: { id: 1010, first_name: 'Admin' },
+        message_id: '700',
+        date: '1704067200',
+        chat: { id: '4242', type: 'private' },
+        from: { id: '1010', first_name: 'Admin' },
         text: '/broadcast',
         entities: [
           { type: 'bot_command', offset: 0, length: '/broadcast'.length },
@@ -531,10 +531,10 @@ describe('http router', () => {
     const textUpdate = {
       update_id: 2002,
       message: {
-        message_id: 701,
-        date: Math.trunc(new Date('2024-01-01T00:00:05Z').getTime() / 1000),
-        chat: { id: 4242, type: 'private' },
-        from: { id: 1010, first_name: 'Admin' },
+        message_id: '701',
+        date: '1704067205',
+        chat: { id: '4242', type: 'private' },
+        from: { id: '1010', first_name: 'Admin' },
         text: 'привет всем',
       },
     };

@@ -13,15 +13,15 @@ const createStorageMock = () => ({
 const baseUpdate: TelegramUpdate = {
   update_id: 1,
   message: {
-    message_id: 100,
-    date: 1_710_000_000,
+    message_id: '100',
+    date: '1710000000',
     text: 'hello',
     from: {
-      id: 55,
+      id: '55',
       first_name: 'Test',
     },
     chat: {
-      id: 66,
+      id: '66',
       type: 'private',
     },
   },
@@ -87,7 +87,7 @@ describe('createTelegramWebhookHandler', () => {
       update_id: 2,
       message: {
         message_id: '111',
-        date: 1_710_000_100,
+        date: '1710000100',
         text: '/start src_BIG',
         message_thread_id: threadId,
         migrate_to_chat_id: '-100987654321098765',
@@ -118,7 +118,7 @@ describe('createTelegramWebhookHandler', () => {
       update_id: 3,
       message: {
         message_id: '112',
-        date: 1_710_000_200,
+        date: '1710000200',
         text: 'ping',
         message_thread_id: threadId,
         migrate_to_chat_id: '-100987654321098765',
