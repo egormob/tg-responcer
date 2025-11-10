@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAdminBroadcastRoute } from '../admin-broadcast-route';
-import type { BroadcastJob, BroadcastQueue } from '../broadcast-queue';
+import type { SendBroadcast } from '../minimal-broadcast-service';
 
-const createQueue = () => ({
-  enqueue: vi.fn(),
-} as unknown as BroadcastQueue);
+const createSendBroadcast = () => {
+  const fn = vi.fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>();
+  fn.mockResolvedValue({ delivered: 1, failed: 0, deliveries: [] });
+  return fn;
+};
+
+const createWaitUntil = () => vi.fn(async (promise: Promise<unknown>) => {
+  await promise;
+});
 
 const createRequest = (body: unknown, init: RequestInit = {}) =>
   new Request('https://example.com/admin/broadcast', {
@@ -22,18 +28,20 @@ const createRequest = (body: unknown, init: RequestInit = {}) =>
 
 describe('createAdminBroadcastRoute', () => {
   it('rejects non-POST methods', async () => {
-    const queue = createQueue();
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
+    const sendBroadcast = createSendBroadcast();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', sendBroadcast });
 
-    const response = await route(new Request('https://example.com/admin/broadcast', { method: 'GET' }));
+    const response = await route(
+      new Request('https://example.com/admin/broadcast', { method: 'GET' }),
+    );
 
     expect(response.status).toBe(405);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(sendBroadcast).not.toHaveBeenCalled();
   });
 
   it('requires admin token', async () => {
-    const queue = createQueue();
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
+    const sendBroadcast = createSendBroadcast();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', sendBroadcast });
 
     const response = await route(
       new Request('https://example.com/admin/broadcast', {
@@ -44,12 +52,12 @@ describe('createAdminBroadcastRoute', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(sendBroadcast).not.toHaveBeenCalled();
   });
 
   it('rejects invalid admin token', async () => {
-    const queue = createQueue();
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
+    const sendBroadcast = createSendBroadcast();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', sendBroadcast });
 
     const response = await route(
       new Request('https://example.com/admin/broadcast', {
@@ -57,101 +65,19 @@ describe('createAdminBroadcastRoute', () => {
         headers: {
           'content-type': 'application/json',
           'x-admin-token': 'invalid',
+          'x-admin-actor': 'ops',
         },
         body: JSON.stringify({ text: 'hello' }),
       }),
     );
 
     expect(response.status).toBe(403);
-    expect(queue.enqueue).not.toHaveBeenCalled();
-  });
-
-  it('returns 400 for invalid payload', async () => {
-    const queue = createQueue();
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
-
-    const response = await route(createRequest({ text: '' }));
-
-    expect(response.status).toBe(400);
-    expect(queue.enqueue).not.toHaveBeenCalled();
-  });
-
-  it('validates filters when provided', async () => {
-    const queue = createQueue();
-    const enqueuedJob = {
-      id: 'job-1',
-      status: 'pending',
-      createdAt: new Date('2024-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2024-01-01T00:00:00.000Z'),
-      attempts: 0,
-      payload: { text: 'hello', filters: { chatIds: ['1'] } },
-    } satisfies BroadcastJob;
-
-    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
-
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
-
-    const response = await route(
-      createRequest({ text: 'hello', filters: { chatIds: ['1'] } }),
-    );
-
-    expect(response.status).toBe(202);
-    await expect(response.json()).resolves.toMatchObject({
-      status: 'queued',
-      jobId: 'job-1',
-    });
-    expect(queue.enqueue).toHaveBeenCalledWith({
-      payload: { text: 'hello', filters: { chatIds: ['1'] }, metadata: undefined },
-      requestedBy: 'ops',
-    });
-  });
-
-  it('propagates metadata and actor header', async () => {
-    const queue = createQueue();
-    const enqueuedJob = {
-      id: 'job-1',
-      status: 'pending',
-      createdAt: new Date('2024-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2024-01-01T00:00:00.000Z'),
-      attempts: 0,
-      requestedBy: 'ops',
-      payload: { text: 'hello', metadata: { dryRun: true } },
-    } satisfies BroadcastJob;
-
-    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
-
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, now: () => new Date('2024-01-01T00:00:10.000Z') });
-
-    const response = await route(
-      createRequest(
-        { text: 'hello', metadata: { dryRun: true } },
-        { headers: { 'x-admin-token': 'secret', 'x-admin-actor': 'ops' } },
-      ),
-    );
-
-    expect(queue.enqueue).toHaveBeenCalledWith({
-      payload: { text: 'hello', filters: undefined, metadata: { dryRun: true } },
-      requestedBy: 'ops',
-    });
-    expect(response.headers.get('x-queued-at')).toBe('2024-01-01T00:00:10.000Z');
-  });
-
-  it('returns 503 when queue rejects job', async () => {
-    const queue = createQueue();
-    queue.enqueue = vi.fn().mockImplementation(() => {
-      throw new Error('full');
-    });
-
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
-
-    const response = await route(createRequest({ text: 'hello' }));
-
-    expect(response.status).toBe(503);
+    expect(sendBroadcast).not.toHaveBeenCalled();
   });
 
   it('requires admin actor header', async () => {
-    const queue = createQueue();
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue });
+    const sendBroadcast = createSendBroadcast();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', sendBroadcast });
 
     const response = await route(
       new Request('https://example.com/admin/broadcast', {
@@ -165,44 +91,104 @@ describe('createAdminBroadcastRoute', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(sendBroadcast).not.toHaveBeenCalled();
   });
 
   it('rejects admin actor not present in whitelist', async () => {
-    const queue = createQueue();
+    const sendBroadcast = createSendBroadcast();
+    const waitUntil = createWaitUntil();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, adminAccess });
+    const route = createAdminBroadcastRoute({
+      adminToken: 'secret',
+      sendBroadcast,
+      waitUntil,
+      adminAccess,
+    });
 
     const response = await route(createRequest({ text: 'hello' }));
 
     expect(adminAccess.isAdmin).toHaveBeenCalledWith('ops');
     expect(response.status).toBe(403);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(sendBroadcast).not.toHaveBeenCalled();
+    expect(waitUntil).not.toHaveBeenCalled();
   });
 
   it('accepts admin actor present in whitelist', async () => {
-    const queue = createQueue();
+    const sendBroadcast = createSendBroadcast();
+    const waitUntil = createWaitUntil();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
-    const enqueuedJob = {
-      id: 'job-1',
-      status: 'pending',
-      createdAt: new Date('2024-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2024-01-01T00:00:00.000Z'),
-      attempts: 0,
-      payload: { text: 'hello' },
-    } satisfies BroadcastJob;
-
-    queue.enqueue = vi.fn().mockReturnValue(enqueuedJob);
-
-    const route = createAdminBroadcastRoute({ adminToken: 'secret', queue, adminAccess });
+    const route = createAdminBroadcastRoute({
+      adminToken: 'secret',
+      sendBroadcast,
+      waitUntil,
+      adminAccess,
+      now: () => new Date('2024-01-01T00:00:10.000Z'),
+    });
 
     const response = await route(createRequest({ text: 'hello' }));
 
-    expect(adminAccess.isAdmin).toHaveBeenCalledWith('ops');
     expect(response.status).toBe(202);
-    expect(queue.enqueue).toHaveBeenCalledWith({
-      payload: { text: 'hello', filters: undefined, metadata: undefined },
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    expect(sendBroadcast).toHaveBeenCalledWith({ text: 'hello', requestedBy: 'ops' });
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'scheduled',
+      scheduledAt: '2024-01-01T00:00:10.000Z',
       requestedBy: 'ops',
+      filters: null,
+      metadata: null,
     });
+  });
+
+  it('returns 400 for invalid payload', async () => {
+    const sendBroadcast = createSendBroadcast();
+    const route = createAdminBroadcastRoute({ adminToken: 'secret', sendBroadcast });
+
+    const response = await route(createRequest({ text: '' }));
+
+    expect(response.status).toBe(400);
+    expect(sendBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('validates filters when provided and schedules broadcast', async () => {
+    const sendBroadcast = createSendBroadcast();
+    const waitUntil = createWaitUntil();
+    const route = createAdminBroadcastRoute({
+      adminToken: 'secret',
+      sendBroadcast,
+      waitUntil,
+      now: () => new Date('2024-01-01T00:00:10.000Z'),
+    });
+
+    const response = await route(
+      createRequest({ text: 'hello', filters: { chatIds: ['1'] }, metadata: { dryRun: true } }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(response.headers.get('x-scheduled-at')).toBe('2024-01-01T00:00:10.000Z');
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    expect(sendBroadcast).toHaveBeenCalledWith({ text: 'hello', requestedBy: 'ops' });
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'scheduled',
+      scheduledAt: '2024-01-01T00:00:10.000Z',
+      filters: { chatIds: ['1'] },
+      metadata: { dryRun: true },
+    });
+  });
+
+  it('returns 503 when waitUntil throws', async () => {
+    const sendBroadcast = createSendBroadcast();
+    const waitUntil = vi.fn(() => {
+      throw new Error('waitUntil failed');
+    });
+    const route = createAdminBroadcastRoute({
+      adminToken: 'secret',
+      sendBroadcast,
+      waitUntil,
+    });
+
+    const response = await route(createRequest({ text: 'hello' }));
+
+    expect(response.status).toBe(503);
+    expect(sendBroadcast).not.toHaveBeenCalled();
   });
 });

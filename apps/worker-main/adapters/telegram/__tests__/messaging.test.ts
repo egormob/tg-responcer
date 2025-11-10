@@ -272,7 +272,10 @@ describe('createTelegramMessagingAdapter', () => {
       expect.objectContaining({
         chat_id: chatId,
         description: 'Bad Request: chat not found',
-        parameters: { migrate_to_chat_id: -1009876543210 },
+        parameters: {
+          // eslint-disable-next-line @typescript-eslint/no-loss-of-precision
+          migrate_to_chat_id: -1009876543210,
+        },
       }),
     );
   });
@@ -286,7 +289,10 @@ describe('createTelegramMessagingAdapter', () => {
         JSON.stringify({
           ok: false,
           description: 'Chat migrated',
-          parameters: { migrate_to_chat_id: -100333333333333333 },
+          parameters: {
+            // eslint-disable-next-line @typescript-eslint/no-loss-of-precision
+            migrate_to_chat_id: -100333333333333333,
+          },
         }),
         { status: 400 },
       ),
@@ -310,7 +316,10 @@ describe('createTelegramMessagingAdapter', () => {
       expect.objectContaining({
         chat_id: chatId,
         description: 'Chat migrated',
-        parameters: { migrate_to_chat_id: -100333333333333333 },
+        parameters: {
+          // eslint-disable-next-line @typescript-eslint/no-loss-of-precision
+          migrate_to_chat_id: -100333333333333333,
+        },
       }),
     );
   });

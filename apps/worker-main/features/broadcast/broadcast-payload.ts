@@ -1,7 +1,14 @@
-import type {
-  BroadcastAudienceFilter,
-  BroadcastMessagePayload,
-} from './broadcast-queue';
+export interface BroadcastAudienceFilter {
+  readonly chatIds?: readonly string[];
+  readonly userIds?: readonly string[];
+  readonly languageCodes?: readonly string[];
+}
+
+export interface BroadcastMessagePayload {
+  readonly text: string;
+  readonly filters?: BroadcastAudienceFilter;
+  readonly metadata?: Record<string, unknown>;
+}
 
 export interface BroadcastPayloadDraft {
   text: string;
