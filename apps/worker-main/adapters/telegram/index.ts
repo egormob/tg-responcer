@@ -20,6 +20,8 @@ export interface TelegramMessagingAdapterOptions {
    */
   wait?: (ms: number) => Promise<void>;
   logger?: {
+    debug?: (message: string, details?: Record<string, unknown>) => void;
+    info?: (message: string, details?: Record<string, unknown>) => void;
     warn?: (message: string, details?: Record<string, unknown>) => void;
     error?: (message: string, details?: Record<string, unknown>) => void;
   };
@@ -148,6 +150,36 @@ export const createTelegramMessagingAdapter = (
   const wait = createWait(options.wait);
   const { logger } = options;
 
+  // Telegram API ожидает, что идентификаторы уже приведены к строкам на уровне ядра
+  // (см. http/telegram-webhook.ts). Адаптер не делает попыток конвертации, чтобы
+  // не потерять ведущие нули и не скрыть источник некорректных типов.
+  const ensureStringId = (method: string, field: string, value: unknown): string => {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    const details: Record<string, unknown> = {
+      method,
+      field,
+      value,
+      valueType: typeof value,
+    };
+    logger?.error?.('telegram-adapter non-string identifier', details);
+    throw new TypeError(`telegram-adapter expected ${field} to be a string`);
+  };
+
+  const ensureOptionalStringId = (
+    method: string,
+    field: string,
+    value: unknown,
+  ): string | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    return ensureStringId(method, field, value);
+  };
+
   const buildUrl = (method: string) => `${baseUrl}/bot${options.botToken}/${method}`;
 
   const executeWithRetries = async <Result>(
@@ -249,19 +281,34 @@ export const createTelegramMessagingAdapter = (
 
   return {
     async sendTyping(input) {
+      const chatId = ensureStringId('sendChatAction', 'chat_id', input.chatId);
+      const threadId = ensureOptionalStringId(
+        'sendChatAction',
+        'message_thread_id',
+        input.threadId,
+      );
+
+      logger?.debug?.('telegram-adapter sendChatAction request', {
+        method: 'sendChatAction',
+        chatId,
+        threadId,
+      });
+
       const body: Record<string, unknown> = {
-        chat_id: input.chatId,
+        chat_id: chatId,
         action: 'typing',
       };
 
-      if (input.threadId) {
-        body.message_thread_id = input.threadId;
+      if (threadId) {
+        body.message_thread_id = threadId;
       }
 
       await executeWithRetries('sendChatAction', body, true);
     },
 
     async sendText(input) {
+      const chatId = ensureStringId('sendMessage', 'chat_id', input.chatId);
+      const threadId = ensureOptionalStringId('sendMessage', 'message_thread_id', input.threadId);
       const sanitizedText = sanitizeText(input.text);
       const chunks = splitTextIntoChunks(sanitizedText);
 
@@ -277,13 +324,22 @@ export const createTelegramMessagingAdapter = (
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index];
         const body: Record<string, unknown> = {
-          chat_id: input.chatId,
+          chat_id: chatId,
           text: chunk,
         };
 
-        if (input.threadId) {
-          body.message_thread_id = input.threadId;
+        if (threadId) {
+          body.message_thread_id = threadId;
         }
+
+        logger?.info?.('telegram-adapter sendMessage request', {
+          method: 'sendMessage',
+          chatId,
+          threadId,
+          chunkIndex: index,
+          chunkCount: chunks.length,
+          textLength: chunk.length,
+        });
 
         const result = await executeWithRetries<{
           message_id?: number;
