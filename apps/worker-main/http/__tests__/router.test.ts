@@ -1,13 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DialogEngine } from '../../core/DialogEngine';
 import type { MessagingPort, StoragePort } from '../../ports';
 import { createTelegramWebhookHandler } from '../../features';
 import { createTelegramBroadcastCommandHandler } from '../../features/broadcast';
+import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
+import { createSelfTestRoute } from '../../features/admin-diagnostics/self-test-route';
 import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
 import * as telegramPayload from '../telegram-payload';
+import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
 
 describe('http router', () => {
+  beforeEach(() => {
+    resetLastTelegramUpdateSnapshot();
+  });
+
   const createDialogEngineMock = () => ({
     handleMessage: vi.fn(),
   }) as unknown as DialogEngine;
@@ -920,5 +927,64 @@ describe('http router', () => {
     expect(diag).toHaveBeenCalledTimes(1);
     const passedRequest = diag.mock.calls[0][0];
     expect(passedRequest.url).toContain('/admin/diag?q=bindings');
+  });
+
+  it('exposes snapshot fields on admin diagnostics routes even after sendTyping failures', async () => {
+    const messaging = createMessagingMock();
+    messaging.sendTyping = vi.fn().mockRejectedValue(new Error('typing unavailable'));
+    messaging.sendText = vi.fn().mockResolvedValue({ messageId: 'abc' });
+
+    const ai = {
+      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
+    };
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging,
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        selfTest: createSelfTestRoute({ ai, messaging, now: () => 0 }),
+        diag: createBindingsDiagnosticsRoute({
+          storage,
+          env: { TELEGRAM_BOT_TOKEN: '123456:ABCDEF', OPENAI_API_KEY: 'sk-test' },
+        }),
+      },
+    });
+
+    const selfTestResponse = await router.handle(
+      new Request('https://example.com/admin/selftest?chatId=999&token=secret'),
+    );
+
+    expect(selfTestResponse.status).toBe(500);
+    const selfTestPayload = await selfTestResponse.json();
+
+    expect(selfTestPayload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: false }),
+        failSoft: false,
+      }),
+    );
+    expect(selfTestPayload.lastWebhookSnapshot.sendText).toBeUndefined();
+
+    const diagResponse = await router.handle(
+      new Request('https://example.com/admin/diag?q=bindings&token=secret'),
+    );
+
+    expect(diagResponse.status).toBe(200);
+    const diagPayload = await diagResponse.json();
+    expect(diagPayload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: false }),
+      }),
+    );
   });
 });

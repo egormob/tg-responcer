@@ -2,6 +2,10 @@ import { DialogEngine, type IncomingMessage } from '../core';
 import type { MessagingPort } from '../ports';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
+import {
+  recordTelegramSnapshotAction,
+  type TelegramSnapshotRoute,
+} from './telegram-webhook';
 import { applyTelegramIdLogFields } from './telegram-ids';
 import { parseTelegramUpdateBody } from './telegram-payload';
 
@@ -134,6 +138,7 @@ interface MessagingLogDetails {
   chatIdNormalized?: string;
   fromId?: unknown;
   messageId?: string;
+  snapshotRoute?: TelegramSnapshotRoute;
 }
 
 const createMessagingLogFields = (details: MessagingLogDetails) => {
@@ -175,10 +180,26 @@ const logMessagingCall = async <T>(
   call: () => Promise<T>,
 ): Promise<T> => {
   const log = createMessagingLogFields(details);
+  const snapshotRoute: TelegramSnapshotRoute = details.snapshotRoute ?? 'user';
   try {
     const result = await call();
     // eslint-disable-next-line no-console
     console.info(`[router][${details.action}] success`, { ...log, status: 'ok' });
+    const successSnapshot: Parameters<typeof recordTelegramSnapshotAction>[0] = {
+      action: details.action,
+      route: snapshotRoute,
+      updateId: details.updateId,
+      ok: true,
+      statusCode: 200,
+      description: 'OK',
+    };
+    if (details.chatIdRaw !== undefined) {
+      successSnapshot.chatIdRaw = details.chatIdRaw;
+    }
+    if (details.chatIdNormalized !== undefined) {
+      successSnapshot.chatIdUsed = details.chatIdNormalized;
+    }
+    recordTelegramSnapshotAction(successSnapshot);
     return result;
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -187,6 +208,27 @@ const logMessagingCall = async <T>(
       status: 'error',
       error: String(error),
     });
+    const statusCandidate = (error as { status?: unknown }).status;
+    const descriptionCandidate = (error as { description?: unknown }).description;
+    const failureSnapshot: Parameters<typeof recordTelegramSnapshotAction>[0] = {
+      action: details.action,
+      route: snapshotRoute,
+      updateId: details.updateId,
+      ok: false,
+      statusCode: typeof statusCandidate === 'number' ? statusCandidate : null,
+      description:
+        typeof descriptionCandidate === 'string' && descriptionCandidate.trim().length > 0
+          ? descriptionCandidate
+          : undefined,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    if (details.chatIdRaw !== undefined) {
+      failureSnapshot.chatIdRaw = details.chatIdRaw;
+    }
+    if (details.chatIdNormalized !== undefined) {
+      failureSnapshot.chatIdUsed = details.chatIdNormalized;
+    }
+    recordTelegramSnapshotAction(failureSnapshot);
     throw error;
   }
 };

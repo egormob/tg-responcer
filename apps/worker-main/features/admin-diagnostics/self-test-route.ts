@@ -1,5 +1,10 @@
 import type { AiPort, MessagingPort, StoragePort } from '../../ports';
 import { json } from '../../shared/json-response';
+import {
+  getLastTelegramUpdateSnapshot,
+  noteTelegramSnapshot,
+  recordTelegramSnapshotAction,
+} from '../../http/telegram-webhook';
 
 export interface CreateSelfTestRouteOptions {
   ai: AiPort;
@@ -73,6 +78,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       utmDegraded: saveOutcome?.utmDegraded ?? true,
       errors,
     };
+
+    payload.lastWebhookSnapshot = getLastTelegramUpdateSnapshot();
 
     if (ok) {
       // eslint-disable-next-line no-console
@@ -168,16 +175,67 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       errors.push('telegram: chatId query parameter is required and whitelist is empty');
     } else {
       const telegramStartedAt = now();
+      const snapshotContext = {
+        route: 'admin' as const,
+        chatIdRaw: chatIdParamRaw ?? telegramChatId,
+        chatIdUsed: telegramChatId,
+      };
+
+      noteTelegramSnapshot({
+        ...snapshotContext,
+        resetMessaging: true,
+        failSoft: false,
+      });
+
+      const recordFailure = (
+        action: 'sendTyping' | 'sendText',
+        error: unknown,
+      ) => {
+        const statusCandidate = (error as { status?: unknown }).status;
+        const descriptionCandidate = (error as { description?: unknown }).description;
+        recordTelegramSnapshotAction({
+          ...snapshotContext,
+          action,
+          ok: false,
+          statusCode: typeof statusCandidate === 'number' ? statusCandidate : null,
+          description:
+            typeof descriptionCandidate === 'string' && descriptionCandidate.trim().length > 0
+              ? descriptionCandidate
+              : undefined,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      };
+
+      let sendTypingCompleted = false;
+
       try {
         await options.messaging.sendTyping({
           chatId: telegramChatId,
           threadId: threadIdParam ?? undefined,
         });
 
+        recordTelegramSnapshotAction({
+          ...snapshotContext,
+          action: 'sendTyping',
+          ok: true,
+          statusCode: 200,
+          description: 'OK',
+        });
+
+        sendTypingCompleted = true;
+
         const result = await options.messaging.sendText({
           chatId: telegramChatId,
           threadId: threadIdParam ?? undefined,
           text: textParam,
+        });
+
+        recordTelegramSnapshotAction({
+          ...snapshotContext,
+          action: 'sendText',
+          ok: true,
+          statusCode: 200,
+          description: 'OK',
         });
 
         telegramOk = true;
@@ -186,6 +244,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         telegramStatus = 200;
         telegramDescription = 'OK';
       } catch (error) {
+        recordFailure(sendTypingCompleted ? 'sendText' : 'sendTyping', error);
         const message = error instanceof Error ? error.message : String(error);
         const status = (error as { status?: unknown }).status;
         const description = (error as { description?: unknown }).description;
@@ -245,6 +304,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     }
 
     const hasErrors = errors.length > 0;
+
+    responseBody.lastWebhookSnapshot = getLastTelegramUpdateSnapshot();
 
     return json(responseBody, { status: hasErrors ? 500 : 200 });
   };

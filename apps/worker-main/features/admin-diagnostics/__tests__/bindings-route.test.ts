@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBindingsDiagnosticsRoute } from '../bindings-route';
 import type { StoragePort } from '../../../ports';
+import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/diag${query}`);
 
@@ -11,6 +12,10 @@ const baseEnv = {
 };
 
 describe('createBindingsDiagnosticsRoute', () => {
+  beforeEach(() => {
+    resetLastTelegramUpdateSnapshot();
+  });
+
   const baseStorage = (): StoragePort => ({
     saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
     appendMessage: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +45,10 @@ describe('createBindingsDiagnosticsRoute', () => {
       },
     });
 
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({ chatIdUsed: expect.objectContaining({ present: false }) }),
+    );
+
     expect(Array.isArray(payload.bindings.saveUser)).toBe(true);
     expect(payload.bindings.saveUser[0]).toBe('admin:diag:bindings');
     expect(storage.saveUser).toHaveBeenCalledTimes(1);
@@ -63,6 +72,9 @@ describe('createBindingsDiagnosticsRoute', () => {
     const payload = await response.json();
     expect(payload.ok).toBe(false);
     expect(payload.errors).toEqual(['storage.saveUser: save failed']);
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({ chatIdUsed: expect.objectContaining({ present: false }) }),
+    );
   });
 
   it('rejects unsupported diagnostics queries', async () => {
@@ -102,6 +114,7 @@ describe('createBindingsDiagnosticsRoute', () => {
       status: 200,
       description: 'OK',
       tokenMasked: '1234…CDEF',
+      lastWebhookSnapshot: expect.any(Object),
     });
   });
 
@@ -122,6 +135,7 @@ describe('createBindingsDiagnosticsRoute', () => {
       status: null,
       description: 'TELEGRAM_BOT_TOKEN is not configured',
       tokenMasked: undefined,
+      lastWebhookSnapshot: expect.any(Object),
     });
   });
 
@@ -145,6 +159,7 @@ describe('createBindingsDiagnosticsRoute', () => {
       status: null,
       description: 'network failure',
       tokenMasked: '1234…CDEF',
+      lastWebhookSnapshot: expect.any(Object),
     });
   });
 });

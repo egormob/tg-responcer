@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MessagingPort } from '../../ports';
+
+import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
 import { createTypingIndicator } from '../typing-indicator';
 
 const createMessagingPort = () => ({
@@ -193,4 +195,7 @@ describe('typing indicator', () => {
       vi.useRealTimers();
     }
   });
+});
+beforeEach(() => {
+  resetLastTelegramUpdateSnapshot();
 });

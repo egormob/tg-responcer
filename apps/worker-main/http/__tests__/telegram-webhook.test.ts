@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTelegramBroadcastCommandHandler } from '../../features/broadcast/telegram-broadcast-command';
 import { createTelegramExportCommandHandler } from '../../features/export/telegram-export-command';
 import type { MessagingPort } from '../../ports';
-import { transformTelegramUpdate } from '../telegram-webhook';
+import { resetLastTelegramUpdateSnapshot, transformTelegramUpdate } from '../telegram-webhook';
 import type { TelegramUpdate } from '../telegram-webhook';
 
 const createBaseUpdate = (): TelegramUpdate => ({
@@ -29,6 +29,7 @@ describe('transformTelegramUpdate', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    resetLastTelegramUpdateSnapshot();
   });
 
   it('returns dialog message for regular text update', async () => {

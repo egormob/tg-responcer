@@ -1,13 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvzRoute } from '../envz-route';
 import { createSelfTestRoute } from '../self-test-route';
 import type { AiPort, MessagingPort, StoragePort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
+import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/selftest${query}`);
 
 describe('createSelfTestRoute', () => {
+  beforeEach(() => {
+    resetLastTelegramUpdateSnapshot();
+  });
+
   it('returns success report when OpenAI and Telegram checks pass', async () => {
     const reply = { text: 'pong', metadata: { usedOutputText: true } };
     const ai: AiPort = {
@@ -37,6 +42,17 @@ describe('createSelfTestRoute', () => {
       telegramChatId: '123',
       telegramChatIdSource: 'query',
     });
+
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        failSoft: false,
+        chatIdRaw: expect.objectContaining({ present: true }),
+        chatIdUsed: expect.objectContaining({ present: true }),
+        sendTyping: expect.objectContaining({ ok: true }),
+        sendText: expect.objectContaining({ ok: true }),
+      }),
+    );
 
     expect(ai.reply).toHaveBeenCalledWith({
       userId: 'admin:selftest',
@@ -71,6 +87,13 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramDescription).toBe('OK');
     expect(payload.telegramChatId).toBe('123');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: true }),
+        sendText: expect.objectContaining({ ok: true }),
+      }),
+    );
   });
 
   it('fails Telegram check when chatId is missing', async () => {
@@ -95,6 +118,11 @@ describe('createSelfTestRoute', () => {
     expect(payload.errors).toContain('telegram: chatId query parameter is required and whitelist is empty');
     expect(payload.telegramChatId).toBeUndefined();
     expect(payload.telegramChatIdSource).toBeUndefined();
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        chatIdUsed: expect.objectContaining({ present: false }),
+      }),
+    );
     expect(messaging.sendTyping).not.toHaveBeenCalled();
     expect(messaging.sendText).not.toHaveBeenCalled();
   });
@@ -127,6 +155,13 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramStatus).toBe(200);
     expect(payload.telegramDescription).toBe('OK');
     expect(payload.errors).toEqual([]);
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: true }),
+        sendText: expect.objectContaining({ ok: true }),
+      }),
+    );
   });
 
   it('captures Telegram errors', async () => {
@@ -152,6 +187,13 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramDescription).toBe('telegram failure');
     expect(payload.telegramChatId).toBe('789');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: true }),
+        sendText: expect.objectContaining({ ok: false }),
+      }),
+    );
   });
 
   it('treats noop AI response as OpenAI failure', async () => {
@@ -174,6 +216,13 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramStatus).toBe(200);
     expect(payload.telegramChatId).toBe('123');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({
+        route: 'admin',
+        sendTyping: expect.objectContaining({ ok: true }),
+        sendText: expect.objectContaining({ ok: true }),
+      }),
+    );
   });
 
   it('runs storage diagnostics when q=utm', async () => {
@@ -206,6 +255,10 @@ describe('createSelfTestRoute', () => {
       utmDegraded: false,
       errors: [],
     });
+
+    expect(payload.lastWebhookSnapshot).toEqual(
+      expect.objectContaining({ chatIdUsed: expect.objectContaining({ present: false }) }),
+    );
 
     expect(storage.saveUser).toHaveBeenCalledTimes(1);
     const savedUser = storage.saveUser.mock.calls[0][0];

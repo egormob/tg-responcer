@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../ports';
+import { recordTelegramSnapshotAction } from './telegram-webhook';
 
 export interface TypingIndicatorContext {
   chatId: string;
@@ -68,11 +69,33 @@ export const createTypingIndicator = (options: TypingIndicatorOptions): TypingIn
         chatId: context.chatId,
         threadId: context.threadId,
       });
+      recordTelegramSnapshotAction({
+        action: 'sendTyping',
+        route: 'user',
+        chatIdUsed: context.chatId,
+        ok: true,
+        statusCode: 200,
+        description: 'OK',
+      });
     } catch (error) {
       warn?.('typing-indicator sendTyping failed', {
         chatId: context.chatId,
         threadId: context.threadId,
         ...toErrorDetails(error),
+      });
+      const statusCandidate = (error as { status?: unknown }).status;
+      const descriptionCandidate = (error as { description?: unknown }).description;
+      recordTelegramSnapshotAction({
+        action: 'sendTyping',
+        route: 'user',
+        chatIdUsed: context.chatId,
+        ok: false,
+        statusCode: typeof statusCandidate === 'number' ? statusCandidate : null,
+        description:
+          typeof descriptionCandidate === 'string' && descriptionCandidate.trim().length > 0
+            ? descriptionCandidate
+            : undefined,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   };

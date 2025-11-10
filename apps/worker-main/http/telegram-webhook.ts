@@ -6,7 +6,190 @@ import type {
   TransformPayloadResult,
 } from './router';
 import { parseStartPayload } from '../features/utm-tracking/parse-start-payload';
-import { applyTelegramIdLogFields, toTelegramIdString } from './telegram-ids';
+import {
+  applyTelegramIdLogFields,
+  describeTelegramIdForLogs,
+  toTelegramIdString,
+} from './telegram-ids';
+
+export type TelegramSnapshotRoute = 'user' | 'admin' | 'safe';
+
+type TelegramSnapshotAction = 'sendTyping' | 'sendText';
+
+export interface TelegramSnapshotChatId {
+  present: boolean;
+  type?: string;
+  hash?: string;
+  length?: number;
+}
+
+export interface TelegramSnapshotActionStatus {
+  ok: boolean;
+  at: string;
+  statusCode?: number | null;
+  description?: string;
+  error?: string;
+}
+
+export interface TelegramUpdateSnapshot {
+  updatedAt: string;
+  route: TelegramSnapshotRoute;
+  updateId?: string | number;
+  chatIdRaw?: TelegramSnapshotChatId;
+  chatIdUsed?: TelegramSnapshotChatId;
+  failSoft: boolean;
+  sendTyping?: TelegramSnapshotActionStatus;
+  sendText?: TelegramSnapshotActionStatus;
+}
+
+interface SnapshotBaseUpdate {
+  route?: TelegramSnapshotRoute;
+  updateId?: string | number;
+  chatIdRaw?: unknown;
+  chatIdUsed?: string;
+  failSoft?: boolean;
+  resetMessaging?: boolean;
+}
+
+interface SnapshotActionUpdate extends SnapshotBaseUpdate {
+  action: TelegramSnapshotAction;
+  ok: boolean;
+  statusCode?: number | null;
+  description?: string;
+  error?: string;
+}
+
+const createDefaultSnapshot = (): TelegramUpdateSnapshot => ({
+  updatedAt: new Date(0).toISOString(),
+  route: 'user',
+  failSoft: false,
+});
+
+let lastTelegramUpdateSnapshot: TelegramUpdateSnapshot = createDefaultSnapshot();
+
+const cloneSnapshot = (snapshot: TelegramUpdateSnapshot): TelegramUpdateSnapshot => ({
+  ...snapshot,
+  chatIdRaw: snapshot.chatIdRaw ? { ...snapshot.chatIdRaw } : undefined,
+  chatIdUsed: snapshot.chatIdUsed ? { ...snapshot.chatIdUsed } : undefined,
+  sendTyping: snapshot.sendTyping ? { ...snapshot.sendTyping } : undefined,
+  sendText: snapshot.sendText ? { ...snapshot.sendText } : undefined,
+});
+
+const describeChatIdSnapshot = (value: unknown): TelegramSnapshotChatId => {
+  if (value === undefined) {
+    return { present: false };
+  }
+
+  if (value === null) {
+    return { present: true, type: 'null' };
+  }
+
+  const described = describeTelegramIdForLogs(value);
+  if (described) {
+    return {
+      present: true,
+      type: typeof value,
+      hash: described.hash,
+      length: described.length,
+    };
+  }
+
+  return {
+    present: true,
+    type: typeof value,
+  };
+};
+
+const applySnapshotBaseUpdate = (
+  snapshot: TelegramUpdateSnapshot,
+  update: SnapshotBaseUpdate,
+) => {
+  const next = cloneSnapshot(snapshot);
+  next.updatedAt = new Date().toISOString();
+
+  if (update.route) {
+    next.route = update.route;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'updateId')) {
+    next.updateId = update.updateId;
+  }
+
+  if (update.resetMessaging) {
+    next.sendTyping = undefined;
+    next.sendText = undefined;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'chatIdRaw')) {
+    next.chatIdRaw = describeChatIdSnapshot(update.chatIdRaw);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'chatIdUsed')) {
+    next.chatIdUsed = describeChatIdSnapshot(update.chatIdUsed);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'failSoft') && typeof update.failSoft === 'boolean') {
+    next.failSoft = update.failSoft;
+  }
+
+  return next;
+};
+
+const createActionStatus = (
+  update: SnapshotActionUpdate,
+): TelegramSnapshotActionStatus => {
+  const status: TelegramSnapshotActionStatus = {
+    ok: update.ok,
+    at: new Date().toISOString(),
+  };
+
+  if (Object.prototype.hasOwnProperty.call(update, 'statusCode')) {
+    status.statusCode = update.statusCode ?? null;
+  }
+
+  if (update.description !== undefined) {
+    status.description = update.description;
+  }
+
+  if (update.error !== undefined) {
+    status.error = update.error;
+  } else if (!update.ok && update.description) {
+    status.error = update.description;
+  }
+
+  return status;
+};
+
+export const noteTelegramSnapshot = (update: SnapshotBaseUpdate) => {
+  lastTelegramUpdateSnapshot = applySnapshotBaseUpdate(lastTelegramUpdateSnapshot, update);
+};
+
+export const recordTelegramSnapshotAction = (update: SnapshotActionUpdate) => {
+  const baseUpdated = applySnapshotBaseUpdate(lastTelegramUpdateSnapshot, update);
+  const status = createActionStatus(update);
+
+  if (update.action === 'sendTyping') {
+    baseUpdated.sendTyping = status;
+  } else {
+    baseUpdated.sendText = status;
+  }
+
+  lastTelegramUpdateSnapshot = baseUpdated;
+};
+
+export const getLastTelegramUpdateSnapshot = (): TelegramUpdateSnapshot => {
+  const snapshot = cloneSnapshot(lastTelegramUpdateSnapshot);
+
+  return {
+    ...snapshot,
+    chatIdRaw: snapshot.chatIdRaw ?? { present: false },
+    chatIdUsed: snapshot.chatIdUsed ?? { present: false },
+  };
+};
+
+export const resetLastTelegramUpdateSnapshot = () => {
+  lastTelegramUpdateSnapshot = createDefaultSnapshot();
+};
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -578,6 +761,15 @@ export const transformTelegramUpdate = async (
     messageId: incoming.messageId,
     route,
   };
+
+  noteTelegramSnapshot({
+    route: 'user',
+    updateId: update.update_id,
+    chatIdRaw: message.chat?.id,
+    chatIdUsed: result.chatIdNormalized ?? incoming.chat.id,
+    resetMessaging: true,
+    failSoft: false,
+  });
 
   // eslint-disable-next-line no-console
   const normalizedLog: Record<string, unknown> = {
