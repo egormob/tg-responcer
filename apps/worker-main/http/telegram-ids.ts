@@ -128,17 +128,24 @@ export const describeTelegramIdForLogs = (
   };
 };
 
+export interface ApplyTelegramIdLogFieldsOptions {
+  includeValue?: boolean;
+}
+
 export const applyTelegramIdLogFields = <T extends Record<string, unknown>>(
   target: T,
   field: string,
   value: unknown,
+  options: ApplyTelegramIdLogFieldsOptions = {},
 ): T => {
   const described = describeTelegramIdForLogs(value);
   if (!described) {
     return target;
   }
 
-  target[field] = described.value;
+  if (options.includeValue ?? true) {
+    target[field] = described.value;
+  }
   target[`${field}Length`] = described.length;
   target[`${field}Hash`] = described.hash;
   return target;

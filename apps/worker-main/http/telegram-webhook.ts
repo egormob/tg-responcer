@@ -559,6 +559,8 @@ export const transformTelegramUpdate = async (
     }
   }
 
+  const route = startPayload ? 'telegram.message.start_payload' : 'telegram.message';
+
   const result: MessageWebhookResult = {
     kind: 'message',
     message: startPayload
@@ -570,6 +572,11 @@ export const transformTelegramUpdate = async (
           },
         }
       : incoming,
+    chatIdRaw: message.chat?.id,
+    chatIdNormalized: incoming.chat.id,
+    fromId: incoming.user.userId,
+    messageId: incoming.messageId,
+    route,
   };
 
   // eslint-disable-next-line no-console

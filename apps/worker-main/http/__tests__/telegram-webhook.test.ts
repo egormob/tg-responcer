@@ -44,6 +44,11 @@ describe('transformTelegramUpdate', () => {
     expect(result.message.user.userId).toBe('789');
     expect(result.message.receivedAt).toBeInstanceOf(Date);
     expect(result.message.messageId).toBe('456');
+    expect(result.chatIdRaw).toBe('555');
+    expect(result.chatIdNormalized).toBe('555');
+    expect(result.fromId).toBe('789');
+    expect(result.messageId).toBe('456');
+    expect(result.route).toBe('telegram.message');
   });
 
   it('attaches utmSource when /start payload matches expected pattern', async () => {
@@ -65,6 +70,7 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBe('src_SPRING-Launch');
+    expect(result.route).toBe('telegram.message.start_payload');
   });
 
   it('attaches utmSource when startapp payload provided for mini app', async () => {
@@ -79,6 +85,7 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBe('src_MINI-App');
+    expect(result.route).toBe('telegram.message.start_payload');
   });
 
   it('extracts utmSource from mini app initData payload', async () => {
@@ -108,6 +115,7 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBe('src_INIT-Data');
+    expect(result.route).toBe('telegram.message.start_payload');
   });
 
   it('preserves plus signs in mini app initData payload', async () => {
@@ -137,6 +145,7 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBe('src.Campaign+Q1');
+    expect(result.route).toBe('telegram.message.start_payload');
   });
 
   it('attaches utmSource with dot prefix and special characters', async () => {
@@ -158,6 +167,7 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBe('src.Campaign+Q1');
+    expect(result.route).toBe('telegram.message.start_payload');
   });
 
   it('does not set utmSource when /start command has no payload', async () => {
@@ -200,6 +210,28 @@ describe('transformTelegramUpdate', () => {
     }
 
     expect(result.message.user.utmSource).toBeUndefined();
+  });
+
+  it('preserves 64-bit chat ids as strings in result metadata', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    const bigChatId = '9223372036854775808';
+    update.message.chat.id = bigChatId;
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.chat.id).toBe(bigChatId);
+    expect(typeof result.message.chat.id).toBe('string');
+    expect(result.chatIdRaw).toBe(bigChatId);
+    expect(result.chatIdNormalized).toBe(bigChatId);
   });
 
   it('invokes admin command handler for /admin command', async () => {
