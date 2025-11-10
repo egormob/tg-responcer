@@ -3,19 +3,27 @@ import type { AdminAccess } from '../admin-access';
 import type {
   BroadcastAudienceFilter,
   BroadcastMessagePayload,
-  BroadcastQueue,
-} from './broadcast-queue';
+} from './broadcast-payload';
 import {
   DEFAULT_MAX_TEXT_LENGTH,
   buildBroadcastPayload,
 } from './broadcast-payload';
+import type { SendBroadcast } from './minimal-broadcast-service';
+
+interface Logger {
+  info?(message: string, details?: Record<string, unknown>): void;
+  warn?(message: string, details?: Record<string, unknown>): void;
+  error?(message: string, details?: Record<string, unknown>): void;
+}
 
 export interface CreateAdminBroadcastRouteOptions {
   readonly adminToken: string;
-  readonly queue: BroadcastQueue;
+  readonly sendBroadcast: SendBroadcast;
+  readonly waitUntil?: (promise: Promise<unknown>) => void;
   readonly maxTextLength?: number;
   readonly now?: () => Date;
   readonly adminAccess?: AdminAccess;
+  readonly logger?: Logger;
 }
 
 export interface AdminBroadcastRequest {
@@ -116,6 +124,15 @@ const parseMetadata = (value: unknown): Record<string, unknown> | undefined => {
   return { ...value };
 };
 
+const toErrorDetails = (error: unknown): { name: string; message: string } => {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+
+  const message = typeof error === 'string' ? error : JSON.stringify(error);
+  return { name: 'Error', message };
+};
+
 const extractRequestedBy = (request: Request): string | undefined => {
   const header = request.headers.get('x-admin-actor');
   if (!header) {
@@ -182,26 +199,104 @@ export const createAdminBroadcastRoute = (options: CreateAdminBroadcastRouteOpti
       return toErrorResponse(message, 400);
     }
 
-    let job;
-    try {
-      job = options.queue.enqueue({
-        payload: messagePayload,
-        requestedBy: actor,
+    const waitUntilProvided = typeof options.waitUntil === 'function';
+    const waitUntil = waitUntilProvided
+      ? options.waitUntil
+      : (promise: Promise<unknown>) => {
+          void promise;
+        };
+
+    const scheduledAt = now();
+    const contextDetails = {
+      requestedBy: actor,
+      filters: messagePayload.filters ?? null,
+      metadata: messagePayload.metadata ?? null,
+    } satisfies Record<string, unknown>;
+
+    const createBroadcastTask = () => {
+      let trigger: (() => void) | undefined;
+
+      const task = new Promise<void>((resolve) => {
+        trigger = () => {
+          void (async () => {
+            try {
+              const result = await options.sendBroadcast({
+                text: messagePayload.text,
+                requestedBy: actor,
+              });
+
+              options.logger?.info?.('admin broadcast delivered', {
+                ...contextDetails,
+                delivered: result.delivered,
+                failed: result.failed,
+              });
+            } catch (error) {
+              const details = toErrorDetails(error);
+
+              options.logger?.error?.('admin broadcast failed', {
+                ...contextDetails,
+                error: details,
+              });
+            } finally {
+              resolve();
+            }
+          })();
+        };
       });
+
+      if (!trigger) {
+        throw new Error('Failed to create broadcast task');
+      }
+
+      return { task, trigger };
+    };
+
+    let broadcastTask: { task: Promise<void>; trigger: () => void };
+    try {
+      broadcastTask = createBroadcastTask();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to enqueue broadcast';
-      return toErrorResponse(message, 503);
+      const details = toErrorDetails(error);
+
+      options.logger?.error?.('admin broadcast scheduling failed', {
+        ...contextDetails,
+        error: details,
+      });
+
+      return toErrorResponse(`Failed to schedule broadcast: ${details.message}`, 503);
     }
+
+    try {
+      waitUntil(broadcastTask.task);
+    } catch (error) {
+      const details = toErrorDetails(error);
+
+      options.logger?.error?.('admin broadcast scheduling failed', {
+        ...contextDetails,
+        error: details,
+      });
+
+      return toErrorResponse(`Failed to schedule broadcast: ${details.message}`, 503);
+    }
+
+    broadcastTask.trigger();
+
+    if (!waitUntilProvided) {
+      options.logger?.warn?.('admin broadcast waitUntil unavailable; running inline', {
+        ...contextDetails,
+      });
+    }
+
+    const scheduledAtIso = scheduledAt.toISOString();
 
     return json(
       {
-        status: 'queued',
-        jobId: job.id,
-        enqueuedAt: job.createdAt.toISOString(),
-        requestedBy: job.requestedBy ?? null,
-        filters: job.payload.filters ?? null,
+        status: 'scheduled',
+        scheduledAt: scheduledAtIso,
+        requestedBy: actor,
+        filters: messagePayload.filters ?? null,
+        metadata: messagePayload.metadata ?? null,
       },
-      { status: 202, headers: { 'x-queued-at': now().toISOString() } },
+      { status: 202, headers: { 'x-scheduled-at': scheduledAtIso } },
     );
   };
 };

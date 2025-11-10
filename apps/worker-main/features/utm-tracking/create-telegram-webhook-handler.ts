@@ -10,7 +10,6 @@ import type {
 import type { StoragePort } from '../../ports';
 import {
   createKnownUsersCache,
-  type KnownUser,
   type KnownUsersCache,
 } from './known-users-cache';
 

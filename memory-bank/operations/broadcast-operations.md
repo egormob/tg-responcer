@@ -3,7 +3,7 @@
 ## Контур и зависимости
 - Единственный сценарий рассылки реализован через Telegram-команду `/broadcast` внутри воркера.
 - Команда доступна только whitelisted администраторам из биндинга `ADMIN_TG_IDS`.
-- Для отправки используется текущий Telegram-адаптер; дополнительные очереди, HTTP-роуты и фильтры не задействованы.
+- Для отправки используется текущий Telegram-адаптер. Любой административный триггер (Telegram-команда или HTTP-роут) запускает мгновенную рассылку и прокидывает отправку в фоновую задачу через `waitUntil`. Очереди, scheduler и прогресс-стор удалены.
 
 ## Флаги и токены
 - `TELEGRAM_BOT_TOKEN` — обязателен для обработки команд и отправки сообщений.
@@ -13,7 +13,7 @@
 ## Сценарий `/broadcast`
 1. Администратор отправляет `/broadcast` боту в личном чате.
 2. Бот отвечает подсказкой «Введите текст рассылки» и ожидает следующее сообщение от того же администратора.
-3. Полученный текст (обязательно непустой и ≤4096 символов) немедленно отправляется всем получателям минимальной модели рассылок.
+3. Полученный текст (обязательно непустой и ≤4096 символов) немедленно отправляется всем получателям минимальной модели рассылок. Отправка выполняется в фоне: Worker использует `waitUntil`, чтобы не блокировать HTTP-ответ.
 4. После отправки бот подтверждает выполнение и сообщает количество чатов, куда ушло сообщение.
 
 ### Ограничения и проверки
@@ -40,7 +40,103 @@
 
 ## Требования к журналированию
 - Каждая рассылка фиксируется в журнале (например, `memory-bank/stable-builds.md` или отдельном operational log) с датой, администратором и кратким содержимым сообщения.
-- При сбоях сохранить фрагменты логов `wrangler tail` и описать шаги восстановления.
+- При сбоях сохранить фрагменты логов `wrangler tail` и описать шаги восстановления. При отладке проверять, что фоновые задачи `waitUntil` завершаются без ошибок и отдают ожидаемые метрики доставки.
+
+## waitUntil и фоновые задачи
+- HTTP-роут `/admin/broadcast` и Telegram-команда используют один и тот же sender. Обработчик сразу отвечает клиенту (`202 Accepted`) и регистрирует отправку через `waitUntil`, чтобы сообщения ушли даже после закрытия запроса.
+- При необходимости ручной диагностики используйте `wrangler tail` и ищите записи `admin broadcast delivered` / `admin broadcast failed`.
+- Если `waitUntil` недоступен (например, в unit-тестах), обработчик всё равно запускает sender, но логирует предупреждение — в продакшене это сигнал к проверке окружения воркера.
+
+## Операционные скрипты
+- **Лог проверки задачи 6. 📣 Разблокировать диалог от рассылки.** Выполняется из корня репозитория и сохраняет артефакты прогонов HTTP и broadcast suite:
+
+```bash
+cd ~/Projects/tg-responcer
+export WORKER_BASE_URL="https://tg-responcer.egormob.workers.dev"
+export ADMIN_TOKEN="devadmintoken"
+
+ts="$(date +%Y%m%d-%H%M%S)"
+mkdir -p logs reports
+
+set -u -o pipefail
+
+CI=1 npm run test -- http | tee "logs/test-http-$ts.log" >/dev/null
+http_exit="${PIPESTATUS[0]}"
+zip -j "logs/test-http-latest.zip" "logs/test-http-$ts.log" >/dev/null
+
+CI=1 npm run test -- broadcast | tee "logs/test-broadcast-$ts.log" >/dev/null
+br_exit="${PIPESTATUS[0]}"
+zip -j "logs/test-broadcast-latest.zip" "logs/test-broadcast-$ts.log" >/dev/null
+
+http_log="logs/test-http-$ts.log"
+br_log="logs/test-broadcast-$ts.log"
+
+field() { grep -m1 "$1" "$2" | sed 's/^ *//'; }
+
+http_files="$(field 'Test Files' "$http_log")"
+http_tests="$(field '^ *Tests' "$http_log")"
+http_duration="$(field '^ *Duration' "$http_log")"
+
+br_files="$(field 'Test Files' "$br_log")"
+br_tests="$(field '^ *Tests' "$br_log")"
+br_duration="$(field '^ *Duration' "$br_log")"
+
+# Ключевые признаки разблокировки диалога
+req1="$(grep -i -c 'passes admin command to dialog when handler is missing' "$http_log" "$br_log" 2>/dev/null || true)"
+req2="$(grep -i -c 'continues dialog when admin command handler returns undefined' "$http_log" "$br_log" 2>/dev/null || true)"
+req3="$(grep -i -c 'continues dialog when broadcast command access is denied' "$http_log" "$br_log" 2>/dev/null || true)"
+req4="$(grep -i -c 'routes dialog after broadcast command is followed by admin status' "$http_log" "$br_log" 2>/dev/null || true)"
+req5="$(grep -i -c 'sends broadcast via telegram command and confirms delivery' "$http_log" "$br_log" 2>/dev/null || true)"
+req6="$(grep -i -c 'broadcast sent via telegram command' "$http_log" "$br_log" 2>/dev/null || true)"
+
+ok_http="$([ "$http_exit" = "0" ] && echo OK || echo FAIL)"
+ok_br="$([ "$br_exit" = "0" ] && echo OK || echo FAIL)"
+
+all_reqs="$([ "$req1" -gt 0 ] && [ "$req2" -gt 0 ] && [ "$req3" -gt 0 ] && [ "$req4" -gt 0 ] && [ "$req5" -gt 0 ] && [ "$req6" -gt 0 ] && echo OK || echo WARN)"
+
+report="reports/REPORT-Task6-unblock-dialog-from-broadcast-$ts.md"
+{
+  echo "# 6. 📣 Разблокировать диалог от рассылки — отчёт прогона"
+  echo
+  echo "- Дата: $(date '+%d.%m.%Y, %H:%M')"
+  echo "- Worker: $WORKER_BASE_URL"
+  echo
+  echo "## HTTP suite ($ok_http)"
+  echo "- $http_files"
+  echo "- $http_tests"
+  echo "- $http_duration"
+  echo
+  echo "## Broadcast suite ($ok_br)"
+  echo "- $br_files"
+  echo "- $br_tests"
+  echo "- $br_duration"
+  echo
+  echo "## Признаки разблокировки диалога (должны присутствовать)"
+  echo "- passes admin command to dialog when handler is missing: $req1"
+  echo "- continues dialog when admin command handler returns undefined: $req2"
+  echo "- continues dialog when broadcast command access is denied: $req3"
+  echo "- routes dialog after broadcast command is followed by admin status: $req4"
+  echo "- sends broadcast via telegram command and confirms delivery: $req5"
+  echo "- broadcast sent via telegram command: $req6"
+  echo
+  echo "## Артефакты"
+  echo "- logs/test-http-latest.zip"
+  echo "- logs/test-broadcast-latest.zip"
+  echo "- $http_log"
+  echo "- $br_log"
+  echo
+  if [ "$ok_http" = "OK" ] && [ "$ok_br" = "OK" ] && [ "$all_reqs" = "OK" ]; then
+    echo "## Итог"
+    echo "✅ Диалог разблокирован от рассылки: тесты зелёные, ключевые признаки в логах присутствуют."
+  else
+    echo "## Итог"
+    echo "⚠️ Проверьте детали: ok_http=$ok_http, ok_broadcast=$ok_br, key_signals=$all_reqs. Если есть WARN/FAIL — открыть логи и сверить кейсы."
+  fi
+} > "$report"
+
+echo "$report"
+tail -n +1 "$report"
+```
 
 ## Редактирование и отзыв
 - Мгновенная модель не поддерживает управление заданиями: при ошибке отправьте новое корректирующее сообщение.
