@@ -282,7 +282,11 @@ export interface RouterOptions {
   transformPayload?: TransformPayload;
   typingIndicator?: TypingIndicator;
   rateLimitNotifier?: {
-    notify(input: { userId: string; chatId: string; threadId?: string }): Promise<void>;
+    notify(input: {
+      userId: string;
+      chatId: string;
+      threadId?: string;
+    }): Promise<{ handled: boolean }>;
   };
   admin?: {
     token: string;
@@ -480,42 +484,48 @@ export const createRouter = (options: RouterOptions) => {
         : await executeDialog();
 
       if (dialogResult.status === 'rate_limited') {
+        let rateLimitHandled = false;
+
         if (options.rateLimitNotifier) {
           try {
-            await options.rateLimitNotifier.notify({
+            const notificationResult = await options.rateLimitNotifier.notify({
               userId: message.user.userId,
               chatId: message.chat.id,
               threadId: message.chat.threadId,
             });
+
+            rateLimitHandled = notificationResult?.handled === true;
           } catch (error) {
             // eslint-disable-next-line no-console
             console.warn('[router] rate limit notifier failed', error);
           }
         }
 
-        try {
-          await logMessagingCall(
-            {
-              ...(messageLogDetails ?? {
-                action: 'sendText',
+        if (!rateLimitHandled) {
+          try {
+            await logMessagingCall(
+              {
+                ...(messageLogDetails ?? {
+                  action: 'sendText',
+                  route: 'rate_limit_fallback',
+                  updateId,
+                  chatIdNormalized: message.chat.id,
+                  fromId: message.user.userId,
+                  messageId: message.messageId,
+                }),
                 route: 'rate_limit_fallback',
-                updateId,
-                chatIdNormalized: message.chat.id,
-                fromId: message.user.userId,
-                messageId: message.messageId,
-              }),
-              route: 'rate_limit_fallback',
-            },
-            () =>
-              options.messaging.sendText({
-                chatId: message.chat.id,
-                threadId: message.chat.threadId,
-                text: RATE_LIMIT_FALLBACK_TEXT,
-              }),
-          );
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.warn('[router] failed to send rate limit fallback', error);
+              },
+              () =>
+                options.messaging.sendText({
+                  chatId: message.chat.id,
+                  threadId: message.chat.threadId,
+                  text: RATE_LIMIT_FALLBACK_TEXT,
+                }),
+            );
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.warn('[router] failed to send rate limit fallback', error);
+          }
         }
       }
 

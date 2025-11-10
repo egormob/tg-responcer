@@ -324,10 +324,60 @@ describe('http router', () => {
     }
   });
 
-  it('notifies rate limit and sends fallback message when notifier is provided', async () => {
+  it('uses notifier result to skip fallback when handled', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
-    const notify = vi.fn().mockResolvedValue(undefined);
     const messaging = createMessagingMock();
+    const notify = vi.fn(async ({ chatId, threadId }) => {
+      await messaging.sendText({
+        chatId,
+        threadId,
+        text: 'custom rate limit',
+      });
+
+      return { handled: true };
+    });
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      rateLimitNotifier: { notify },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-2' },
+          chat: { id: 'chat-2' },
+          text: 'hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'rate_limited' });
+
+    expect(notify).toHaveBeenCalledWith({
+      userId: 'user-2',
+      chatId: 'chat-2',
+      threadId: undefined,
+    });
+
+    expect(messaging.sendText).toHaveBeenCalledTimes(1);
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-2',
+      threadId: undefined,
+      text: 'custom rate limit',
+    });
+  });
+
+  it('sends fallback when notifier does not handle notification', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
+    const messaging = createMessagingMock();
+    const notify = vi.fn().mockResolvedValue({ handled: false });
+
     const router = createRouter({
       dialogEngine: { handleMessage } as unknown as DialogEngine,
       messaging,
