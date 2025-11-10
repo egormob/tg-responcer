@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTelegramWebhookHandler } from '../create-telegram-webhook-handler';
 import type { StoragePort } from '../../../ports';
 import type { TelegramUpdate } from '../../../http/telegram-webhook';
+import { knownUsersCache } from '../known-users-cache';
 
 const createStorageMock = () => ({
   saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
@@ -43,6 +44,10 @@ const createStartUpdate = (payload: string | undefined): TelegramUpdate => {
 };
 
 describe('createTelegramWebhookHandler', () => {
+  beforeEach(() => {
+    knownUsersCache.clear();
+  });
+
   it('stores utmSource on first /start payload', async () => {
     const storage = createStorageMock();
     const handler = createTelegramWebhookHandler({
@@ -297,6 +302,10 @@ describe('createTelegramWebhookHandler', () => {
 });
 
 describe('worker integration with cached router', () => {
+  beforeEach(() => {
+    knownUsersCache.clear();
+  });
+
   it('reuses stored utmSource across sequential webhook requests', async () => {
     vi.resetModules();
 
