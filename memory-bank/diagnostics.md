@@ -48,14 +48,16 @@
    *Scope:* `apps/worker-main/features/admin/selftest`.
    *Symptoms:* `/admin/selftest` возвращал HTTP 500, хотя прод-контур отвечал.
    *Impact:* Создаёт ложные тревоги и скрывает реальные сбои.
-   *Status:* Mitigated — 2025-11-11 soft self-test возвращает 200 с `openAiOk:false`, `openAiReason='missing_diagnostic_marker'`, `openAiLatencyMs≈4s` и сэмплом «Ку-прием, pong. Чем могу помочь?». Требуется вернуть диагностический маркер в ответе OpenAI, иначе флаг `openAiOk` не поднимается.
+   *Status:* Resolved — 2025-11-16 self-test зафиксирован: маршрут всегда отвечает `200`, поля `openAiOk`/`telegramOk` дополняются строкой `reason` при `false`, диагностический маркер (`openAiMarkerPresent`) проверяется без перевода ответа в `500`, `lastWebhookSnapshot` включает маршрут (`route`), `chat_id`, `chatIdRaw`, `chatIdNormalized` и тип исходного ID. Cloudflare-логи содержат ключи `route=`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status` для внешней валидации.
 
 ## Observed signals & references
 
-- Cloudflare production log (2025-11-11) showing fallback messages and delayed exports.  
-- Admin export CSV missing user conversations and UTM column.  
+- Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
+- Admin export CSV missing user conversations and UTM column.
 - Self-test payload from `https://tg-responcer.egormob.workers.dev/admin/selftest?token=***` returning 500 with `openAiOk: false`.
+- Lossless Telegram ID parser подтверждён: `chatIdRawType` и `chatIdNormalizedHash` стабильны, ручной прогон `/start`/self-test не показывает `400 Bad Request` от Bot API.
 
 ## Next steps
 
-Follow roadmap steps 1–9 (see `RoadMap.md` update below) with mandatory verification gates after each fix. Update this file whenever new diagnostics emerge.
+- Roadmap Step 1 закрыт — текущая диагностика зафиксирована в этом файле и `RoadMap.md`.
+- Продолжить с Roadmap Step 2 (ранний запуск typing) и последующими шагами, обновляя файл при появлении новых симптомов.
