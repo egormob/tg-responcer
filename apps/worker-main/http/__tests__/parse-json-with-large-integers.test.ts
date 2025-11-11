@@ -41,4 +41,16 @@ describe('parseJsonWithLargeIntegers', () => {
     expect(parsed.id).toBe(100000);
     expect(parsed.negative).toBe(-0.00025);
   });
+
+  it('rejects unsafe numeric chat identifiers', () => {
+    expect(() => parseJsonWithLargeIntegers('{"chat_id":1e6}')).toThrowError(
+      'UNSAFE_TELEGRAM_ID',
+    );
+  });
+
+  it('preserves large integer tokens as strings to avoid lossy numbers', () => {
+    const parsed = parseJsonWithLargeIntegers('{"value":123456789012}') as Record<string, unknown>;
+
+    expect(parsed.value).toBe('123456789012');
+  });
 });

@@ -20,6 +20,18 @@ export const createKnownUsersCache = (): KnownUsersCache => {
 
   return {
     remember(userId, user) {
+      if (typeof userId !== 'string') {
+        const userIdType = typeof userId;
+        const cacheSize = knownUsers.size;
+        knownUsers.clear();
+        // eslint-disable-next-line no-console
+        console.error('[known-users-cache] refused to cache non-string userId', {
+          userIdType,
+          cleared: cacheSize,
+        });
+        return;
+      }
+
       knownUsers.set(userId, user);
     },
     forget(userId) {

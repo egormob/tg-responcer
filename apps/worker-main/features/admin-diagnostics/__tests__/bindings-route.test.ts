@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBindingsDiagnosticsRoute } from '../bindings-route';
 import type { StoragePort } from '../../../ports';
 import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
+import * as telegramIdGuard from '../telegram-id-guard';
+
+const ensureTelegramSnapshotIntegritySpy = vi.spyOn(
+  telegramIdGuard,
+  'ensureTelegramSnapshotIntegrity',
+);
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/diag${query}`);
 
@@ -13,6 +19,8 @@ const baseEnv = {
 
 describe('createBindingsDiagnosticsRoute', () => {
   beforeEach(() => {
+    ensureTelegramSnapshotIntegritySpy.mockReset();
+    ensureTelegramSnapshotIntegritySpy.mockResolvedValue(undefined);
     resetLastTelegramUpdateSnapshot();
   });
 
@@ -45,6 +53,8 @@ describe('createBindingsDiagnosticsRoute', () => {
       },
     });
 
+    expect(ensureTelegramSnapshotIntegritySpy).toHaveBeenCalledTimes(1);
+
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({ chatIdUsed: expect.objectContaining({ present: false }) }),
     );
@@ -75,6 +85,21 @@ describe('createBindingsDiagnosticsRoute', () => {
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({ chatIdUsed: expect.objectContaining({ present: false }) }),
     );
+  });
+
+  it('propagates guard failures before running diagnostics', async () => {
+    ensureTelegramSnapshotIntegritySpy.mockRejectedValueOnce(
+      new Error('TELEGRAM_GUARD_FAILED:unsafe'),
+    );
+
+    const storage = baseStorage();
+    const route = createBindingsDiagnosticsRoute({
+      storage,
+      env: baseEnv,
+    });
+
+    await expect(route(createRequest('?q=bindings'))).rejects.toThrow('TELEGRAM_GUARD_FAILED');
+    expect(ensureTelegramSnapshotIntegritySpy).toHaveBeenCalledTimes(1);
   });
 
   it('rejects unsupported diagnostics queries', async () => {

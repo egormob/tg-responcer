@@ -5,11 +5,19 @@ import { createSelfTestRoute } from '../self-test-route';
 import type { AiPort, MessagingPort, StoragePort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
 import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
+import * as telegramIdGuard from '../telegram-id-guard';
+
+const ensureTelegramSnapshotIntegritySpy = vi.spyOn(
+  telegramIdGuard,
+  'ensureTelegramSnapshotIntegrity',
+);
 
 const createRequest = (query: string) => new Request(`https://example.com/admin/selftest${query}`);
 
 describe('createSelfTestRoute', () => {
   beforeEach(() => {
+    ensureTelegramSnapshotIntegritySpy.mockReset();
+    ensureTelegramSnapshotIntegritySpy.mockResolvedValue(undefined);
     resetLastTelegramUpdateSnapshot();
   });
 
@@ -42,6 +50,8 @@ describe('createSelfTestRoute', () => {
       telegramChatId: '123',
       telegramChatIdSource: 'query',
     });
+
+    expect(ensureTelegramSnapshotIntegritySpy).toHaveBeenCalledTimes(1);
 
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
@@ -292,6 +302,25 @@ describe('createSelfTestRoute', () => {
       ok: false,
       errors: ['storage: adapter is not configured'],
     });
+  });
+
+  it('propagates guard failures before executing diagnostics', async () => {
+    ensureTelegramSnapshotIntegritySpy.mockRejectedValueOnce(
+      new Error('TELEGRAM_GUARD_FAILED:unsafe'),
+    );
+
+    const route = createSelfTestRoute({
+      ai: createNoopAiPort(),
+      messaging: {
+        sendTyping: vi.fn(),
+        sendText: vi.fn(),
+        editMessageText: vi.fn(),
+        deleteMessage: vi.fn(),
+      },
+    });
+
+    await expect(route(createRequest('?chatId=123'))).rejects.toThrow('TELEGRAM_GUARD_FAILED');
+    expect(ensureTelegramSnapshotIntegritySpy).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,6 +1,7 @@
 import type { StoragePort } from '../../ports';
 import { json } from '../../shared/json-response';
 import { getLastTelegramUpdateSnapshot } from '../../http/telegram-webhook';
+import { ensureTelegramSnapshotIntegrity } from './telegram-id-guard';
 
 export interface CreateBindingsDiagnosticsRouteOptions {
   storage: StoragePort;
@@ -51,6 +52,8 @@ export const createBindingsDiagnosticsRoute = (options: CreateBindingsDiagnostic
         { status: 405 },
       );
     }
+
+    await ensureTelegramSnapshotIntegrity();
 
     const url = new URL(request.url);
     const query = url.searchParams.get('q');
