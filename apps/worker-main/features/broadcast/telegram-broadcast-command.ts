@@ -23,7 +23,7 @@ interface Logger {
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 
-const BROADCAST_PROMPT_MESSAGE =
+export const BROADCAST_PROMPT_MESSAGE =
   'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
 
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
@@ -40,7 +40,7 @@ const BROADCAST_FAILURE_MESSAGE =
 const BROADCAST_CANCEL_MESSAGE =
   '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.';
 
-const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
+export const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
 
 interface PendingBroadcast {
   chatId: string;

@@ -424,6 +424,63 @@ describe('createTelegramExportCommandHandler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('stores cooldown in fallback namespace when primary kv fails', async () => {
+    const fallbackKv = createFakeKv();
+    const primaryErrorGet = new Error('primary get failed');
+    const primaryErrorPut = new Error('primary put failed');
+    const failingCooldownKv: AdminExportRateLimitKvNamespace = {
+      async get() {
+        throw primaryErrorGet;
+      },
+      async put() {
+        throw primaryErrorPut;
+      },
+      async delete() {
+        return undefined;
+      },
+      async list() {
+        return { keys: [], list_complete: true } as const;
+      },
+    };
+
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const { handler } = createHandler({
+      cooldownKv: failingCooldownKv,
+      adminAccessKv: fallbackKv,
+      logger,
+    });
+
+    const firstResponse = await handler(createContext({ command: '/export' }));
+    expect(firstResponse?.status).toBe(200);
+    expect(logger.info).toHaveBeenCalledWith(
+      'admin export cooldown stored in fallback kv',
+      expect.objectContaining({
+        userId: '42',
+        chatId: '123',
+        error: { name: 'Error', message: 'primary put failed' },
+      }),
+    );
+    expect(
+      logger.warn.mock.calls.filter(([message]) => message === 'failed to update admin export cooldown kv'),
+    ).toHaveLength(0);
+    expect(fallbackKv.store.get('rate-limit:42')).toEqual({
+      value: '1',
+      expirationTtl: 30,
+    });
+
+    const secondResponse = await handler(createContext({ command: '/export' }));
+    expect(secondResponse?.status).toBe(429);
+    expect(logger.info).toHaveBeenCalledWith(
+      'admin export cooldown resolved via fallback kv',
+      expect.objectContaining({
+        userId: '42',
+        chatId: '123',
+        error: { name: 'Error', message: 'primary get failed' },
+      }),
+    );
+  });
+
   it('writes export metadata to kv after successful upload', async () => {
     const putMock = vi.fn().mockResolvedValue(undefined);
     const exportLogKv: AdminExportLogKvNamespace = {

@@ -48,7 +48,7 @@
    *Scope:* `apps/worker-main/features/admin/selftest`.
    *Symptoms:* `/admin/selftest` возвращал HTTP 500, хотя прод-контур отвечал.
    *Impact:* Создаёт ложные тревоги и скрывает реальные сбои.
-   *Status:* Mitigated — 2025-11-19 self-test возвращает 200 с `openAiReason='missing_diagnostic_marker'` и сэмплом ответа; требуется подтянуть диагностический маркер на стороне OpenAI, иначе флаг `openAiOk` останется `false`.
+   *Status:* Mitigated — 2025-11-11 soft self-test возвращает 200 с `openAiOk:false`, `openAiReason='missing_diagnostic_marker'`, `openAiLatencyMs≈4s` и сэмплом «Ку-прием, pong. Чем могу помочь?». Требуется вернуть диагностический маркер в ответе OpenAI, иначе флаг `openAiOk` не поднимается.
 
 ## Observed signals & references
 

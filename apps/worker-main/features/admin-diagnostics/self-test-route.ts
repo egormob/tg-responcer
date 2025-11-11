@@ -1,4 +1,4 @@
-import type { AiPort, MessagingPort, StoragePort } from '../../ports';
+import type { AiPort, ConversationTurn, MessagingPort, StoragePort } from '../../ports';
 import { json } from '../../shared/json-response';
 import {
   getLastTelegramUpdateSnapshot,
@@ -19,6 +19,21 @@ export interface CreateSelfTestRouteOptions {
 const defaultNow = () => Date.now();
 
 export const OPENAI_SELF_TEST_MARKER = '[[tg-responcer:selftest:openai-ok]]';
+
+export const OPENAI_SELF_TEST_PROMPT_TEXT =
+  'tg-responcer diagnostic ping. Reply with a short acknowledgement and append the exact marker.';
+
+export const OPENAI_SELF_TEST_CONTEXT: ReadonlyArray<ConversationTurn> = [
+  {
+    role: 'system',
+    text: [
+      'You are running a health-check for the tg-responcer Telegram bot.',
+      `Respond with a concise acknowledgement such as "pong" and append the exact marker ${OPENAI_SELF_TEST_MARKER} once at the end.`,
+      'Do not add markdown, code fences, or additional explanations.',
+      'If you must report a problem, include the marker after the message.',
+    ].join(' '),
+  },
+];
 
 const formatError = (scope: string, reason: unknown) => {
   const message = reason instanceof Error ? reason.message : String(reason);
@@ -158,8 +173,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     try {
       const reply = await options.ai.reply({
         userId: 'admin:selftest',
-        text: 'ping',
-        context: [],
+        text: OPENAI_SELF_TEST_PROMPT_TEXT,
+        context: OPENAI_SELF_TEST_CONTEXT,
       });
       openAiLatencyMs = Math.max(0, now() - aiStartedAt);
       const metadata = reply.metadata as
