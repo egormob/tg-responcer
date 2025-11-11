@@ -29,6 +29,7 @@
 ### `composition/*` и typing-индикация
 - `composeWorker` собирает порты из адаптеров или NOOP-реализаций, а `createRateLimitToggle` подключается только при наличии KV.
 - `typing-indicator.ts` использует только `MessagingPort.sendTyping`, исключая параллельные индикаторы для одного чата.
+- **Критерий:** typing-индикатор появляется не позже старта вызова ИИ и снимается без залипаний, подтверждая ранний тайпинг.
 - Тесты: `apps/worker-main/composition/__tests__/compose.test.ts`, `apps/worker-main/http/__tests__/typing-indicator.test.ts`.
 
 ### Конфигурация окружения
