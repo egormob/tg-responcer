@@ -181,10 +181,29 @@ const logMessagingCall = async <T>(
 ): Promise<T> => {
   const log = createMessagingLogFields(details);
   const snapshotRoute: TelegramSnapshotRoute = details.snapshotRoute ?? 'user';
+  const emitTelemetryLog = (
+    status: number | null,
+    outcome: 'ok' | 'error',
+    errorMessage?: string,
+  ) => {
+    const statusLabel = typeof status === 'number' && Number.isFinite(status) ? status : 'error';
+    const payload: Record<string, unknown> = {
+      ...log,
+      outcome,
+    };
+    if (typeof status === 'number' && Number.isFinite(status)) {
+      payload.statusCode = status;
+    }
+    if (errorMessage) {
+      payload.error = errorMessage;
+    }
+
+    // eslint-disable-next-line no-console
+    console.info(`[telegram] ${details.action} status=${statusLabel}`, payload);
+  };
   try {
     const result = await call();
-    // eslint-disable-next-line no-console
-    console.info(`[router][${details.action}] success`, { ...log, status: 'ok' });
+    emitTelemetryLog(200, 'ok');
     const successSnapshot: Parameters<typeof recordTelegramSnapshotAction>[0] = {
       action: details.action,
       route: snapshotRoute,
@@ -202,20 +221,23 @@ const logMessagingCall = async <T>(
     recordTelegramSnapshotAction(successSnapshot);
     return result;
   } catch (error) {
+    const statusCandidate = (error as { status?: unknown }).status;
+    const descriptionCandidate = (error as { description?: unknown }).description;
+    const statusCode = typeof statusCandidate === 'number' ? statusCandidate : null;
+    emitTelemetryLog(statusCode, 'error', error instanceof Error ? error.message : String(error));
+
     // eslint-disable-next-line no-console
     console.error(`[router][${details.action}] error`, {
       ...log,
       status: 'error',
       error: String(error),
     });
-    const statusCandidate = (error as { status?: unknown }).status;
-    const descriptionCandidate = (error as { description?: unknown }).description;
     const failureSnapshot: Parameters<typeof recordTelegramSnapshotAction>[0] = {
       action: details.action,
       route: snapshotRoute,
       updateId: details.updateId,
       ok: false,
-      statusCode: typeof statusCandidate === 'number' ? statusCandidate : null,
+      statusCode,
       description:
         typeof descriptionCandidate === 'string' && descriptionCandidate.trim().length > 0
           ? descriptionCandidate
