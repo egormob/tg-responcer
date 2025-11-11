@@ -113,7 +113,7 @@ describe('DialogEngine', () => {
       role: 'assistant',
       text: 'Здравствуйте!',
       timestamp: new Date('2024-01-01T10:00:06Z'),
-      metadata: { tokens: 123 },
+      metadata: { tokens: 123, messageId: 'outgoing-1' },
     });
 
     expect(storage.getRecentMessages).toHaveBeenCalledWith({
@@ -145,6 +145,92 @@ describe('DialogEngine', () => {
 
     expect(appendMessageCallOrder[0]).toBeLessThan(getRecentOrder[0]);
     expect(getRecentOrder[0]).toBeLessThan(appendMessageCallOrder[1]);
+  });
+
+  it('не записывает ассистента в историю при ошибке отправки', async () => {
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockRejectedValue(new Error('telegram unavailable')),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'Ответ' }),
+    };
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const engine = new DialogEngine({ messaging, ai, storage, rateLimit });
+
+      await expect(engine.handleMessage(createMessageOverrides())).rejects.toThrow('telegram unavailable');
+
+      expect(storage.appendMessage).toHaveBeenCalledTimes(1);
+      expect(storage.appendMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({ role: 'user' }));
+
+      expect(consoleError).toHaveBeenCalledWith('[dialog-engine][sendText][error]', {
+        chatId: 'chat-1',
+        threadId: undefined,
+        userId: 'user-1',
+        error: expect.objectContaining({
+          message: 'telegram unavailable',
+          name: 'Error',
+        }),
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('объединяет метаданные ответа ИИ и идентификатор отправленного сообщения', async () => {
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'sent-42' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'Ответ', metadata: { tokens: 12, requestId: 'req-1' } }),
+    };
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const now = vi.fn(() => new Date('2024-01-01T10:00:00Z'));
+
+    const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+
+    await engine.handleMessage(createMessageOverrides());
+
+    expect(storage.appendMessage).toHaveBeenCalledTimes(2);
+    expect(storage.appendMessage).toHaveBeenNthCalledWith(2, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      threadId: undefined,
+      role: 'assistant',
+      text: 'Ответ',
+      timestamp: new Date('2024-01-01T10:00:00Z'),
+      metadata: { tokens: 12, requestId: 'req-1', messageId: 'sent-42' },
+    });
   });
 
   it('не передаёт в AI свежее пользовательское сообщение повторно', async () => {
