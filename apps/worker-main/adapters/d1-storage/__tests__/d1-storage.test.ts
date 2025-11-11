@@ -576,6 +576,7 @@ describe('createD1StorageAdapter', () => {
 
   it('retries saveUser when the statement fails once', async () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const run = vi
       .fn()
@@ -612,15 +613,126 @@ describe('createD1StorageAdapter', () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenLastCalledWith(
         '[d1-storage] saveUser failed, retrying',
-        expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
+        expect.objectContaining({ attempt: 1, maxAttempts: 6, nextDelayMs: 100 }),
       );
     } finally {
       vi.useRealTimers();
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('logs success when saveUser eventually succeeds after multiple retries', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('locked-1'))
+      .mockRejectedValueOnce(new Error('locked-2'))
+      .mockResolvedValue({ success: true });
+
+    const statement: Record<string, unknown> = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.saveUser({
+        userId: 'user-retry-success',
+        updatedAt: baseDate,
+      });
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(promise).resolves.toEqual({ utmDegraded: false });
+
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenNthCalledWith(
+        3,
+        '[d1-storage] saveUser succeeded after retries',
+        expect.objectContaining({ attempts: 3, maxAttempts: 6 }),
+      );
+    } finally {
+      vi.useRealTimers();
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('applies exponential backoff with jitter across long retry chains', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi
+      .spyOn(Math, 'random')
+      .mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0.2)
+      .mockReturnValueOnce(0.7)
+      .mockReturnValueOnce(0.1)
+      .mockReturnValue(0.5);
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('locked-1'))
+      .mockRejectedValueOnce(new Error('locked-2'))
+      .mockRejectedValueOnce(new Error('locked-3'))
+      .mockRejectedValueOnce(new Error('locked-4'))
+      .mockResolvedValue({ success: true });
+
+    const statement: Record<string, unknown> = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.saveUser({
+        userId: 'user-backoff',
+        updatedAt: baseDate,
+      });
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toEqual({ utmDegraded: false });
+
+      expect(run).toHaveBeenCalledTimes(5);
+      expect(warn).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ nextDelayMs: 100 }));
+      expect(warn.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ nextDelayMs: 140 }));
+      expect(warn.mock.calls[2]?.[1]).toEqual(expect.objectContaining({ nextDelayMs: 480 }));
+      expect(warn.mock.calls[3]?.[1]).toEqual(expect.objectContaining({ nextDelayMs: 480 }));
+      expect(warn).toHaveBeenLastCalledWith(
+        '[d1-storage] saveUser succeeded after retries',
+        expect.objectContaining({ attempts: 5, maxAttempts: 6 }),
+      );
+    } finally {
+      vi.useRealTimers();
+      randomSpy.mockRestore();
     }
   });
 
   it('propagates errors when saveUser keeps failing after all retries', async () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const run = vi.fn().mockRejectedValue(new Error('permanent failure'));
 
@@ -651,18 +763,20 @@ describe('createD1StorageAdapter', () => {
       await vi.runAllTimersAsync();
 
       await expectation;
-      expect(run).toHaveBeenCalledTimes(3);
+      expect(run).toHaveBeenCalledTimes(6);
       expect(warn).toHaveBeenLastCalledWith(
         '[d1-storage] saveUser exhausted retries',
-        expect.objectContaining({ attempt: 3, maxAttempts: 3, error: 'permanent failure' }),
+        expect.objectContaining({ attempt: 6, maxAttempts: 6, error: 'permanent failure' }),
       );
     } finally {
       vi.useRealTimers();
+      randomSpy.mockRestore();
     }
   });
 
   it('propagates errors when appendMessage exhausts retries', async () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const run = vi.fn().mockRejectedValue(new Error('d1 down'));
 
@@ -696,11 +810,53 @@ describe('createD1StorageAdapter', () => {
       await vi.runAllTimersAsync();
       await expectation;
 
-      expect(run).toHaveBeenCalledTimes(3);
-      expect(warn).toHaveBeenCalledTimes(3);
+      expect(run).toHaveBeenCalledTimes(6);
+      expect(warn).toHaveBeenCalledTimes(6);
       expect(warn).toHaveBeenLastCalledWith(
         '[d1-storage] appendMessage exhausted retries',
-        expect.objectContaining({ attempt: 3, maxAttempts: 3, error: 'd1 down' }),
+        expect.objectContaining({ attempt: 6, maxAttempts: 6, error: 'd1 down' }),
+      );
+    } finally {
+      vi.useRealTimers();
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('does not retry when encountering a non-retryable error', async () => {
+    vi.useFakeTimers();
+
+    const run = vi.fn().mockRejectedValue(new Error('SQLITE_CONSTRAINT: CHECK constraint failed: users'));
+
+    const statement: Record<string, unknown> = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.saveUser({
+        userId: 'user-non-retryable',
+        updatedAt: baseDate,
+      });
+
+      await expect(promise).rejects.toThrow('SQLITE_CONSTRAINT: CHECK constraint failed: users');
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenLastCalledWith(
+        '[d1-storage] saveUser failed with non-retryable error',
+        expect.objectContaining({ attempt: 1, retryable: false }),
       );
     } finally {
       vi.useRealTimers();
