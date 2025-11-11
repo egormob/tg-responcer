@@ -1040,7 +1040,7 @@ describe('http router', () => {
       new Request('https://example.com/admin/selftest?chatId=999&token=secret'),
     );
 
-    expect(selfTestResponse.status).toBe(500);
+    expect(selfTestResponse.status).toBe(200);
     const selfTestPayload = await selfTestResponse.json();
 
     expect(selfTestPayload.lastWebhookSnapshot).toEqual(
@@ -1051,6 +1051,7 @@ describe('http router', () => {
       }),
     );
     expect(selfTestPayload.lastWebhookSnapshot.sendText).toBeUndefined();
+    expect(selfTestPayload.telegramReason).toBe('send_failed');
 
     const diagResponse = await router.handle(
       new Request('https://example.com/admin/diag?q=bindings&token=secret'),

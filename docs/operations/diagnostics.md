@@ -19,11 +19,41 @@
 ## `GET /admin/selftest`
 
 Прогоняет self-test и проверяет ключевые интеграции (OpenAI, Telegram,
-хранилище). В ответе дополнительно фиксируются `telegramStatus` и
-`telegramDescription` (HTTP-статус и текст из Bot API), а также
-`telegramChatId`/`telegramChatIdSource`, чтобы легко отследить какой chat
-использовался. При отсутствии параметра `chatId` используется первый ID
-из whitelist; если whitelist пустой, возвращается ошибка.
+хранилище). Ручка всегда отвечает `200 OK`, даже если проверки провалены —
+состояние отражается в полях ответа.
+
+### Поля ответа
+
+- `openAiOk` — `true`, если OpenAI вернул диагностический маркер
+  `[[tg-responcer:selftest:openai-ok]]` и ответ получен из `output_text`.
+- `openAiReason` — код причины (`missing_diagnostic_marker`,
+  `marker_in_fallback_output`, `request_failed`, `noop_adapter_response`).
+- `openAiLatencyMs`, `openAiUsedOutputText`, `openAiSample`,
+  `openAiResponseId` — телеметрия и сниппет ответа (маркер вырезается).
+- `telegramOk` — `true`, если Bot API принял `sendTyping` и `sendMessage`.
+- `telegramReason` — `chat_id_missing` (query-параметр не передан и
+  whitelist пуст), либо `send_failed` (Bot API вернул ошибку).
+- `telegramStatus`, `telegramDescription`, `telegramChatId`,
+  `telegramChatIdSource` — подробности последнего вызова.
+- `errors` — плоский массив ошибок (`openai: …`, `telegram: …`).
+- `lastWebhookSnapshot` — снимок последнего вебхука/диагностик.
+
+Для `q=utm` дополнительно возвращаются `test`, `ok`, `saveOk`, `readOk`,
+`utmDegraded`; ручка также отвечает `200 OK` даже при деградации
+(`ok:false`, `errors:[…]`).
+
+### Логи Cloudflare
+
+Self-test пишет два читаемых сообщения:
+
+```
+[admin:selftest][openai] { scope, check, ok, reason?, responseId?, latencyMs? }
+[admin:selftest][telegram] { scope, check, ok, route, chatIdRawType, chatIdRawHash, chatIdNormalizedHash, status?, reason? }
+```
+
+Второе сообщение дополнительно содержит `chatIdSource`, `description`,
+`latencyMs` и совпадающие хэши `chatIdRawHash` / `chatIdNormalizedHash`,
+чтобы легко отследить преобразования ID.
 
 ## `GET /admin/envz`
 
