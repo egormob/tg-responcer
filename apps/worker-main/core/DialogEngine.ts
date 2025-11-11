@@ -141,6 +141,12 @@ export class DialogEngine {
       });
 
       const replyTimestamp = this.now();
+      const sentMessage = await this.sendAssistantReply({
+        messaging,
+        message,
+        text: aiReply.text,
+      });
+
       await storage.appendMessage({
         userId: message.user.userId,
         chatId: message.chat.id,
@@ -148,13 +154,7 @@ export class DialogEngine {
         role: 'assistant',
         text: aiReply.text,
         timestamp: replyTimestamp,
-        metadata: aiReply.metadata,
-      });
-
-      const sentMessage = await messaging.sendText({
-        chatId: message.chat.id,
-        threadId: message.chat.threadId,
-        text: aiReply.text,
+        metadata: this.mergeMetadata(aiReply.metadata, sentMessage?.messageId),
       });
 
       return {
@@ -218,5 +218,57 @@ export class DialogEngine {
   private extractMessageId(metadata: Record<string, unknown> | undefined): string | undefined {
     const rawMessageId = (metadata as { messageId?: unknown } | undefined)?.messageId;
     return typeof rawMessageId === 'string' ? rawMessageId : undefined;
+  }
+
+  private mergeMetadata(
+    base: Record<string, unknown> | undefined,
+    messageId: string | undefined,
+  ): Record<string, unknown> | undefined {
+    if (!base && !messageId) {
+      return undefined;
+    }
+
+    return {
+      ...(base ?? {}),
+      ...(messageId ? { messageId } : {}),
+    };
+  }
+
+  private async sendAssistantReply({
+    messaging,
+    message,
+    text,
+  }: {
+    messaging: MessagingPort;
+    message: IncomingMessage;
+    text: string;
+  }): Promise<{ messageId?: string } | undefined> {
+    try {
+      return await messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text,
+      });
+    } catch (error) {
+      console.error('[dialog-engine][sendText][error]', {
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        userId: message.user.userId,
+        error: this.normalizeError(error),
+      });
+      throw error;
+    }
+  }
+
+  private normalizeError(error: unknown): unknown {
+    if (error instanceof Error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      };
+    }
+
+    return error;
   }
 }
