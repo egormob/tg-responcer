@@ -619,7 +619,49 @@ describe('createD1StorageAdapter', () => {
     }
   });
 
-  it('logs a warning without throwing when appendMessage exhausts retries', async () => {
+  it('propagates errors when saveUser keeps failing after all retries', async () => {
+    vi.useFakeTimers();
+
+    const run = vi.fn().mockRejectedValue(new Error('permanent failure'));
+
+    const statement: Record<string, unknown> = {};
+    const bind = vi.fn(() => statement);
+
+    Object.assign(statement, {
+      bind,
+      run,
+      first: vi.fn(),
+      all: vi.fn(),
+    });
+
+    const prepare = vi.fn(() => statement);
+    const warn = vi.fn();
+    const adapter = createD1StorageAdapter({
+      db: { prepare } as unknown as D1Database,
+      logger: { warn },
+    });
+
+    try {
+      const promise = adapter.saveUser({
+        userId: 'user-permanent-failure',
+        updatedAt: baseDate,
+      });
+      const expectation = expect(promise).rejects.toThrow('permanent failure');
+
+      await vi.runAllTimersAsync();
+
+      await expectation;
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenLastCalledWith(
+        '[d1-storage] saveUser exhausted retries',
+        expect.objectContaining({ attempt: 3, maxAttempts: 3, error: 'permanent failure' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates errors when appendMessage exhausts retries', async () => {
     vi.useFakeTimers();
 
     const run = vi.fn().mockRejectedValue(new Error('d1 down'));
@@ -649,9 +691,10 @@ describe('createD1StorageAdapter', () => {
         text: 'hello',
         timestamp: baseDate,
       });
+      const expectation = expect(promise).rejects.toThrow('d1 down');
 
-      await vi.advanceTimersByTimeAsync(1000);
-      await expect(promise).resolves.toBeUndefined();
+      await vi.runAllTimersAsync();
+      await expectation;
 
       expect(run).toHaveBeenCalledTimes(3);
       expect(warn).toHaveBeenCalledTimes(3);

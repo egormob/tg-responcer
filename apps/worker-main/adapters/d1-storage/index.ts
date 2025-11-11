@@ -53,6 +53,7 @@ const runWithRetry = async <T>(
   let attempt = 0;
   let delay = RETRY_BASE_DELAY_MS;
   let lastErrorDetails: Record<string, unknown> | undefined;
+  let lastError: unknown;
 
   while (attempt < MAX_RETRY_ATTEMPTS) {
     attempt += 1;
@@ -60,6 +61,7 @@ const runWithRetry = async <T>(
     try {
       return await action();
     } catch (error) {
+      lastError = error;
       const errorDetails: Record<string, unknown> = {
         ...context.details,
         attempt,
@@ -87,7 +89,11 @@ const runWithRetry = async <T>(
     logger.warn(`[d1-storage] ${context.operation} exhausted retries`, lastErrorDetails);
   }
 
-  return undefined;
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error(`Unknown error during ${context.operation}`);
 };
 
 const UPSERT_USER_SQL = `
@@ -427,13 +433,17 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
         },
       );
 
-      return outcome ?? { utmDegraded: utmColumnDegraded };
+      if (typeof outcome === 'undefined') {
+        throw new Error('Failed to save user');
+      }
+
+      return outcome;
     },
 
     async appendMessage(message) {
       const metadataText = serializeMetadata(message.metadata);
 
-      await runWithRetry(
+      const result = await runWithRetry(
         logger,
         {
           operation: 'appendMessage',
@@ -451,7 +461,7 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
               .first<{ id: number }>();
 
             if (existing) {
-              return;
+              return true as const;
             }
           }
 
@@ -467,8 +477,14 @@ export const createD1StorageAdapter = (options: D1StorageAdapterOptions): Storag
               metadataText,
             )
             .run();
+
+          return true as const;
         },
       );
+
+      if (typeof result === 'undefined') {
+        throw new Error('Failed to append message');
+      }
     },
 
     async getRecentMessages({ userId, limit }) {
