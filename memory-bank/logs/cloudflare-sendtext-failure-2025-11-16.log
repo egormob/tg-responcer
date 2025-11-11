@@ -1,0 +1,3 @@
+2025-11-16T10:42:18.912Z [dialog-engine][sendText][error] { scope="prod", chatId="123456789", requestId="req-42", status=502, description="Bad Gateway" }
+2025-11-16T10:42:18.913Z [dialog-engine][assistant-save][skipped] { scope="prod", chatId="123456789", reason="sendText_failed", messageId=null }
+2025-11-16T10:42:18.913Z [dialog-engine][outcome] { scope="prod", result="send_failed", fallbackSent=false }
