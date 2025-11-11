@@ -23,15 +23,11 @@ interface Logger {
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 
-const BROADCAST_PROMPT_MESSAGE = [
-  'Введите текст рассылки (до 4096 символов).',
-  'Следующее сообщение уйдёт всем получателям минимальной модели.',
-].join('\n');
+const BROADCAST_PROMPT_MESSAGE =
+  'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
 
-const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE = [
-  'Мгновенная рассылка поддерживает только /broadcast без дополнительных аргументов.',
-  'Отправьте /broadcast (или /admin broadcast), затем текст сообщения для немедленной доставки.',
-].join('\n');
+const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
+  'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
 const buildTooLongMessage = (limit: number) =>
   `Текст рассылки превышает лимит ${limit} символов. Отправьте более короткое сообщение.`;
@@ -41,15 +37,10 @@ const BROADCAST_EMPTY_MESSAGE =
 
 const BROADCAST_FAILURE_MESSAGE =
   'Не удалось отправить рассылку. Попробуйте ещё раз позже или обратитесь к оператору.';
+const BROADCAST_CANCEL_MESSAGE =
+  '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.';
 
-const BROADCAST_STARTED_MESSAGE =
-  '📣 Рассылка запущена. Ожидайте отчёт о доставке.';
-
-const buildSuccessMessage = (delivered: number) =>
-  [
-    '📣 Рассылка отправлена.',
-    `Получателей: ${delivered}.`,
-  ].join('\n');
+const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
 
 interface PendingBroadcast {
   chatId: string;
@@ -96,28 +87,8 @@ export interface TelegramBroadcastCommandHandler {
 const hasArgument = (value: string | undefined): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
-const isBroadcastCommand = (context: TelegramAdminCommandContext) => {
-  const normalized = context.command.toLowerCase();
-
-  if (normalized === '/broadcast') {
-    return !hasArgument(context.argument);
-  }
-
-  if (normalized !== '/admin') {
-    return false;
-  }
-
-  if (!hasArgument(context.argument)) {
-    return false;
-  }
-
-  const parts = context.argument.trim().split(/\s+/);
-  if (parts[0]?.toLowerCase() !== 'broadcast') {
-    return false;
-  }
-
-  return parts.length === 1;
-};
+const isBroadcastCommand = (context: TelegramAdminCommandContext) =>
+  context.command.toLowerCase() === '/broadcast' && !hasArgument(context.argument);
 
 const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
   if (context.command.toLowerCase() !== '/admin') {
@@ -129,16 +100,12 @@ const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
   }
 
   const parts = context.argument.trim().split(/\s+/);
-  if (parts[0]?.toLowerCase() !== 'broadcast') {
-    return false;
-  }
-
-  return parts.length > 1;
+  return parts[0]?.toLowerCase() === 'broadcast';
 };
 
 const createBroadcastResponse = (result: BroadcastSendResult) => {
-  const delivered = Math.max(0, result.delivered);
-  return buildSuccessMessage(delivered);
+  void result;
+  return BROADCAST_SUCCESS_MESSAGE;
 };
 
 export const createTelegramBroadcastCommandHandler = (
@@ -302,6 +269,34 @@ export const createTelegramBroadcastCommandHandler = (
 
     const text = message.text ?? '';
     const trimmed = text.trim();
+    const normalized = trimmed.toLowerCase();
+
+    if (normalized === '/cancel') {
+      logger.info('broadcast cancelled via telegram command', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_CANCEL_MESSAGE,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast cancel notice', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_cancel_notice', error);
+      }
+
+      return 'handled';
+    }
 
     if (trimmed.length === 0) {
       logger.warn('broadcast text rejected', {
@@ -359,28 +354,11 @@ export const createTelegramBroadcastCommandHandler = (
 
     const requestedBy = message.user.userId;
 
-    try {
-      await options.messaging.sendText({
-        chatId: message.chat.id,
-        threadId: message.chat.threadId,
-        text: BROADCAST_STARTED_MESSAGE,
-      });
-
-      logger.info('broadcast dispatch scheduled via telegram command', {
-        userId: requestedBy,
-        chatId: message.chat.id,
-        threadId: message.chat.threadId ?? null,
-      });
-    } catch (error) {
-      logger.error('failed to send broadcast start notice', {
-        userId: requestedBy,
-        chatId: message.chat.id,
-        threadId: message.chat.threadId ?? null,
-        error: toErrorDetails(error),
-      });
-
-      await handleMessagingFailure(requestedBy, 'broadcast_start_notice', error);
-    }
+    logger.info('broadcast dispatch scheduled via telegram command', {
+      userId: requestedBy,
+      chatId: message.chat.id,
+      threadId: message.chat.threadId ?? null,
+    });
 
     const payload: BroadcastSendInput = {
       text,
