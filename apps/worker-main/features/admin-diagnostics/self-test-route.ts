@@ -26,6 +26,24 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
   const now = options.now ?? defaultNow;
   const storage = options.storage;
 
+  const createSample = (text: string | undefined): string | undefined => {
+    if (!text) {
+      return undefined;
+    }
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (normalized.length === 0) {
+      return undefined;
+    }
+
+    const limit = 160;
+    if (normalized.length <= limit) {
+      return normalized;
+    }
+
+    return `${normalized.slice(0, limit - 1)}…`;
+  };
+
   const runUtmDiagnostics = async (): Promise<Response> => {
     if (!storage) {
       return json(
@@ -117,6 +135,9 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     let openAiOk = false;
     let openAiLatencyMs: number | undefined;
     let openAiUsedOutputText: boolean | undefined;
+    let openAiReason: string | undefined;
+    let openAiSample: string | undefined;
+    let openAiResponseId: string | undefined;
 
     const aiStartedAt = now();
     try {
@@ -130,21 +151,32 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         | {
             usedOutputText?: unknown;
             selfTestNoop?: unknown;
+            responseId?: unknown;
           }
         | undefined;
       const usedOutputTextRaw = metadata?.usedOutputText;
       openAiUsedOutputText = usedOutputTextRaw === true;
 
+      if (typeof metadata?.responseId === 'string') {
+        const trimmed = metadata.responseId.trim();
+        if (trimmed.length > 0) {
+          openAiResponseId = trimmed;
+        }
+      }
+
       if (metadata?.selfTestNoop === true) {
         errors.push('openai: noop adapter response');
+        openAiReason = 'noop_adapter_response';
       } else if (usedOutputTextRaw !== true) {
-        errors.push('openai: missing diagnostic marker');
+        openAiReason = 'missing_diagnostic_marker';
+        openAiSample = createSample(reply.text);
       } else {
         openAiOk = true;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`openai: ${message}`);
+      openAiReason = 'request_failed';
     }
 
     let telegramOk = false;
@@ -309,6 +341,18 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     const hasErrors = errors.length > 0;
 
     responseBody.lastWebhookSnapshot = getLastTelegramUpdateSnapshot();
+
+    if (openAiReason && !openAiOk) {
+      responseBody.openAiReason = openAiReason;
+    }
+
+    if (openAiSample && !openAiOk) {
+      responseBody.openAiSample = openAiSample;
+    }
+
+    if (openAiResponseId !== undefined) {
+      responseBody.openAiResponseId = openAiResponseId;
+    }
 
     return json(responseBody, { status: hasErrors ? 500 : 200 });
   };

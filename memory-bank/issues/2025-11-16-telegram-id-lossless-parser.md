@@ -26,6 +26,13 @@
 - Наблюдение: после двойного сообщения «Self-test ping» бот перестаёт отвечать администратору и молчит для обычного пользователя, что подтверждает влияние self-test на кеш идентификаторов.
 - Итог-диагноз команды: DIAG-контур жив, но основная ветка webhook рвётся при попытке отправки (`chat_id` в ответе искажается или подменяется), см. раздел «Итог-диагноз 2» в памятке.
 
+## Обновление 2025-11-19 — PASS_WITH_CAVEAT
+- Внешний консультант подтвердил: пользовательский и админский маршруты отвечают мгновенно, `typing` виден; Cloudflare-лог за 15 минут чист от `400 Bad Request`.
+- Снапшоты вебхука фиксируют стабильные поля `chatIdRawType`, `chatIdNormalizedHash`, значение `chatIdUsed` совпадает с `chatIdNormalizedHash` (см. `lastWebhookSnapshot`).
+- `/admin/selftest` теперь отдаёт `200` даже без диагностического маркера, помечая состояние как `openAiOk:false` с `openAiReason='missing_diagnostic_marker'` и сэмплом ответа. Маркер нужно вернуть на стороне OpenAI.
+- В логах появились инфо-записи вида `[telegram] sendTyping status=<code>` / `[telegram] sendText status=<code>` с `route`, `chatIdRawType`, `chatIdNormalizedHash` — использовать для наблюдаемости после деплоев.
+- Дополнительная проверка: `npm run test -- apps/worker-main/features/admin-diagnostics/__tests__/self-test-route.test.ts` подтверждает мягкий сценарий self-test и регрессию на `missing_diagnostic_marker`.
+
 ### Зависимые задачи
 - Lossless-парсер Telegram ID в HTTP-слое (`http/parse-json-with-large-integers.ts`, `http/telegram-webhook.ts`).
 - Диагностика вебхука: расширенные логи `chat_id_raw/chat_id_used`, статус отправок и маршруты `/admin/selftest`, `/admin/diag`.

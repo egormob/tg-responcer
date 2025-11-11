@@ -44,11 +44,11 @@
    *Impact:* Breaks priority №5 (basic broadcast) and destabilises rest of system.  
    *Status:* Pending fix — Step 7 of roadmap.
 
-8. **Self-test fails hard when OpenAI marker missing**  
-   *Scope:* `apps/worker-main/features/admin/selftest`.  
-   *Symptoms:* `/admin/selftest` returns HTTP 500 despite production flow working.  
-   *Impact:* Produces false downtime alarms, hides real incidents.  
-   *Status:* Pending fix — Step 8 of roadmap.
+8. **Self-test fails hard when OpenAI marker missing**
+   *Scope:* `apps/worker-main/features/admin/selftest`.
+   *Symptoms:* `/admin/selftest` возвращал HTTP 500, хотя прод-контур отвечал.
+   *Impact:* Создаёт ложные тревоги и скрывает реальные сбои.
+   *Status:* Mitigated — 2025-11-19 self-test возвращает 200 с `openAiReason='missing_diagnostic_marker'` и сэмплом ответа; требуется подтянуть диагностический маркер на стороне OpenAI, иначе флаг `openAiOk` останется `false`.
 
 ## Observed signals & references
 
