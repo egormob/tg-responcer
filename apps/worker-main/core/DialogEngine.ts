@@ -72,13 +72,20 @@ export class DialogEngine {
       return { status: 'rate_limited' };
     }
 
-    const timestamp = message.receivedAt;
-    await storage.saveUser({
-      ...message.user,
-      updatedAt: this.now(),
+    const typingPromise = messaging.sendTyping({
+      chatId: message.chat.id,
+      threadId: message.chat.threadId,
     });
 
-    await storage.appendMessage({
+    const timestamp = message.receivedAt;
+    const updatedAt = this.now();
+
+    const saveUserPromise = storage.saveUser({
+      ...message.user,
+      updatedAt,
+    });
+
+    const appendUserMessagePromise = storage.appendMessage({
       userId: message.user.userId,
       chatId: message.chat.id,
       threadId: message.chat.threadId,
@@ -88,15 +95,32 @@ export class DialogEngine {
       metadata: message.messageId ? { messageId: message.messageId } : undefined,
     });
 
-    const recentMessages = await storage.getRecentMessages({
+    const recentMessagesPromise = storage.getRecentMessages({
       userId: message.user.userId,
       limit: this.recentMessagesLimit,
     });
 
-    await messaging.sendTyping({
-      chatId: message.chat.id,
-      threadId: message.chat.threadId,
-    });
+    const [saveUserResult, appendUserMessageResult, recentMessagesResult] = await Promise.allSettled([
+      saveUserPromise,
+      appendUserMessagePromise,
+      recentMessagesPromise,
+    ]);
+
+    if (saveUserResult.status === 'rejected') {
+      throw saveUserResult.reason;
+    }
+
+    if (appendUserMessageResult.status === 'rejected') {
+      throw appendUserMessageResult.reason;
+    }
+
+    if (recentMessagesResult.status === 'rejected') {
+      throw recentMessagesResult.reason;
+    }
+
+    await typingPromise;
+
+    const recentMessages = recentMessagesResult.value;
 
     const aiReply = await ai.reply({
       userId: message.user.userId,
