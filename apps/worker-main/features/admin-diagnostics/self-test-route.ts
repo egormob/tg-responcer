@@ -5,6 +5,7 @@ import {
   noteTelegramSnapshot,
   recordTelegramSnapshotAction,
 } from '../../http/telegram-webhook';
+import { applyTelegramIdLogFields, toTelegramIdString } from '../../http/telegram-ids';
 import { ensureTelegramSnapshotIntegrity } from './telegram-id-guard';
 
 export interface CreateSelfTestRouteOptions {
@@ -16,6 +17,8 @@ export interface CreateSelfTestRouteOptions {
 }
 
 const defaultNow = () => Date.now();
+
+export const OPENAI_SELF_TEST_MARKER = '[[tg-responcer:selftest:openai-ok]]';
 
 const formatError = (scope: string, reason: unknown) => {
   const message = reason instanceof Error ? reason.message : String(reason);
@@ -52,7 +55,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
           ok: false,
           errors: ['storage: adapter is not configured'],
         },
-        { status: 500 },
+        { status: 200 },
       );
     }
 
@@ -105,7 +108,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       console.info('[admin:selftest][utm] completed', { userId });
     }
 
-    return json(payload, { status: ok ? 200 : 500 });
+    return json(payload, { status: 200 });
   };
 
   return async (request: Request): Promise<Response> => {
@@ -139,6 +142,18 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     let openAiSample: string | undefined;
     let openAiResponseId: string | undefined;
 
+    const stripMarker = (text: string | undefined): string | undefined => {
+      if (typeof text !== 'string') {
+        return undefined;
+      }
+
+      return text.replaceAll(OPENAI_SELF_TEST_MARKER, '');
+    };
+
+    const normalizeSample = (text: string | undefined) => createSample(stripMarker(text));
+
+    let openAiMarkerDetected = false;
+
     const aiStartedAt = now();
     try {
       const reply = await options.ai.reply({
@@ -164,12 +179,19 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         }
       }
 
+      if (typeof reply.text === 'string') {
+        openAiMarkerDetected = reply.text.includes(OPENAI_SELF_TEST_MARKER);
+      }
+
       if (metadata?.selfTestNoop === true) {
         errors.push('openai: noop adapter response');
         openAiReason = 'noop_adapter_response';
-      } else if (usedOutputTextRaw !== true) {
+      } else if (!openAiMarkerDetected) {
         openAiReason = 'missing_diagnostic_marker';
-        openAiSample = createSample(reply.text);
+        openAiSample = normalizeSample(reply.text);
+      } else if (usedOutputTextRaw !== true) {
+        openAiReason = 'marker_in_fallback_output';
+        openAiSample = normalizeSample(reply.text);
       } else {
         openAiOk = true;
       }
@@ -186,6 +208,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     let telegramDescription: string | undefined;
     let telegramChatId: string | undefined;
     let telegramChatIdSource: 'query' | 'whitelist' | undefined;
+    let telegramReason: 'chat_id_missing' | 'send_failed' | undefined;
 
     if (chatIdParam && chatIdParam.length > 0) {
       telegramChatId = chatIdParam;
@@ -208,6 +231,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
 
     if (!telegramChatId) {
       errors.push('telegram: chatId query parameter is required and whitelist is empty');
+      telegramReason = 'chat_id_missing';
     } else {
       const telegramStartedAt = now();
       const snapshotContext = {
@@ -297,6 +321,7 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         }
 
         errors.push(`telegram: ${message}`);
+        telegramReason = 'send_failed';
       }
     }
 
@@ -338,8 +363,6 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       responseBody.telegramChatIdSource = telegramChatIdSource;
     }
 
-    const hasErrors = errors.length > 0;
-
     responseBody.lastWebhookSnapshot = getLastTelegramUpdateSnapshot();
 
     if (openAiReason && !openAiOk) {
@@ -354,6 +377,76 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       responseBody.openAiResponseId = openAiResponseId;
     }
 
-    return json(responseBody, { status: hasErrors ? 500 : 200 });
+    if (telegramReason && !telegramOk) {
+      responseBody.telegramReason = telegramReason;
+    }
+
+    const openAiLog: Record<string, unknown> = {
+      scope: 'admin:selftest',
+      check: 'openai',
+      ok: openAiOk,
+    };
+
+    if (openAiReason) {
+      openAiLog.reason = openAiReason;
+    }
+
+    if (openAiLatencyMs !== undefined) {
+      openAiLog.latencyMs = openAiLatencyMs;
+    }
+
+    if (openAiResponseId) {
+      openAiLog.responseId = openAiResponseId;
+    }
+
+    if (!openAiOk && openAiSample) {
+      openAiLog.sample = openAiSample;
+    }
+
+    // eslint-disable-next-line no-console
+    console.info('[admin:selftest][openai]', openAiLog);
+
+    const telegramLog: Record<string, unknown> = {
+      scope: 'admin:selftest',
+      check: 'telegram',
+      ok: telegramOk,
+      route: 'admin',
+    };
+
+    if (chatIdParamRaw !== null) {
+      telegramLog.chatIdRawType = typeof chatIdParamRaw;
+    } else {
+      telegramLog.chatIdRawType = 'missing';
+    }
+
+    applyTelegramIdLogFields(telegramLog, 'chatIdRaw', chatIdParamRaw, { includeValue: false });
+    applyTelegramIdLogFields(telegramLog, 'chatIdNormalized', toTelegramIdString(telegramChatId), {
+      includeValue: false,
+    });
+
+    if (telegramChatIdSource) {
+      telegramLog.chatIdSource = telegramChatIdSource;
+    }
+
+    if (telegramStatus !== undefined) {
+      telegramLog.status = telegramStatus;
+    }
+
+    if (telegramDescription) {
+      telegramLog.description = telegramDescription;
+    }
+
+    if (telegramReason) {
+      telegramLog.reason = telegramReason;
+    }
+
+    if (telegramLatencyMs !== undefined) {
+      telegramLog.latencyMs = telegramLatencyMs;
+    }
+
+    // eslint-disable-next-line no-console
+    console.info('[admin:selftest][telegram]', telegramLog);
+
+    return json(responseBody, { status: 200 });
   };
 };

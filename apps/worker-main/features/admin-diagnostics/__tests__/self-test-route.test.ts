@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvzRoute } from '../envz-route';
-import { createSelfTestRoute } from '../self-test-route';
+import { createSelfTestRoute, OPENAI_SELF_TEST_MARKER } from '../self-test-route';
 import type { AiPort, MessagingPort, StoragePort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
 import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
@@ -22,7 +22,10 @@ describe('createSelfTestRoute', () => {
   });
 
   it('returns success report when OpenAI and Telegram checks pass', async () => {
-    const reply = { text: 'pong', metadata: { usedOutputText: true } };
+    const reply = {
+      text: `pong ${OPENAI_SELF_TEST_MARKER}`,
+      metadata: { usedOutputText: true },
+    };
     const ai: AiPort = {
       reply: vi.fn().mockResolvedValue(reply),
     };
@@ -87,16 +90,18 @@ describe('createSelfTestRoute', () => {
     const route = createSelfTestRoute({ ai, messaging, now: () => 2000 });
     const response = await route(createRequest('?chatId=123'));
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     const payload = await response.json();
 
     expect(payload.openAiOk).toBe(false);
     expect(payload.telegramOk).toBe(true);
     expect(payload.errors).toContain('openai: boom');
+    expect(payload.openAiReason).toBe('request_failed');
     expect(payload.telegramStatus).toBe(200);
     expect(payload.telegramDescription).toBe('OK');
     expect(payload.telegramChatId).toBe('123');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.telegramReason).toBeUndefined();
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
         route: 'admin',
@@ -108,7 +113,10 @@ describe('createSelfTestRoute', () => {
 
   it('fails Telegram check when chatId is missing', async () => {
     const ai: AiPort = {
-      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
+      reply: vi.fn().mockResolvedValue({
+        text: `pong ${OPENAI_SELF_TEST_MARKER}`,
+        metadata: { usedOutputText: true },
+      }),
     };
     const messaging: MessagingPort = {
       sendTyping: vi.fn(),
@@ -120,7 +128,7 @@ describe('createSelfTestRoute', () => {
     const route = createSelfTestRoute({ ai, messaging, now: () => 0 });
     const response = await route(createRequest(''));
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     const payload = await response.json();
 
     expect(payload.openAiOk).toBe(true);
@@ -128,6 +136,7 @@ describe('createSelfTestRoute', () => {
     expect(payload.errors).toContain('telegram: chatId query parameter is required and whitelist is empty');
     expect(payload.telegramChatId).toBeUndefined();
     expect(payload.telegramChatIdSource).toBeUndefined();
+    expect(payload.telegramReason).toBe('chat_id_missing');
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
         chatIdUsed: expect.objectContaining({ present: false }),
@@ -140,7 +149,7 @@ describe('createSelfTestRoute', () => {
   it('uses whitelisted chat id when query param missing', async () => {
     const ai: AiPort = {
       reply: vi.fn().mockResolvedValue({
-        text: 'pong',
+        text: `pong ${OPENAI_SELF_TEST_MARKER}`,
         metadata: { usedOutputText: true, responseId: 'resp_whitelist' },
       }),
     };
@@ -170,6 +179,7 @@ describe('createSelfTestRoute', () => {
     expect(payload.errors).toEqual([]);
     expect(payload.openAiReason).toBeUndefined();
     expect(payload.openAiResponseId).toBe('resp_whitelist');
+    expect(payload.telegramReason).toBeUndefined();
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
         route: 'admin',
@@ -199,6 +209,7 @@ describe('createSelfTestRoute', () => {
     expect(payload.openAiOk).toBe(false);
     expect(payload.openAiReason).toBe('missing_diagnostic_marker');
     expect(payload.openAiSample).toBe('AI reply without marker');
+    expect(payload.telegramReason).toBeUndefined();
     expect(payload.openAiResponseId).toBeUndefined();
     expect(payload.telegramOk).toBe(true);
     expect(payload.errors).toEqual([]);
@@ -213,7 +224,10 @@ describe('createSelfTestRoute', () => {
 
   it('captures Telegram errors', async () => {
     const ai: AiPort = {
-      reply: vi.fn().mockResolvedValue({ text: 'pong', metadata: { usedOutputText: true } }),
+      reply: vi.fn().mockResolvedValue({
+        text: `pong ${OPENAI_SELF_TEST_MARKER}`,
+        metadata: { usedOutputText: true },
+      }),
     };
     const messaging: MessagingPort = {
       sendTyping: vi.fn().mockResolvedValue(undefined),
@@ -225,7 +239,7 @@ describe('createSelfTestRoute', () => {
     const route = createSelfTestRoute({ ai, messaging, now: () => 5000 });
     const response = await route(createRequest('?chatId=789'));
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     const payload = await response.json();
 
     expect(payload.openAiOk).toBe(true);
@@ -234,6 +248,7 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramDescription).toBe('telegram failure');
     expect(payload.telegramChatId).toBe('789');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.telegramReason).toBe('send_failed');
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
         route: 'admin',
@@ -255,7 +270,7 @@ describe('createSelfTestRoute', () => {
     const route = createSelfTestRoute({ ai, messaging, now: () => 9000 });
     const response = await route(createRequest('?chatId=123'));
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     const payload = await response.json();
 
     expect(payload.openAiOk).toBe(false);
@@ -264,6 +279,7 @@ describe('createSelfTestRoute', () => {
     expect(payload.telegramStatus).toBe(200);
     expect(payload.telegramChatId).toBe('123');
     expect(payload.telegramChatIdSource).toBe('query');
+    expect(payload.telegramReason).toBeUndefined();
     expect(payload.lastWebhookSnapshot).toEqual(
       expect.objectContaining({
         route: 'admin',
@@ -332,7 +348,7 @@ describe('createSelfTestRoute', () => {
     const route = createSelfTestRoute({ ai, messaging, now: () => 5_000 });
     const response = await route(createRequest('?q=utm'));
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     const payload = await response.json();
 
     expect(payload).toMatchObject({
