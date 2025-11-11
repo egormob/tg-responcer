@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DialogEngine } from '../../core/DialogEngine';
 import type { MessagingPort, StoragePort } from '../../ports';
 import { createTelegramWebhookHandler } from '../../features';
-import { createTelegramBroadcastCommandHandler } from '../../features/broadcast';
+import {
+  createTelegramBroadcastCommandHandler,
+  BROADCAST_PROMPT_MESSAGE,
+  BROADCAST_SUCCESS_MESSAGE,
+} from '../../features/broadcast';
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
 import { createSelfTestRoute } from '../../features/admin-diagnostics/self-test-route';
 import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
@@ -694,10 +698,7 @@ describe('http router', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: '4242',
       threadId: undefined,
-      text: [
-        'Введите текст рассылки (до 4096 символов).',
-        'Следующее сообщение уйдёт всем получателям минимальной модели.',
-      ].join('\n'),
+      text: BROADCAST_PROMPT_MESSAGE,
     });
 
     const waitUntil = vi.fn();
@@ -722,22 +723,16 @@ describe('http router', () => {
     const backgroundTask = waitUntil.mock.calls[0]?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
-    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
-      chatId: '4242',
-      threadId: undefined,
-      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
-    });
-
-    expect(messaging.sendText).toHaveBeenCalledTimes(2);
+    expect(messaging.sendText).toHaveBeenCalledTimes(1);
 
     deferred.resolve({ delivered: 2, failed: 0, deliveries: [] });
     await backgroundTask;
 
-    expect(messaging.sendText).toHaveBeenCalledTimes(3);
+    expect(messaging.sendText).toHaveBeenCalledTimes(2);
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: '4242',
       threadId: undefined,
-      text: ['📣 Рассылка отправлена.', 'Получателей: 2.'].join('\n'),
+      text: BROADCAST_SUCCESS_MESSAGE,
     });
   });
 

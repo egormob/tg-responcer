@@ -92,6 +92,138 @@ const createLogger = (logger?: Logger) => ({
   },
 });
 
+type LoggerInstance = ReturnType<typeof createLogger>;
+
+interface CooldownStoreOptions {
+  primary?: AdminExportRateLimitKvNamespace;
+  fallback?: AdminExportRateLimitKvNamespace;
+  logger: LoggerInstance;
+}
+
+interface CooldownContextDetails {
+  userId: string;
+  chatId: string;
+}
+
+const createCooldownStore = (options: CooldownStoreOptions) => {
+  const { primary, fallback, logger } = options;
+
+  const attemptGet = async (
+    namespace: AdminExportRateLimitKvNamespace | undefined,
+    key: string,
+  ): Promise<{ value?: string | null; error?: unknown; available: boolean }> => {
+    if (!namespace) {
+      return { available: false };
+    }
+
+    try {
+      const value = await namespace.get(key, 'text');
+      return { value, available: true };
+    } catch (error) {
+      return { available: true, error };
+    }
+  };
+
+  const attemptPut = async (
+    namespace: AdminExportRateLimitKvNamespace | undefined,
+    key: string,
+    value: string,
+    ttlSeconds: number,
+  ): Promise<{ ok: boolean; error?: unknown }> => {
+    if (!namespace) {
+      return { ok: false };
+    }
+
+    try {
+      await namespace.put(key, value, { expirationTtl: ttlSeconds });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  };
+
+  return {
+    async get(key: string, context: CooldownContextDetails): Promise<string | null> {
+      const primaryResult = await attemptGet(primary, key);
+      if (primaryResult.value !== null && primaryResult.value !== undefined) {
+        return primaryResult.value;
+      }
+
+      const fallbackResult = await attemptGet(fallback, key);
+      if (fallbackResult.value !== null && fallbackResult.value !== undefined) {
+        if (primaryResult.error) {
+          logger.info('admin export cooldown resolved via fallback kv', {
+            userId: context.userId,
+            chatId: context.chatId,
+            error: normalizeErrorForLog(primaryResult.error),
+          });
+        }
+        return fallbackResult.value;
+      }
+
+      if (primaryResult.error) {
+        logger.warn('failed to read admin export cooldown kv', {
+          userId: context.userId,
+          chatId: context.chatId,
+          error: normalizeErrorForLog(primaryResult.error),
+        });
+      }
+
+      if (fallbackResult.error) {
+        logger.warn('failed to read admin export cooldown fallback kv', {
+          userId: context.userId,
+          chatId: context.chatId,
+          error: normalizeErrorForLog(fallbackResult.error),
+        });
+      }
+
+      return null;
+    },
+
+    async put(
+      key: string,
+      value: string,
+      ttlSeconds: number,
+      context: CooldownContextDetails,
+    ): Promise<boolean> {
+      const primaryResult = await attemptPut(primary, key, value, ttlSeconds);
+      if (primaryResult.ok) {
+        return true;
+      }
+
+      const fallbackResult = await attemptPut(fallback, key, value, ttlSeconds);
+      if (fallbackResult.ok) {
+        if (primaryResult.error) {
+          logger.info('admin export cooldown stored in fallback kv', {
+            userId: context.userId,
+            chatId: context.chatId,
+            error: normalizeErrorForLog(primaryResult.error),
+          });
+        }
+        return true;
+      }
+
+      if (primaryResult.error) {
+        logger.warn('failed to update admin export cooldown kv', {
+          userId: context.userId,
+          chatId: context.chatId,
+          error: normalizeErrorForLog(primaryResult.error),
+        });
+      }
+
+      if (fallbackResult.error) {
+        logger.warn('failed to update admin export cooldown fallback kv', {
+          userId: context.userId,
+          chatId: context.chatId,
+          error: normalizeErrorForLog(fallbackResult.error),
+        });
+      }
+
+      return false;
+    },
+  };
+};
+
 const normalizeErrorForLog = (error: unknown) =>
   error instanceof Error ? { name: error.name, message: error.message } : String(error);
 
@@ -164,6 +296,14 @@ export const createTelegramExportCommandHandler = (
   const now = options.now ?? (() => new Date());
   const logger = createLogger(options.logger);
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
+  const fallbackCooldownKv =
+    options.adminAccessKv && options.adminAccessKv !== options.cooldownKv ? options.adminAccessKv : undefined;
+  const cooldownStore = createCooldownStore({
+    primary: options.cooldownKv,
+    fallback: fallbackCooldownKv,
+    logger,
+  });
+  const hasCooldownStore = Boolean(options.cooldownKv || fallbackCooldownKv);
 
   const logAdminMessagingError = async (
     message: string,
@@ -339,30 +479,21 @@ export const createTelegramExportCommandHandler = (
       return json({ error: 'Too many export requests' }, { status: 429 });
     }
 
-    if (options.cooldownKv) {
+    if (hasCooldownStore) {
       const cooldownKey = `${EXPORT_COOLDOWN_KEY_PREFIX}${userId}`;
+      const cooldownContext = { userId, chatId: context.chat.id };
 
-      try {
-        const existing = await options.cooldownKv.get(cooldownKey, 'text');
+      const existing = await cooldownStore.get(cooldownKey, cooldownContext);
 
-        if (existing !== null) {
-          logger.warn('admin export cooldown active', {
-            userId,
-            chatId: context.chat.id,
-          });
-          return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
-        }
-
-        await options.cooldownKv.put(cooldownKey, EXPORT_COOLDOWN_VALUE, {
-          expirationTtl: EXPORT_COOLDOWN_TTL_SECONDS,
-        });
-      } catch (error) {
-        logger.warn('failed to update admin export cooldown kv', {
+      if (existing !== null) {
+        logger.warn('admin export cooldown active', {
           userId,
           chatId: context.chat.id,
-          error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
         });
+        return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
       }
+
+      await cooldownStore.put(cooldownKey, EXPORT_COOLDOWN_VALUE, EXPORT_COOLDOWN_TTL_SECONDS, cooldownContext);
     }
 
     const abortController = new AbortController();

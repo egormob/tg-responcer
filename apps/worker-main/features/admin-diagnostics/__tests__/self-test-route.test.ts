@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvzRoute } from '../envz-route';
-import { createSelfTestRoute, OPENAI_SELF_TEST_MARKER } from '../self-test-route';
+import {
+  createSelfTestRoute,
+  OPENAI_SELF_TEST_CONTEXT,
+  OPENAI_SELF_TEST_MARKER,
+  OPENAI_SELF_TEST_PROMPT_TEXT,
+} from '../self-test-route';
 import type { AiPort, MessagingPort, StoragePort } from '../../../ports';
 import { createNoopAiPort } from '../../../adapters-noop';
 import { resetLastTelegramUpdateSnapshot } from '../../../http/telegram-webhook';
@@ -69,8 +74,8 @@ describe('createSelfTestRoute', () => {
 
     expect(ai.reply).toHaveBeenCalledWith({
       userId: 'admin:selftest',
-      text: 'ping',
-      context: [],
+      text: OPENAI_SELF_TEST_PROMPT_TEXT,
+      context: OPENAI_SELF_TEST_CONTEXT,
     });
     expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId: '123', threadId: '456' });
     expect(messaging.sendText).toHaveBeenCalledWith({ chatId: '123', threadId: '456', text: 'hello' });

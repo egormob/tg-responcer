@@ -2,6 +2,24 @@ import type { MessagingPort } from '../ports';
 import { noteTelegramSnapshot, recordTelegramSnapshotAction } from './telegram-webhook';
 import { applyTelegramIdLogFields } from './telegram-ids';
 
+const extractFallbackReason = (error: unknown): { reason: string; name?: string } => {
+  if (error instanceof Error) {
+    const reason = error.message && error.message.trim().length > 0 ? error.message : error.toString();
+    return { reason, name: error.name };
+  }
+
+  const normalized = String(error);
+  return { reason: normalized };
+};
+
+const shouldSkipSafeFallback = (error: unknown): boolean =>
+  Boolean(
+    error
+    && typeof error === 'object'
+    && ((error as { skipSafeFallback?: unknown }).skipSafeFallback === true
+      || (error as { safeFallback?: unknown }).safeFallback === false),
+  );
+
 const DEFAULT_FALLBACK_TEXT = '⚠️ → 🔁💬';
 
 interface SafeWebhookHandlerOptions<T> {
@@ -50,8 +68,15 @@ export async function safeWebhookHandler<T>(
       headers,
     });
   } catch (error) {
+    const { reason, name } = extractFallbackReason(error);
+    const skipFallback = shouldSkipSafeFallback(error);
+
     // eslint-disable-next-line no-console
-    console.error('[safe][error]', { err: String(error) });
+    console.error('[safe][error]', {
+      message: reason,
+      name: name ?? undefined,
+      skipFallback,
+    });
     const fallback = fallbackText ?? DEFAULT_FALLBACK_TEXT;
 
     const snapshotContext: {
@@ -70,8 +95,11 @@ export async function safeWebhookHandler<T>(
       ...snapshotContext,
     });
 
-    if (chat.id) {
-      const fallbackLog: Record<string, unknown> = { route: 'safe_webhook_fallback' };
+    if (chat.id && !skipFallback) {
+      const fallbackLog: Record<string, unknown> = { route: 'safe_webhook_fallback', reason };
+      if (name) {
+        fallbackLog.errorName = name;
+      }
       applyTelegramIdLogFields(fallbackLog, 'chatId', chat.id, { includeValue: false });
       if (chat.threadId) {
         applyTelegramIdLogFields(fallbackLog, 'threadId', chat.threadId, { includeValue: false });
@@ -116,6 +144,13 @@ export async function safeWebhookHandler<T>(
           error: sendError instanceof Error ? sendError.message : String(sendError),
         });
       }
+    } else if (skipFallback) {
+      // eslint-disable-next-line no-console
+      console.info('[safe] fallback skipped', {
+        route: 'safe_webhook_fallback',
+        reason,
+        errorName: name ?? undefined,
+      });
     }
 
     const body = JSON.stringify({ status: 'ok' });

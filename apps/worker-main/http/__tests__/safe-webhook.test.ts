@@ -35,6 +35,7 @@ describe('safeWebhookHandler', () => {
     const messaging = createMessagingMock();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
     const response = await safeWebhookHandler({
       chat: { id: 'chat-2' },
       messaging,
@@ -53,8 +54,23 @@ describe('safeWebhookHandler', () => {
       text: '⚠️ → 🔁💬',
     });
 
-    expect(errorSpy).toHaveBeenCalledWith('[safe][error]', { err: 'Error: boom' });
+    expect(errorSpy).toHaveBeenCalledWith('[safe][error]', {
+      message: 'boom',
+      name: 'Error',
+      skipFallback: false,
+    });
+    expect(infoSpy).toHaveBeenCalledWith(
+      '[safe] fallback sent',
+      expect.objectContaining({
+        route: 'safe_webhook_fallback',
+        reason: 'boom',
+        errorName: 'Error',
+        chatIdHash: expect.any(String),
+        chatIdLength: expect.any(Number),
+      }),
+    );
     errorSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
   it('awaits fallback delivery before resolving the handler', async () => {
@@ -97,5 +113,39 @@ describe('safeWebhookHandler', () => {
 
     expect(isResolved).toBe(true);
     expect(response.status).toBe(200);
+  });
+
+  it('skips fallback delivery when error requests it explicitly', async () => {
+    const messaging = createMessagingMock();
+    const sendTextSpy = vi.spyOn(messaging, 'sendText');
+    const error = new Error('already handled');
+    (error as { skipSafeFallback?: boolean }).skipSafeFallback = true;
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await safeWebhookHandler({
+      chat: { id: 'chat-4', threadId: 'thread-4' },
+      messaging,
+      run: async () => {
+        throw error;
+      },
+      mapResult: async () => ({ body: { ok: false } }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledWith('[safe] fallback skipped', {
+      route: 'safe_webhook_fallback',
+      reason: 'already handled',
+      errorName: 'Error',
+    });
+    expect(errorSpy).toHaveBeenCalledWith('[safe][error]', {
+      message: 'already handled',
+      name: 'Error',
+      skipFallback: true,
+    });
+
+    infoSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

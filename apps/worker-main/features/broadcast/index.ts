@@ -11,6 +11,8 @@ export {
 } from './broadcast-payload';
 export {
   createTelegramBroadcastCommandHandler,
+  BROADCAST_PROMPT_MESSAGE,
+  BROADCAST_SUCCESS_MESSAGE,
   type CreateTelegramBroadcastCommandHandlerOptions,
   type TelegramBroadcastCommandHandler,
 } from './telegram-broadcast-command';
