@@ -586,6 +586,16 @@ describe('transformTelegramUpdate', () => {
 
     update.message.chat.id = Number.MAX_SAFE_INTEGER + 2;
 
-    await expect(transformTelegramUpdate(update)).rejects.toThrowError('UNSAFE_TELEGRAM_ID');
+    const handleMessage = vi.fn();
+
+    await expect(
+      transformTelegramUpdate(update, {
+        features: {
+          handleMessage,
+        },
+      }),
+    ).rejects.toThrowError('UNSAFE_TELEGRAM_ID');
+
+    expect(handleMessage).not.toHaveBeenCalled();
   });
 });

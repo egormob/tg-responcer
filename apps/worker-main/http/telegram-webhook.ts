@@ -225,6 +225,31 @@ const toOptionalTrimmedString = (value: unknown): string | undefined => {
 
 const toIdString = toTelegramIdString;
 
+const isUnsafeTelegramIdError = (error: unknown): error is Error =>
+  error instanceof Error && error.message === 'UNSAFE_TELEGRAM_ID';
+
+type NormalizeTelegramIdResult =
+  | { kind: 'ok'; value: string }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; error: Error };
+
+const normalizeTelegramIdValue = (value: unknown): NormalizeTelegramIdResult => {
+  try {
+    const normalized = toIdString(value);
+    if (!normalized) {
+      return { kind: 'missing' };
+    }
+
+    return { kind: 'ok', value: normalized };
+  } catch (error) {
+    if (isUnsafeTelegramIdError(error)) {
+      return { kind: 'unsafe', error: error as Error };
+    }
+
+    throw error;
+  }
+};
+
 const INTEGER_PATTERN = /^-?\d+$/u;
 
 const toOptionalSafeInteger = (value: unknown): number | undefined => {
@@ -545,43 +570,175 @@ export const transformTelegramUpdate = async (
   const updateRecord = payload as Record<string, unknown>;
   const updateId = requireSafeInteger(updateRecord.update_id, 'update_id');
   const update = { ...updateRecord, update_id: updateId } as TelegramUpdate;
-  // eslint-disable-next-line no-console
-  console.info('[telegram-webhook] incoming update', snapshotUpdate(update));
+
+  let snapshotLogged = false;
+  const logIncomingUpdate = () => {
+    if (snapshotLogged) {
+      return;
+    }
+
+    // eslint-disable-next-line no-console
+    console.info('[telegram-webhook] incoming update', snapshotUpdate(update));
+    snapshotLogged = true;
+  };
+
   const message = findRelevantMessage(update);
 
   if (!message || !isRecord(message.chat)) {
+    logIncomingUpdate();
     return handledIgnored();
+  }
+
+  const chatIdRaw = message.chat?.id;
+  const chatIdResult = normalizeTelegramIdValue(chatIdRaw);
+  const chatGuardLog: Record<string, unknown> = {
+    updateId,
+    chatIdRawType: typeof chatIdRaw,
+  };
+
+  if (chatIdResult.kind === 'ok') {
+    applyTelegramIdLogFields(chatGuardLog, 'chatIdRaw', chatIdRaw);
+    applyTelegramIdLogFields(chatGuardLog, 'chatIdUsed', chatIdResult.value);
+    // eslint-disable-next-line no-console
+    console.info('[telegram-webhook] chat id guard passed', chatGuardLog);
+    message.chat.id = chatIdResult.value as TelegramChat['id'];
+  } else if (chatIdResult.kind === 'missing') {
+    // eslint-disable-next-line no-console
+    console.warn('[telegram-webhook] chat id missing', chatGuardLog);
+    logIncomingUpdate();
+    return handledIgnored();
+  } else {
+    chatGuardLog.error = chatIdResult.error.message;
+    if (chatIdRaw !== undefined) {
+      chatGuardLog.chatIdRawValue = chatIdRaw;
+    }
+    // eslint-disable-next-line no-console
+    console.error('[telegram-webhook] unsafe chat id', chatGuardLog);
+    throw chatIdResult.error;
+  }
+
+  const senderChat = message.sender_chat;
+  if (senderChat && isRecord(senderChat)) {
+    const senderChatIdRaw = senderChat.id;
+    const senderResult = normalizeTelegramIdValue(senderChatIdRaw);
+    const senderLog: Record<string, unknown> = {
+      updateId,
+      field: 'sender_chat.id',
+      senderChatIdType: typeof senderChatIdRaw,
+    };
+
+    if (senderResult.kind === 'ok') {
+      applyTelegramIdLogFields(senderLog, 'senderChatId', senderChatIdRaw);
+      // eslint-disable-next-line no-console
+      console.info('[telegram-webhook] sender_chat guard passed', senderLog);
+      (senderChat as TelegramChat).id = senderResult.value;
+    } else if (senderResult.kind === 'missing') {
+      // eslint-disable-next-line no-console
+      console.warn('[telegram-webhook] sender_chat missing id', senderLog);
+      logIncomingUpdate();
+      return handledIgnored();
+    } else {
+      senderLog.error = senderResult.error.message;
+      if (senderChatIdRaw !== undefined) {
+        senderLog.senderChatIdRawValue = senderChatIdRaw;
+      }
+      // eslint-disable-next-line no-console
+      console.error('[telegram-webhook] unsafe sender_chat id', senderLog);
+      throw senderResult.error;
+    }
   }
 
   const from = message.from;
   if (!from) {
+    logIncomingUpdate();
     return handledIgnored();
   }
 
-  const chatId = toIdString(message.chat?.id);
-  const threadId = toIdString(message.message_thread_id);
+  const fromIdRaw = from.id;
+  const fromResult = normalizeTelegramIdValue(fromIdRaw);
+  if (fromResult.kind === 'ok') {
+    from.id = fromResult.value as TelegramUser['id'];
+  } else if (fromResult.kind === 'missing') {
+    // eslint-disable-next-line no-console
+    console.warn('[telegram-webhook] missing from.id', {
+      updateId,
+      fromIdType: typeof fromIdRaw,
+    });
+    logIncomingUpdate();
+    return handledIgnored();
+  } else {
+    // eslint-disable-next-line no-console
+    console.error('[telegram-webhook] unsafe from.id', {
+      updateId,
+      fromIdType: typeof fromIdRaw,
+    });
+    throw fromResult.error;
+  }
+
+  const messageIdRaw = message.message_id;
+  const messageIdResult = normalizeTelegramIdValue(messageIdRaw);
+  if (messageIdResult.kind === 'ok') {
+    message.message_id = messageIdResult.value as TelegramMessage['message_id'];
+  } else if (messageIdResult.kind === 'missing') {
+    // eslint-disable-next-line no-console
+    console.warn('[telegram-webhook] missing message_id', {
+      updateId,
+      messageIdType: typeof messageIdRaw,
+    });
+    logIncomingUpdate();
+    return handledIgnored();
+  } else {
+    // eslint-disable-next-line no-console
+    console.error('[telegram-webhook] unsafe message_id', {
+      updateId,
+      messageIdType: typeof messageIdRaw,
+    });
+    throw messageIdResult.error;
+  }
+
+  const threadIdRaw = message.message_thread_id;
+  const threadResult = normalizeTelegramIdValue(threadIdRaw);
+  let threadId: string | undefined;
+  if (threadResult.kind === 'ok') {
+    threadId = threadResult.value;
+    message.message_thread_id = threadResult.value as TelegramMessage['message_thread_id'];
+  } else if (threadResult.kind === 'missing') {
+    threadId = undefined;
+    if (Object.prototype.hasOwnProperty.call(message, 'message_thread_id')) {
+      message.message_thread_id = undefined;
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.error('[telegram-webhook] unsafe message_thread_id', {
+      updateId,
+      threadIdType: typeof threadIdRaw,
+    });
+    throw threadResult.error;
+  }
+
+  logIncomingUpdate();
+
+  const chatId = message.chat.id as string;
 
   const rawText = typeof message.text === 'string' ? message.text : undefined;
   const caption = typeof message.caption === 'string' ? message.caption : undefined;
   const content = rawText ?? caption;
 
   if (!content || content.trim().length === 0) {
-    if (chatId) {
-      if (message.voice || message.video_note) {
-        return {
-          kind: 'non_text',
-          chat: { id: chatId, threadId },
-          reply: 'voice',
-        };
-      }
+    if (message.voice || message.video_note) {
+      return {
+        kind: 'non_text',
+        chat: { id: chatId, threadId },
+        reply: 'voice',
+      };
+    }
 
-      if (message.video || message.photo || message.document) {
-        return {
-          kind: 'non_text',
-          chat: { id: chatId, threadId },
-          reply: 'media',
-        };
-      }
+    if (message.video || message.photo || message.document) {
+      return {
+        kind: 'non_text',
+        chat: { id: chatId, threadId },
+        reply: 'media',
+      };
     }
 
     return handledIgnored();
@@ -757,7 +914,7 @@ export const transformTelegramUpdate = async (
           },
         }
       : incoming,
-    chatIdRaw: message.chat?.id,
+    chatIdRaw,
     chatIdNormalized: incoming.chat.id,
     fromId: incoming.user.userId,
     messageId: incoming.messageId,
@@ -767,7 +924,7 @@ export const transformTelegramUpdate = async (
   noteTelegramSnapshot({
     route: 'user',
     updateId: update.update_id,
-    chatIdRaw: message.chat?.id,
+    chatIdRaw,
     chatIdUsed: result.chatIdNormalized ?? incoming.chat.id,
     resetMessaging: true,
     failSoft: false,

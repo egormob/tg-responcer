@@ -73,6 +73,16 @@ describe('parseTelegramJson', () => {
     expect(parsed.id).toBe('123');
   });
 
+  it('enforces string chat_id tokens and rejects unsafe numeric payloads', () => {
+    const stringPayload = '{"chat_id":123456789123456789,"message":{"chat_id":"9876543210"}}';
+
+    const parsed = parseTelegramJson(stringPayload) as Record<string, unknown>;
+    expect(parsed.chat_id).toBe('123456789123456789');
+
+    expect(() => parseTelegramJson('{"chat_id":1e6}')).toThrowError('UNSAFE_TELEGRAM_ID');
+    expect(() => parseTelegramJson('{"chat_id":12.3}')).toThrowError('UNSAFE_TELEGRAM_ID');
+  });
+
   it('throws on invalid JSON', () => {
     expect(() => parseTelegramJson('not json')).toThrow();
   });

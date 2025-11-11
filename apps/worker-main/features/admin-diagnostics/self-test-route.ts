@@ -5,6 +5,7 @@ import {
   noteTelegramSnapshot,
   recordTelegramSnapshotAction,
 } from '../../http/telegram-webhook';
+import { ensureTelegramSnapshotIntegrity } from './telegram-id-guard';
 
 export interface CreateSelfTestRouteOptions {
   ai: AiPort;
@@ -96,6 +97,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
         { status: 405 },
       );
     }
+
+    await ensureTelegramSnapshotIntegrity();
 
     const url = new URL(request.url);
     const query = url.searchParams.get('q');
