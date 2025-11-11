@@ -101,10 +101,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: [
-        'Введите текст рассылки (до 4096 символов).',
-        'Следующее сообщение уйдёт всем получателям минимальной модели.',
-      ].join('\n'),
+      text: 'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст',
     });
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'awaiting_text' });
@@ -148,19 +145,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     const scheduled = waitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
 
-    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
-    });
-
     deferred.resolve({ delivered: 3, failed: 0, deliveries: [] });
     await scheduled;
 
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: ['📣 Рассылка отправлена.', 'Получателей: 3.'].join('\n'),
+      text: '✅ Рассылка отправлена!',
     });
   });
 
@@ -248,11 +239,6 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(result).toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
-    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
-    });
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
@@ -260,17 +246,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
-  it('supports /admin broadcast alias', async () => {
-    const sendTextMock = vi.fn().mockResolvedValue({});
-    const { handler } = createHandler({ sendTextMock });
-
-    const response = await handler.handleCommand(createContext({ command: '/admin', argument: 'broadcast' }));
-
-    expect(sendTextMock).toHaveBeenCalled();
-    expect(response?.status).toBe(200);
-  });
-
-  it('warns admin about unsupported /admin broadcast subcommands', async () => {
+  it('warns admin about unsupported /admin broadcast usage', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
 
@@ -279,10 +255,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: [
-        'Мгновенная рассылка поддерживает только /broadcast без дополнительных аргументов.',
-        'Отправьте /broadcast (или /admin broadcast), затем текст сообщения для немедленной доставки.',
-      ].join('\n'),
+      text: 'Мгновенная рассылка доступна только через команду /broadcast без аргументов.',
     });
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
@@ -291,6 +264,31 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(result).toBeUndefined();
     expect(sendBroadcastMock).not.toHaveBeenCalled();
+
+    const baseAliasResponse = await handler.handleCommand(createContext({ command: '/admin', argument: 'broadcast' }));
+
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Мгновенная рассылка доступна только через команду /broadcast без аргументов.',
+    });
+    await expect(baseAliasResponse?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
+  });
+
+  it('cancels broadcast when admin sends /cancel', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    await handler.handleCommand(createContext());
+    const result = await handler.handleMessage(createIncomingMessage('/cancel'));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.',
+    });
   });
 
   it('clears pending broadcast when admin runs another command', async () => {
@@ -421,10 +419,7 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: [
-        'Введите текст рассылки (до 4096 символов).',
-        'Следующее сообщение уйдёт всем получателям минимальной модели.',
-      ].join('\n'),
+      text: 'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст',
     });
 
     messaging.sendText.mockClear();
@@ -472,12 +467,6 @@ describe('worker integration for broadcast command', () => {
     expect(typeof backgroundTask?.then).toBe('function');
 
     expect(messaging.sendText).toHaveBeenNthCalledWith(1, {
-      chatId: 'chat-1',
-      threadId: '77',
-      text: '📣 Рассылка запущена. Ожидайте отчёт о доставке.',
-    });
-
-    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
       chatId: 'subscriber-1',
       threadId: undefined,
       text: 'Всем привет',
@@ -489,10 +478,7 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: [
-        '📣 Рассылка отправлена.',
-        'Получателей: 1.',
-      ].join('\n'),
+      text: '✅ Рассылка отправлена!',
     });
 
     expect(adminKv.get).toHaveBeenCalledWith('whitelist', 'text');

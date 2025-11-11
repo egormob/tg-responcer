@@ -125,7 +125,7 @@ const textDecoder = new TextDecoder('utf-8');
 const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
   '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
-  '- /broadcast — мгновенная рассылка: отправьте /broadcast (или /admin broadcast), затем текст сообщения для немедленной доставки.',
+  '- /broadcast — мгновенная рассылка',
   '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 30 секунд.',
 ].join('\n');
 
