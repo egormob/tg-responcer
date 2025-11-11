@@ -8,6 +8,7 @@
 ### `core/DialogEngine` и `ports/*`
 - Диалоговый контур вызывает порты в порядке «rateLimit → storage.saveUser → storage.appendMessage(user) → messaging.sendTyping → ai.reply → storage.appendMessage(assistant) → messaging.sendText».
 - Интерфейсы портов принимают только `model`/контекст, отсутствуют ссылки на `assistantId`.
+- **Критерий целостности:** при ошибке `messaging.sendText` сохранение `assistant` подавляется; в логах фиксируется `[dialog-engine][sendText][error]` без последующей записи `assistant` без `messageId` (см. `../logs/cloudflare-sendtext-failure-2025-11-16.log`).
 - Тесты: `apps/worker-main/core/__tests__/DialogEngine.test.ts` и общий прогон `npm test`.
 
 ### `adapters/openai-responses`

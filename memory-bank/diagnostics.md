@@ -14,11 +14,11 @@
    *Impact:* Users lose replies, admins see false incident spikes; violates priority №1.  
    *Status:* Pending fix — Step 3 of roadmap.
 
-3. **Assistant replies persisted before successful send**  
-   *Scope:* `DialogEngine.handleMessage` stores assistant message prior to `messaging.sendText`.  
-   *Symptoms:* Conversation history diverges when Telegram delivery fails; exports show phantom answers.  
-   *Impact:* Breaks priorities №1 and №2 (consistency of stored dialogue).  
-   *Status:* Pending fix — Step 3 of roadmap.
+3. **Assistant replies persisted before successful send**
+   *Scope:* `DialogEngine.handleMessage` stores assistant message prior to `messaging.sendText`.
+   *Symptoms:* Conversation history diverges when Telegram delivery fails; exports show phantom answers.
+   *Impact:* Breaks priorities №1 and №2 (consistency of stored dialogue).
+   *Status:* Resolved — 2025-11-16 проверка 3.1 завершена на продовом чате: записи `assistant` появляются только после подтверждённой отправки, содержат `messageId`, дублей и записей без `messageId` не обнаружено; fallback не срабатывал. См. [Cloudflare лог негативного прогона](../logs/cloudflare-sendtext-failure-2025-11-16.log) с подавленной записью `assistant` при искусственном отказе `sendText`.
 
 4. **D1 adapter exhausts retries too early**  
    *Scope:* `apps/worker-main/adapters/d1-storage/index.ts` (`runWithRetry`).  
@@ -53,6 +53,7 @@
 ## Observed signals & references
 
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
+- Cloudflare negative run (2025-11-16) — [dialog-engine][sendText][error] зафиксирован, сохранение `assistant` подавлено, запись отсутствует без `messageId` (см. `../logs/cloudflare-sendtext-failure-2025-11-16.log`).
 - Admin export CSV missing user conversations and UTM column.
 - Self-test payload from `https://tg-responcer.egormob.workers.dev/admin/selftest?token=***` returning 500 with `openAiOk: false`.
 - Lossless Telegram ID parser подтверждён: `chatIdRawType` и `chatIdNormalizedHash` стабильны, ручной прогон `/start`/self-test не показывает `400 Bad Request` от Bot API.
