@@ -72,13 +72,29 @@ export class DialogEngine {
       return { status: 'rate_limited' };
     }
 
+    const typingPromise = messaging.sendTyping({
+      chatId: message.chat.id,
+      threadId: message.chat.threadId,
+    });
+    let typingHandled = false;
+    const awaitTyping = async () => {
+      try {
+        await typingPromise;
+      } finally {
+        typingHandled = true;
+      }
+    };
+    let mainError: unknown = null;
+
     const timestamp = message.receivedAt;
-    await storage.saveUser({
+    const updatedAt = this.now();
+
+    const saveUserPromise = storage.saveUser({
       ...message.user,
-      updatedAt: this.now(),
+      updatedAt,
     });
 
-    await storage.appendMessage({
+    const appendUserMessagePromise = storage.appendMessage({
       userId: message.user.userId,
       chatId: message.chat.id,
       threadId: message.chat.threadId,
@@ -88,48 +104,79 @@ export class DialogEngine {
       metadata: message.messageId ? { messageId: message.messageId } : undefined,
     });
 
-    const recentMessages = await storage.getRecentMessages({
+    const recentMessagesPromise = storage.getRecentMessages({
       userId: message.user.userId,
       limit: this.recentMessagesLimit,
     });
 
-    await messaging.sendTyping({
-      chatId: message.chat.id,
-      threadId: message.chat.threadId,
-    });
+    try {
+      const [saveUserResult, appendUserMessageResult, recentMessagesResult] = await Promise.allSettled([
+        saveUserPromise,
+        appendUserMessagePromise,
+        recentMessagesPromise,
+      ]);
 
-    const aiReply = await ai.reply({
-      userId: message.user.userId,
-      text: message.text,
-      context: this.mapToConversationTurns(
-        this.excludeIncomingMessageFromContext(recentMessages, message),
-      ),
-    });
+      if (saveUserResult.status === 'rejected') {
+        throw saveUserResult.reason;
+      }
 
-    const replyTimestamp = this.now();
-    await storage.appendMessage({
-      userId: message.user.userId,
-      chatId: message.chat.id,
-      threadId: message.chat.threadId,
-      role: 'assistant',
-      text: aiReply.text,
-      timestamp: replyTimestamp,
-      metadata: aiReply.metadata,
-    });
+      if (appendUserMessageResult.status === 'rejected') {
+        throw appendUserMessageResult.reason;
+      }
 
-    const sentMessage = await messaging.sendText({
-      chatId: message.chat.id,
-      threadId: message.chat.threadId,
-      text: aiReply.text,
-    });
+      if (recentMessagesResult.status === 'rejected') {
+        throw recentMessagesResult.reason;
+      }
 
-    return {
-      status: 'replied',
-      response: {
+      await awaitTyping();
+
+      const recentMessages = recentMessagesResult.value;
+
+      const aiReply = await ai.reply({
+        userId: message.user.userId,
+        text: message.text,
+        context: this.mapToConversationTurns(
+          this.excludeIncomingMessageFromContext(recentMessages, message),
+        ),
+      });
+
+      const replyTimestamp = this.now();
+      await storage.appendMessage({
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        role: 'assistant',
         text: aiReply.text,
-        messageId: sentMessage?.messageId,
-      },
-    };
+        timestamp: replyTimestamp,
+        metadata: aiReply.metadata,
+      });
+
+      const sentMessage = await messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text: aiReply.text,
+      });
+
+      return {
+        status: 'replied',
+        response: {
+          text: aiReply.text,
+          messageId: sentMessage?.messageId,
+        },
+      };
+    } catch (error) {
+      mainError = error;
+      throw error;
+    } finally {
+      if (!typingHandled) {
+        await typingPromise.catch((typingError) => {
+          if (mainError == null) {
+            throw typingError;
+          }
+          return undefined;
+        });
+      }
+    }
   }
 
   private mapToConversationTurns(messages: StoredMessage[]): ConversationTurn[] {

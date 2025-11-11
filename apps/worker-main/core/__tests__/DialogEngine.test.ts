@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { DialogEngine } from '../DialogEngine';
 import type { AiPort, MessagingPort, RateLimitPort, StoragePort, StoredMessage } from '../../ports';
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
 function createMessageOverrides(overrides: Partial<Parameters<DialogEngine['handleMessage']>[0]> = {}) {
   return {
     user: {
@@ -227,5 +239,114 @@ describe('DialogEngine', () => {
     expect(messaging.sendTyping).not.toHaveBeenCalled();
     expect(ai.reply).not.toHaveBeenCalled();
     expect(messaging.sendText).not.toHaveBeenCalled();
+  });
+
+  it('запускает typing до завершения операций хранения', async () => {
+    let resolveTyping!: () => void;
+    const typingInvoked = new Promise<void>((resolve) => {
+      resolveTyping = resolve;
+    });
+
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockImplementation(async () => {
+        resolveTyping();
+        return undefined;
+      }),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'sent' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const saveUserDeferred = createDeferred<{ utmDegraded: boolean }>();
+    let saveUserResolved = false;
+    const appendDeferred = createDeferred<void>();
+    let appendResolved = false;
+    const getRecentDeferred = createDeferred<StoredMessage[]>();
+    let getRecentResolved = false;
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockImplementation(async () => {
+        const result = await saveUserDeferred.promise;
+        saveUserResolved = true;
+        return result;
+      }),
+      appendMessage: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await appendDeferred.promise;
+          appendResolved = true;
+        })
+        .mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockImplementation(async () => {
+        const result = await getRecentDeferred.promise;
+        getRecentResolved = true;
+        return result;
+      }),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockResolvedValue({ text: 'Ответ', metadata: {} }),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const nowValues = [new Date('2024-01-01T10:00:00Z'), new Date('2024-01-01T10:00:01Z')];
+    const now = vi.fn(() => {
+      const value = nowValues.shift();
+      if (!value) {
+        return new Date('2024-01-01T10:00:01Z');
+      }
+      return value;
+    });
+
+    const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+
+    const handlePromise = engine.handleMessage(createMessageOverrides());
+
+    await typingInvoked;
+
+    expect(messaging.sendTyping).toHaveBeenCalledTimes(1);
+    expect(storage.saveUser).toHaveBeenCalledTimes(1);
+    expect(storage.appendMessage).toHaveBeenCalledTimes(1);
+    expect(storage.getRecentMessages).toHaveBeenCalledTimes(1);
+
+    const sendTypingOrder = (messaging.sendTyping as unknown as { mock: { invocationCallOrder: number[] } }).mock
+      .invocationCallOrder[0];
+    const saveUserCallOrder = (storage.saveUser as unknown as { mock: { invocationCallOrder: number[] } }).mock
+      .invocationCallOrder[0];
+    const appendCallOrder = (storage.appendMessage as unknown as { mock: { invocationCallOrder: number[] } }).mock
+      .invocationCallOrder[0];
+
+    expect(sendTypingOrder).toBeLessThan(saveUserCallOrder);
+    expect(sendTypingOrder).toBeLessThan(appendCallOrder);
+
+    expect(saveUserResolved).toBe(false);
+    expect(appendResolved).toBe(false);
+    expect(getRecentResolved).toBe(false);
+
+    saveUserDeferred.resolve({ utmDegraded: false });
+    appendDeferred.resolve();
+
+    await Promise.resolve();
+
+    expect(storage.getRecentMessages).toHaveBeenCalledTimes(1);
+
+    getRecentDeferred.resolve([]);
+
+    const result = await handlePromise;
+
+    expect(result).toEqual({
+      status: 'replied',
+      response: {
+        text: 'Ответ',
+        messageId: 'sent',
+      },
+    });
+
+    expect(saveUserResolved).toBe(true);
+    expect(appendResolved).toBe(true);
+    expect(getRecentResolved).toBe(true);
   });
 });
