@@ -28,3 +28,4 @@ id = "6e0669bae62c48d5a8d64d11602e9d6d"
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
 # values are managed as secrets (see `scripts/bootstrap-cloudflare-secrets.sh`).
 CONFIG_REQUIRED_SECRETS = "OPENAI_API_KEY,OPENAI_MODEL,OPENAI_PROMPT_ID,OPENAI_PROMPT_VARIABLES,TELEGRAM_BOT_TOKEN,TELEGRAM_WEBHOOK_SECRET,ADMIN_TOKEN"
+STRESS_TEST_ENABLED = "0"
