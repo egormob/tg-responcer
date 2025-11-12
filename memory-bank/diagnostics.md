@@ -55,6 +55,7 @@
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
 - Smoke-прогон варианта A: `memory-bank/logs/ai-queue-smoke-2025-11-16.md` с ссылками на tail-лог и снимок диагностики.
 - Cloudflare negative run (2025-11-16) — [dialog-engine][sendText][error] зафиксирован, сохранение `assistant` подавлено, запись отсутствует без `messageId` (см. `../logs/cloudflare-sendtext-failure-2025-11-16.log`).
+- Стресс-тест AI/D1 (2025-11-17) — см. `../logs/stress-test-2025-11-17-ai-queue.md`: `/admin/diag?q=ai-queue` стабильно возвращает `active=0`, `queued=0`, `droppedSinceBoot=0`, `maxConcurrency=4`, `maxQueue=64`; в Observability нет `[ai][timeout]`/`[ai][dropped]`, но стресс-ручка D1 доходит до `max_retries_exceeded` после 6 попыток.
 - Admin export CSV missing user conversations and UTM column.
 - Self-test payload from `https://tg-responcer.egormob.workers.dev/admin/selftest?token=***` returning 500 with `openAiOk: false`.
 - Lossless Telegram ID parser подтверждён: `chatIdRawType` и `chatIdNormalizedHash` стабильны, ручной прогон `/start`/self-test не показывает `400 Bad Request` от Bot API.
