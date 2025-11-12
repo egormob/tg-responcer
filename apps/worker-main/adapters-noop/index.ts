@@ -97,6 +97,16 @@ export const createNoopAiPort = (options?: CreateNoopPortsOptions): AiPort => ({
       },
     };
   },
+  getQueueStats() {
+    return {
+      active: 0,
+      queued: 0,
+      maxConcurrency: 0,
+      maxQueue: 0,
+      droppedSinceBoot: 0,
+      avgWaitMs: 0,
+    };
+  },
 });
 
 export const createNoopStoragePort = (): StoragePort => ({

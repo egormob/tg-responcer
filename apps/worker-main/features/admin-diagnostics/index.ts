@@ -8,3 +8,5 @@ export { createKnownUsersClearRoute } from './known-users-route';
 export type { CreateKnownUsersClearRouteOptions } from './known-users-route';
 export { createD1StressRoute } from './d1-stress-route';
 export type { CreateD1StressRouteOptions } from './d1-stress-route';
+export { createAiQueueDiagRoute } from './ai-queue-route';
+export type { CreateAiQueueDiagRouteOptions } from './ai-queue-route';

@@ -1,6 +1,6 @@
-import type { AiPort, ConversationTurn } from '../../ports';
+import type { AiPort, AiQueueStats, ConversationTurn } from '../../ports';
 import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
-import { createAiLimiter } from './concurrency-limiter';
+import { createAiLimiter, type AiLimiterStats } from './concurrency-limiter';
 import { getFriendlyOverloadMessage } from './overload-message';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
@@ -97,6 +97,23 @@ const buildInputMessages = (
     },
   ];
 };
+
+const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
+  active: stats.active,
+  queued: stats.queued,
+  maxConcurrency: stats.maxConcurrency,
+  maxQueue: stats.maxQueueSize,
+  droppedSinceBoot: stats.droppedSinceBoot,
+  avgWaitMs: stats.avgWaitMs,
+});
+
+const createQueueLogPayload = (
+  stats: AiLimiterStats,
+  extra: Record<string, unknown>,
+): Record<string, unknown> => ({
+  ...mapLimiterStatsToQueueStats(stats),
+  ...extra,
+});
 
 const extractTextFromPayload = (
   payload: ResponsesApiSuccessPayload,
@@ -393,6 +410,9 @@ export const createOpenAIResponsesAdapter = (
   };
 
   return {
+    getQueueStats(): AiQueueStats {
+      return mapLimiterStatsToQueueStats(limiter.getStats());
+    },
     async reply(input) {
       const previousResponseId = extractPreviousResponseId(input.context);
 
@@ -425,16 +445,22 @@ export const createOpenAIResponsesAdapter = (
         const remainingBeforeAcquire = deadline - Date.now();
         if (remainingBeforeAcquire <= 0) {
           // eslint-disable-next-line no-console
-          console.error('[ai][timeout]', {
-            phase: 'budget_exhausted',
-            attempt: attempt + 1,
-            userIdHash,
-          });
+          console.error(
+            '[ai][timeout]',
+            createQueueLogPayload(limiter.getStats(), {
+              phase: 'budget_exhausted',
+              attempt: attempt + 1,
+              userIdHash,
+              requestId: null,
+              queueWaitMs: 0,
+            }),
+          );
           throw new Error('AI_QUEUE_TIMEOUT');
         }
 
         let release: (() => void) | undefined;
         let queueWaitMs = 0;
+        let lastDropStats: AiLimiterStats | undefined;
         let shouldRetry = false;
         let retryDelayMs = 0;
 
@@ -442,30 +468,46 @@ export const createOpenAIResponsesAdapter = (
           release = await limiter.acquire({
             onQueue: (stats) => {
               // eslint-disable-next-line no-console
-              console.info('[ai][limiter-queued]', stats);
+              console.info(
+                '[ai][queue_enter]',
+                createQueueLogPayload(stats, {
+                  requestId: null,
+                  userIdHash,
+                  queueWaitMs: 0,
+                }),
+              );
             },
             onAcquire: ({ queueWaitMs: waitMs, ...stats }) => {
               queueWaitMs = waitMs;
               // eslint-disable-next-line no-console
-              console.info('[ai][limiter-acquired]', { ...stats, queueWaitMs: waitMs });
+              console.info(
+                '[ai][queue_leave]',
+                createQueueLogPayload(stats, {
+                  requestId: null,
+                  userIdHash,
+                  queueWaitMs: waitMs,
+                }),
+              );
             },
             onDrop: (stats) => {
-              // eslint-disable-next-line no-console
-              console.error('[ai][limiter-dropped]', stats);
+              lastDropStats = stats;
             },
           });
         } catch (error) {
           if (error instanceof Error && error.message === 'AI_QUEUE_DROPPED') {
-            const stats = limiter.getStats();
+            const stats = lastDropStats ?? limiter.getStats();
             logger?.error?.('openai-responses queue full', stats);
             // eslint-disable-next-line no-console
-            console.error('[ai][dropped]', {
-              reason: 'queue_overflow',
-              userIdHash,
-              active: stats.active,
-              queued: stats.queued,
-              maxQueueSize: stats.maxQueueSize,
-            });
+            console.error(
+              '[ai][dropped]',
+              createQueueLogPayload(stats, {
+                reason: 'queue_overflow',
+                userIdHash,
+                requestId: null,
+                queueWaitMs: 0,
+              }),
+            );
+            lastDropStats = undefined;
 
             return {
               text: overloadMessage,
@@ -484,12 +526,16 @@ export const createOpenAIResponsesAdapter = (
           const now = Date.now();
           if (now > deadline) {
             // eslint-disable-next-line no-console
-            console.error('[ai][timeout]', {
-              phase: 'queue_wait',
-              attempt: attempt + 1,
-              queueWaitMs,
-              userIdHash,
-            });
+            console.error(
+              '[ai][timeout]',
+              createQueueLogPayload(limiter.getStats(), {
+                phase: 'queue_wait',
+                attempt: attempt + 1,
+                queueWaitMs,
+                userIdHash,
+                requestId: null,
+              }),
+            );
             throw new Error('AI_QUEUE_TIMEOUT');
           }
 
@@ -558,12 +604,16 @@ export const createOpenAIResponsesAdapter = (
               : undefined;
 
           // eslint-disable-next-line no-console
-          console.warn('[ai][retry]', {
-            attempt: attempt + 1,
-            reason,
-            requestId: requestId ?? null,
-            userIdHash,
-          });
+          console.warn(
+            '[ai][retry]',
+            createQueueLogPayload(limiter.getStats(), {
+              attempt: attempt + 1,
+              reason,
+              requestId: requestId ?? null,
+              userIdHash,
+              queueWaitMs,
+            }),
+          );
 
           const baseDelayMs = 1_000 * 2 ** attempt;
           const jitterFactor = 0.8 + Math.random() * 0.4;
@@ -577,11 +627,16 @@ export const createOpenAIResponsesAdapter = (
           const remainingBeforeSleep = deadline - Date.now();
           if (remainingBeforeSleep <= 0) {
             // eslint-disable-next-line no-console
-            console.error('[ai][timeout]', {
-              phase: 'before_retry_sleep',
-              attempt: attempt + 1,
-              userIdHash,
-            });
+            console.error(
+              '[ai][timeout]',
+              createQueueLogPayload(limiter.getStats(), {
+                phase: 'before_retry_sleep',
+                attempt: attempt + 1,
+                userIdHash,
+                requestId: null,
+                queueWaitMs,
+              }),
+            );
             throw new Error('AI_QUEUE_TIMEOUT');
           }
 
