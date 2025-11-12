@@ -95,7 +95,7 @@ const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
 const DEFAULT_AI_TIMEOUT_MS = 12_000;
 const DEFAULT_AI_RETRY_MAX = 2;
 
-const toPositiveInteger = (value: string | number | undefined): number | undefined => {
+const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
     if (Number.isFinite(value) && value > 0) {
       return Math.floor(value);
@@ -118,7 +118,7 @@ const toPositiveInteger = (value: string | number | undefined): number | undefin
   return undefined;
 };
 
-const toNonNegativeInteger = (value: string | number | undefined): number | undefined => {
+const toNonNegativeInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
     if (Number.isFinite(value) && value >= 0) {
       return Math.floor(value);
@@ -141,7 +141,7 @@ const toNonNegativeInteger = (value: string | number | undefined): number | unde
   return undefined;
 };
 
-const toPositiveDurationMs = (value: string | number | undefined): number | undefined => {
+const toPositiveDurationMs = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
     if (Number.isFinite(value) && value > 0) {
       return Math.floor(value);
@@ -265,43 +265,58 @@ const parseBroadcastRecipients = (
 const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyConfig> => {
   const kv = env.AI_CONTROL_KV;
 
-  const readKvValue = async (key: string): Promise<string | undefined> => {
+  const readKvConfig = async (): Promise<Record<string, unknown> | undefined> => {
     if (!kv) {
       return undefined;
     }
 
     try {
-      const raw = await kv.get(key);
+      const raw = await kv.get('AI_QUEUE_CONFIG');
       if (typeof raw !== 'string') {
         return undefined;
       }
 
       const trimmed = raw.trim();
-      return trimmed.length > 0 ? trimmed : undefined;
+      if (trimmed.length === 0) {
+        return undefined;
+      }
+
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!isObjectRecord(parsed)) {
+        console.warn('[ai-config] AI_QUEUE_CONFIG must be a JSON object', { value: trimmed });
+        return undefined;
+      }
+
+      return parsed;
     } catch (error) {
-      console.error('[ai-config] failed to read AI_CONTROL_KV override', { key, error });
+      console.error('[ai-config] failed to read AI_QUEUE_CONFIG', { error });
       return undefined;
     }
   };
 
-  const resolveValue = async (
-    key: string,
-    envValue: string | number | undefined,
-    parser: (value: string | number | undefined) => number | undefined,
+  const kvConfig = await readKvConfig();
+  const sources: Record<string, 'kv' | 'env' | 'default'> = {};
+
+  const resolveValue = (
+    key: 'AI_MAX_CONCURRENCY' | 'AI_QUEUE_MAX_SIZE' | 'AI_TIMEOUT_MS' | 'AI_RETRY_MAX',
+    envValue: unknown,
+    parser: (value: unknown) => number | undefined,
     fallback: number,
-  ): Promise<number> => {
-    const kvOverride = await readKvValue(key);
-    if (kvOverride !== undefined) {
-      const parsed = parser(kvOverride);
+  ): number => {
+    const kvCandidate = kvConfig ? kvConfig[key] : undefined;
+    if (kvCandidate !== undefined) {
+      const parsed = parser(kvCandidate);
       if (parsed !== undefined) {
+        sources[key] = 'kv';
         return parsed;
       }
 
-      console.warn('[ai-config] invalid AI_CONTROL_KV override', { key, value: kvOverride });
+      console.warn('[ai-config] invalid AI_QUEUE_CONFIG override', { key, value: kvCandidate });
     }
 
     const parsedEnv = parser(envValue);
     if (parsedEnv !== undefined) {
+      sources[key] = 'env';
       return parsedEnv;
     }
 
@@ -309,33 +324,50 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
       console.warn('[ai-config] invalid environment override', { key, value: envValue });
     }
 
+    sources[key] = 'default';
     return fallback;
   };
 
-  const maxConcurrency = await resolveValue(
+  const maxConcurrency = resolveValue(
     'AI_MAX_CONCURRENCY',
     env.AI_MAX_CONCURRENCY,
     toPositiveInteger,
     DEFAULT_AI_MAX_CONCURRENCY,
   );
-  const maxQueueSize = await resolveValue(
+  const maxQueueSize = resolveValue(
     'AI_QUEUE_MAX_SIZE',
     env.AI_QUEUE_MAX_SIZE,
     toNonNegativeInteger,
     DEFAULT_AI_QUEUE_MAX_SIZE,
   );
-  const requestTimeoutMs = await resolveValue(
+  const requestTimeoutMs = resolveValue(
     'AI_TIMEOUT_MS',
     env.AI_TIMEOUT_MS,
     toPositiveDurationMs,
     DEFAULT_AI_TIMEOUT_MS,
   );
-  const retryMax = await resolveValue(
+  const retryMax = resolveValue(
     'AI_RETRY_MAX',
     env.AI_RETRY_MAX,
     toPositiveInteger,
     DEFAULT_AI_RETRY_MAX,
   );
+
+  console.info('[ai][config]', {
+    values: {
+      maxConcurrency,
+      maxQueueSize,
+      requestTimeoutMs,
+      retryMax,
+    },
+    sources: {
+      maxConcurrency: sources.AI_MAX_CONCURRENCY ?? 'default',
+      maxQueueSize: sources.AI_QUEUE_MAX_SIZE ?? 'default',
+      requestTimeoutMs: sources.AI_TIMEOUT_MS ?? 'default',
+      retryMax: sources.AI_RETRY_MAX ?? 'default',
+      kvConfig: kvConfig ? 'AI_QUEUE_CONFIG' : null,
+    },
+  });
 
   return {
     maxConcurrency,
