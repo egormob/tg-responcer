@@ -67,11 +67,13 @@ export {
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
   createKnownUsersClearRoute,
+  createAiQueueDiagRoute,
   type CreateSelfTestRouteOptions,
   type CreateEnvzRouteOptions,
   type CreateBindingsDiagnosticsRouteOptions,
   type CreateKnownUsersClearRouteOptions,
   type CreateD1StressRouteOptions,
+  type CreateAiQueueDiagRouteOptions,
 } from './admin-diagnostics';
 export {
   createTelegramWebhookHandler,

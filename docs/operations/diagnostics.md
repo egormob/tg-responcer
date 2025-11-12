@@ -76,6 +76,8 @@ Self-test пишет два читаемых сообщения:
 - `q=bindings` — прогоняет тестовые запросы в D1 и KV. В ответе добавлено
   поле `secrets`, отражающее наличие обязательных секретов без раскрытия
   значений.
+- `q=ai-queue` — показывает состояние очереди AI-лимитера. Ответ содержит
+  `{ active, queued, maxConcurrency, maxQueue, droppedSinceBoot, avgWaitMs }`.
 
 ## `GET /admin/known-users/clear`
 

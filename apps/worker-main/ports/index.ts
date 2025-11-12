@@ -78,6 +78,15 @@ export interface MessagingPort {
   }): Promise<void>;
 }
 
+export interface AiQueueStats {
+  active: number;
+  queued: number;
+  maxConcurrency: number;
+  maxQueue: number;
+  droppedSinceBoot: number;
+  avgWaitMs: number;
+}
+
 export interface AiPort {
   /**
    * Запрашивает ответ у модели, используя текущий ввод пользователя и контекст диалога.
@@ -99,6 +108,7 @@ export interface AiPort {
     text: string;
     metadata?: Record<string, unknown>;
   }>;
+  getQueueStats?(): AiQueueStats;
 }
 
 export interface UserProfile {
