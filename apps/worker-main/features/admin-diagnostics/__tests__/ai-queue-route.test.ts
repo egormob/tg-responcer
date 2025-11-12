@@ -18,8 +18,9 @@ describe('createAiQueueDiagRoute', () => {
         queued: 2,
         maxConcurrency: 4,
         maxQueue: 64,
-        droppedSinceBoot: 3,
+        droppedSinceBoot: 0,
         avgWaitMs: 12,
+        lastDropAt: null,
       }),
     });
 
@@ -28,13 +29,75 @@ describe('createAiQueueDiagRoute', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
+      status: 'ok',
       active: 1,
       queued: 2,
       maxConcurrency: 4,
       maxQueue: 64,
-      droppedSinceBoot: 3,
+      droppedSinceBoot: 0,
       avgWaitMs: 12,
+      lastDropAt: null,
     });
+  });
+
+  it('marks warning when queue usage crosses the threshold', async () => {
+    const ai = createAiPort({
+      getQueueStats: () => ({
+        active: 4,
+        queued: 48,
+        maxConcurrency: 4,
+        maxQueue: 64,
+        droppedSinceBoot: 0,
+        avgWaitMs: 42,
+        lastDropAt: null,
+      }),
+    });
+
+    const route = createAiQueueDiagRoute({ ai });
+    const response = await route(new Request('https://example.test/admin/diag?q=ai-queue'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: 'warning',
+      active: 4,
+      queued: 48,
+      maxConcurrency: 4,
+      maxQueue: 64,
+      droppedSinceBoot: 0,
+      avgWaitMs: 42,
+      lastDropAt: null,
+    });
+  });
+
+  it('marks degraded when drops are observed', async () => {
+    const now = Date.now();
+    const ai = createAiPort({
+      getQueueStats: () => ({
+        active: 4,
+        queued: 64,
+        maxConcurrency: 4,
+        maxQueue: 64,
+        droppedSinceBoot: 2,
+        avgWaitMs: 75,
+        lastDropAt: now,
+      }),
+    });
+
+    const route = createAiQueueDiagRoute({ ai });
+    const response = await route(new Request('https://example.test/admin/diag?q=ai-queue'));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.status).toBe('degraded');
+    expect(body).toMatchObject({
+      active: 4,
+      queued: 64,
+      maxConcurrency: 4,
+      maxQueue: 64,
+      droppedSinceBoot: 2,
+      avgWaitMs: 75,
+    });
+    expect(body.lastDropAt).toBe(new Date(now).toISOString());
   });
 
   it('returns 503 when queue stats are unavailable', async () => {
@@ -58,6 +121,7 @@ describe('createAiQueueDiagRoute', () => {
         maxQueue: 1,
         droppedSinceBoot: 0,
         avgWaitMs: 0,
+        lastDropAt: null,
       }),
     });
     const route = createAiQueueDiagRoute({ ai });
@@ -76,6 +140,7 @@ describe('createAiQueueDiagRoute', () => {
         maxQueue: 1,
         droppedSinceBoot: 0,
         avgWaitMs: 0,
+        lastDropAt: null,
       }),
     });
     const route = createAiQueueDiagRoute({ ai });

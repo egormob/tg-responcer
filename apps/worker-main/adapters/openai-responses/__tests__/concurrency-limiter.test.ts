@@ -57,6 +57,7 @@ describe('createAiLimiter', () => {
       maxConcurrency: 1,
       maxQueueSize: 2,
       avgWaitMs: 25,
+      lastDropAt: null,
     });
   });
 
@@ -65,19 +66,23 @@ describe('createAiLimiter', () => {
 
     const release = await limiter.acquire();
     await expect(limiter.acquire()).rejects.toThrow('AI_QUEUE_DROPPED');
-    expect(limiter.getStats()).toMatchObject({
+    const droppedStats = limiter.getStats();
+    expect(droppedStats).toMatchObject({
       active: 1,
       queued: 0,
       droppedSinceBoot: 1,
       avgWaitMs: 0,
     });
+    expect(typeof droppedStats.lastDropAt === 'number' && droppedStats.lastDropAt > 0).toBe(true);
 
     release();
-    expect(limiter.getStats()).toMatchObject({
+    const afterReleaseStats = limiter.getStats();
+    expect(afterReleaseStats).toMatchObject({
       active: 0,
       queued: 0,
       droppedSinceBoot: 1,
       avgWaitMs: 0,
     });
+    expect(afterReleaseStats.lastDropAt).toBe(droppedStats.lastDropAt);
   });
 });

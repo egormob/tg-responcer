@@ -1,7 +1,7 @@
 const DEFAULT_MESSAGE_EN =
-  'The assistant is a bit overloaded right now. Please try again in a moment.';
+  "We're swamped with requests 😔 Please give us a few seconds and try again.";
 const DEFAULT_MESSAGE_RU =
-  'Ассистент перегружен. Попробуйте ещё раз через минуту.';
+  'Перегружены запросами 😔 Дай нам пару секунд и попробуй ещё раз.';
 
 const normalizeLanguageCode = (languageCode?: string): string | undefined => {
   if (typeof languageCode !== 'string') {
@@ -24,11 +24,11 @@ export const getFriendlyOverloadMessage = (languageCode?: string): string => {
   }
 
   if (normalized.startsWith('uk')) {
-    return 'Асистент перевантажений. Спробуйте ще раз згодом.';
+    return 'Перевантажені запитами 😔 Дайте нам кілька секунд і спробуйте ще раз.';
   }
 
   if (normalized.startsWith('be')) {
-    return 'Памочнік перагружаны. Калі ласка, паспрабуйце пазней.';
+    return 'Перагружаны запытамі 😔 Дайце нам некалькі секунд і паспрабуйце яшчэ раз.';
   }
 
   return DEFAULT_MESSAGE_EN;

@@ -105,6 +105,7 @@ export const createNoopAiPort = (options?: CreateNoopPortsOptions): AiPort => ({
       maxQueue: 0,
       droppedSinceBoot: 0,
       avgWaitMs: 0,
+      lastDropAt: null,
     };
   },
 });

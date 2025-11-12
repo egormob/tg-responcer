@@ -105,6 +105,7 @@ const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
   maxQueue: stats.maxQueueSize,
   droppedSinceBoot: stats.droppedSinceBoot,
   avgWaitMs: stats.avgWaitMs,
+  lastDropAt: stats.lastDropAt,
 });
 
 const createQueueLogPayload = (

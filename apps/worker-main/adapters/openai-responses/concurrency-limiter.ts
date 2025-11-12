@@ -11,6 +11,7 @@ export interface AiLimiterStats {
   maxConcurrency: number;
   maxQueueSize: number;
   avgWaitMs: number;
+  lastDropAt: number | null;
 }
 
 export interface AcquireRequestContext {
@@ -42,6 +43,7 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
   let dropped = 0;
   let totalQueueWaitMs = 0;
   let completedRequests = 0;
+  let lastDropAt: number | null = null;
   const queue: QueueEntry[] = [];
 
   const getStats = (): AiLimiterStats => ({
@@ -52,6 +54,7 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
     maxQueueSize,
     avgWaitMs:
       completedRequests === 0 ? 0 : Math.round(totalQueueWaitMs / completedRequests),
+    lastDropAt,
   });
 
   const drain = () => {
@@ -99,6 +102,7 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
 
     if (queue.length >= maxQueueSize) {
       dropped += 1;
+      lastDropAt = now();
       const stats = getStats();
       ctx.onDrop?.(stats);
       return Promise.reject(new Error('AI_QUEUE_DROPPED'));

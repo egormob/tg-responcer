@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../ports';
+import { REQUEST_RETRY_PROMPT } from '../shared/fallback-messages';
 import { noteTelegramSnapshot, recordTelegramSnapshotAction } from './telegram-webhook';
 import { applyTelegramIdLogFields } from './telegram-ids';
 
@@ -20,7 +21,7 @@ const shouldSkipSafeFallback = (error: unknown): boolean =>
       || (error as { safeFallback?: unknown }).safeFallback === false),
   );
 
-const DEFAULT_FALLBACK_TEXT = '⚠️ → 🔁💬';
+const DEFAULT_FALLBACK_TEXT = REQUEST_RETRY_PROMPT;
 
 interface SafeWebhookHandlerOptions<T> {
   chat: {

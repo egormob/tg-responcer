@@ -85,6 +85,7 @@ export interface AiQueueStats {
   maxQueue: number;
   droppedSinceBoot: number;
   avgWaitMs: number;
+  lastDropAt: number | null;
 }
 
 export interface AiPort {
