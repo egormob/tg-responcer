@@ -7,9 +7,10 @@ export interface AiLimiterConfig {
 export interface AiLimiterStats {
   active: number;
   queued: number;
-  dropped: number;
+  droppedSinceBoot: number;
   maxConcurrency: number;
   maxQueueSize: number;
+  avgWaitMs: number;
 }
 
 export interface AcquireRequestContext {
@@ -39,14 +40,18 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
 
   let active = 0;
   let dropped = 0;
+  let totalQueueWaitMs = 0;
+  let completedRequests = 0;
   const queue: QueueEntry[] = [];
 
   const getStats = (): AiLimiterStats => ({
     active,
     queued: queue.length,
-    dropped,
+    droppedSinceBoot: dropped,
     maxConcurrency,
     maxQueueSize,
+    avgWaitMs:
+      completedRequests === 0 ? 0 : Math.round(totalQueueWaitMs / completedRequests),
   });
 
   const drain = () => {
@@ -58,6 +63,8 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
 
       active += 1;
       const queueWaitMs = Math.max(0, now() - entry.enqueuedAt);
+      completedRequests += 1;
+      totalQueueWaitMs += queueWaitMs;
       entry.ctx.onAcquire?.({ ...getStats(), queueWaitMs });
       entry.resolve(createRelease());
     }
@@ -82,7 +89,11 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
 
     if (active < maxConcurrency) {
       active += 1;
-      ctx.onAcquire?.({ ...getStats(), queueWaitMs: 0 });
+      completedRequests += 1;
+      ctx.onAcquire?.({
+        ...getStats(),
+        queueWaitMs: 0,
+      });
       return Promise.resolve(createRelease());
     }
 

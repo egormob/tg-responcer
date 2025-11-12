@@ -50,7 +50,14 @@ describe('createAiLimiter', () => {
       { phase: 'third-acquired', active: 1, queued: 0, queueWaitMs: 50 },
     ]);
 
-    expect(limiter.getStats()).toEqual({ active: 0, queued: 0, dropped: 0, maxConcurrency: 1, maxQueueSize: 2 });
+    expect(limiter.getStats()).toEqual({
+      active: 0,
+      queued: 0,
+      droppedSinceBoot: 0,
+      maxConcurrency: 1,
+      maxQueueSize: 2,
+      avgWaitMs: 25,
+    });
   });
 
   it('rejects when the queue is full and tracks drops', async () => {
@@ -58,9 +65,19 @@ describe('createAiLimiter', () => {
 
     const release = await limiter.acquire();
     await expect(limiter.acquire()).rejects.toThrow('AI_QUEUE_DROPPED');
-    expect(limiter.getStats()).toMatchObject({ active: 1, queued: 0, dropped: 1 });
+    expect(limiter.getStats()).toMatchObject({
+      active: 1,
+      queued: 0,
+      droppedSinceBoot: 1,
+      avgWaitMs: 0,
+    });
 
     release();
-    expect(limiter.getStats()).toMatchObject({ active: 0, queued: 0, dropped: 1 });
+    expect(limiter.getStats()).toMatchObject({
+      active: 0,
+      queued: 0,
+      droppedSinceBoot: 1,
+      avgWaitMs: 0,
+    });
   });
 });

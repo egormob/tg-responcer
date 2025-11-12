@@ -18,6 +18,7 @@ import {
   createCsvExportHandler,
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
+  createAiQueueDiagRoute,
   createKnownUsersClearRoute,
   createD1StressRoute,
   createImmediateBroadcastSender,
@@ -499,6 +500,12 @@ const createAdminRoutes = (
     return undefined;
   }
 
+  const bindingsDiagRoute = createBindingsDiagnosticsRoute({
+    storage: composition.ports.storage,
+    env,
+  });
+  const aiQueueDiagRoute = createAiQueueDiagRoute({ ai: composition.ports.ai });
+
   const routes: RouterOptions['admin'] = {
     token: adminToken,
     selfTest: createSelfTestRoute({
@@ -520,10 +527,14 @@ const createAdminRoutes = (
       adminAccess,
       adminErrorRecorder,
     }),
-    diag: createBindingsDiagnosticsRoute({
-      storage: composition.ports.storage,
-      env,
-    }),
+    diag: async (request) => {
+      const url = new URL(request.url);
+      const query = url.searchParams.get('q');
+      if ((query ?? '').toLowerCase() === 'ai-queue') {
+        return aiQueueDiagRoute(request);
+      }
+      return bindingsDiagRoute(request);
+    },
     knownUsersClear: createKnownUsersClearRoute({
       cache: knownUsers,
     }),
