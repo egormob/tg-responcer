@@ -15,7 +15,7 @@
     * диагностический маркер OpenAI (`openAiMarkerPresent`) — его отсутствие оставляет
       ответ в состоянии `openAiOk: false`, но не приводит к `500`.
 * `GET /admin/envz` — отображает булевы флаги наличия ключевых переменных окружения
-  (`TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `ADMIN_EXPORT_TOKEN`, `ADMIN_TOKEN`, `DB`, `RATE_LIMIT_KV`).
+  (`TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `ADMIN_EXPORT_TOKEN`, `ADMIN_TOKEN`, `DB`, `RATE_LIMIT_KV`, `AI_CONTROL_KV`).
 
 ## Админ-команды в Telegram
 
