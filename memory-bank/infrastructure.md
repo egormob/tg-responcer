@@ -29,6 +29,7 @@ _Обновлено: 2025-11-13_
 - **Обязательные биндинги:**
   - `DB` — подключается к `createD1StorageAdapter`; без привязки база не используется, а экспорт и хранение истории недоступны. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/d1-storage`.
   - `RATE_LIMIT_KV` — требуется `createKvRateLimitAdapter` и `createRateLimitNotifier` для подсчёта и уведомлений о лимитах. См. `apps/worker-main/index.ts` и адаптер `apps/worker-main/adapters/kv-rate-limit`.
+  - `AI_CONTROL_KV` — namespace `ai-control-kv-prod`, Namespace ID `26fef8228c074edaaf20d3b1b8d42811`. Используется AI-контуром для управления поведением ответов; биндинг должен присутствовать в `wrangler.toml` перед деплоем.
 
 ### Процедура проверки наличия значений
 1. Перед деплоем в Cloudflare Dashboard откройте Workers → `tg-responcer` → Settings → Variables и убедитесь, что `OPENAI_MODEL` находится в секции **Secrets** (не plaintext) вместе с `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`. Plaintext-переменные (например, `CONFIG_REQUIRED_SECRETS`) подтягиваются из `wrangler.toml`; редактировать их нужно через Git, а не вручную в UI.
