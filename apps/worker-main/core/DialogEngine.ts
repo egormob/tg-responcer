@@ -12,6 +12,7 @@ import type {
   StoredMessage,
   UserProfile,
 } from '../ports';
+import { getFriendlyOverloadMessage } from '../adapters/openai-responses/overload-message';
 
 export interface DialogEngineOptions {
   /**
@@ -132,13 +133,32 @@ export class DialogEngine {
 
       const recentMessages = recentMessagesResult.value;
 
-      const aiReply = await ai.reply({
-        userId: message.user.userId,
-        text: message.text,
-        context: this.mapToConversationTurns(
-          this.excludeIncomingMessageFromContext(recentMessages, message),
-        ),
-      });
+      let aiReply: Awaited<ReturnType<AiPort['reply']>>;
+      try {
+        aiReply = await ai.reply({
+          userId: message.user.userId,
+          text: message.text,
+          context: this.mapToConversationTurns(
+            this.excludeIncomingMessageFromContext(recentMessages, message),
+          ),
+          languageCode: message.user.languageCode,
+        });
+      } catch (error) {
+        if (
+          error instanceof Error
+          && (error.message === 'AI_QUEUE_TIMEOUT' || error.message === 'AI_QUEUE_DROPPED')
+        ) {
+          aiReply = {
+            text: getFriendlyOverloadMessage(message.user.languageCode),
+            metadata: {
+              degraded: true,
+              reason: error.message,
+            },
+          };
+        } else {
+          throw error;
+        }
+      }
 
       const replyTimestamp = this.now();
       const sentMessage = await this.sendAssistantReply({

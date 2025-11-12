@@ -94,6 +94,7 @@ export interface AiPort {
     userId: string;
     text: string;
     context: ReadonlyArray<ConversationTurn>;
+    languageCode?: string;
   }): Promise<{
     text: string;
     metadata?: Record<string, unknown>;

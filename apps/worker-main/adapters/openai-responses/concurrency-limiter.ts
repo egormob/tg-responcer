@@ -90,7 +90,7 @@ export const createAiLimiter = (config: AiLimiterConfig) => {
       dropped += 1;
       const stats = getStats();
       ctx.onDrop?.(stats);
-      return Promise.reject(new Error('AI_QUEUE_FULL'));
+      return Promise.reject(new Error('AI_QUEUE_DROPPED'));
     }
 
     return new Promise<() => void>((resolve) => {
