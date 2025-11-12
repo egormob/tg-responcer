@@ -12,6 +12,10 @@ binding = "RATE_LIMIT_KV"
 id = "d03442f14f7e4a64bb1d7896244a0d3f"
 
 [[kv_namespaces]]
+binding = "AI_CONTROL_KV"
+id = "00000000000000000000000000000000"
+
+[[kv_namespaces]]
 binding = "ADMIN_EXPORT_LOG"
 id = "3da8d75b18b548ceb528fac891f6bb24"
 

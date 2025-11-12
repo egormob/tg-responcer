@@ -68,6 +68,11 @@ interface WorkerBindings {
   DB?: D1Database;
   RATE_LIMIT_KV?: WorkerRateLimitNamespace;
   STRESS_TEST_ENABLED?: unknown;
+  AI_CONTROL_KV?: KVNamespace;
+  AI_MAX_CONCURRENCY?: string | number;
+  AI_QUEUE_MAX_SIZE?: string | number;
+  AI_TIMEOUT_MS?: string | number;
+  AI_RETRY_MAX?: string | number;
 }
 
 type WorkerRateLimitNamespace = LimitsFlagKvNamespace & RateLimitKvNamespace;
@@ -83,6 +88,11 @@ interface WorkerExecutionContext {
 
 const DEFAULT_RATE_LIMIT = 50;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const DEFAULT_AI_MAX_CONCURRENCY = 4;
+const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
+const DEFAULT_AI_TIMEOUT_MS = 12_000;
+const DEFAULT_AI_RETRY_MAX = 2;
 
 const toPositiveInteger = (value: string | number | undefined): number | undefined => {
   if (typeof value === 'number') {
@@ -251,6 +261,89 @@ const parseBroadcastRecipients = (
   return recipients;
 };
 
+const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyConfig> => {
+  const kv = env.AI_CONTROL_KV;
+
+  const readKvValue = async (key: string): Promise<string | undefined> => {
+    if (!kv) {
+      return undefined;
+    }
+
+    try {
+      const raw = await kv.get(key);
+      if (typeof raw !== 'string') {
+        return undefined;
+      }
+
+      const trimmed = raw.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    } catch (error) {
+      console.error('[ai-config] failed to read AI_CONTROL_KV override', { key, error });
+      return undefined;
+    }
+  };
+
+  const resolveValue = async (
+    key: string,
+    envValue: string | number | undefined,
+    parser: (value: string | number | undefined) => number | undefined,
+    fallback: number,
+  ): Promise<number> => {
+    const kvOverride = await readKvValue(key);
+    if (kvOverride !== undefined) {
+      const parsed = parser(kvOverride);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+
+      console.warn('[ai-config] invalid AI_CONTROL_KV override', { key, value: kvOverride });
+    }
+
+    const parsedEnv = parser(envValue);
+    if (parsedEnv !== undefined) {
+      return parsedEnv;
+    }
+
+    if (envValue !== undefined && envValue !== null) {
+      console.warn('[ai-config] invalid environment override', { key, value: envValue });
+    }
+
+    return fallback;
+  };
+
+  const maxConcurrency = await resolveValue(
+    'AI_MAX_CONCURRENCY',
+    env.AI_MAX_CONCURRENCY,
+    toPositiveInteger,
+    DEFAULT_AI_MAX_CONCURRENCY,
+  );
+  const maxQueueSize = await resolveValue(
+    'AI_QUEUE_MAX_SIZE',
+    env.AI_QUEUE_MAX_SIZE,
+    toNonNegativeInteger,
+    DEFAULT_AI_QUEUE_MAX_SIZE,
+  );
+  const requestTimeoutMs = await resolveValue(
+    'AI_TIMEOUT_MS',
+    env.AI_TIMEOUT_MS,
+    toPositiveDurationMs,
+    DEFAULT_AI_TIMEOUT_MS,
+  );
+  const retryMax = await resolveValue(
+    'AI_RETRY_MAX',
+    env.AI_RETRY_MAX,
+    toPositiveInteger,
+    DEFAULT_AI_RETRY_MAX,
+  );
+
+  return {
+    maxConcurrency,
+    maxQueueSize,
+    requestTimeoutMs,
+    retryMax,
+  };
+};
+
 const normalizePromptId = (value: unknown): string | undefined => {
   const trimmed = getTrimmedString(value);
   if (!trimmed) {
@@ -264,6 +357,13 @@ const normalizePromptId = (value: unknown): string | undefined => {
 
   return trimmed;
 };
+
+interface AiConcurrencyConfig {
+  readonly maxConcurrency: number;
+  readonly maxQueueSize: number;
+  readonly requestTimeoutMs: number;
+  readonly retryMax: number;
+}
 
 interface RuntimeConfig {
   readonly telegramBotToken: string;
@@ -311,12 +411,21 @@ const validateRuntimeConfig = (env: WorkerEnv): RuntimeConfig => {
 const createPortOverrides = (
   env: WorkerEnv,
   runtime: RuntimeConfig,
+  aiRuntime: AiConcurrencyConfig,
 ): Partial<PortOverrides> => {
   const overrides: Partial<PortOverrides> = {
     messaging: createTelegramMessagingAdapter({
       botToken: runtime.telegramBotToken,
     }),
-    ai: createOpenAIResponsesAdapter(runtime.openAi),
+    ai: createOpenAIResponsesAdapter({
+      apiKey: runtime.openAi.apiKey,
+      model: runtime.openAi.model,
+      promptId: runtime.openAi.promptId,
+      promptVariables: runtime.openAi.promptVariables,
+      runtime: aiRuntime,
+      requestTimeoutMs: aiRuntime.requestTimeoutMs,
+      maxRetries: aiRuntime.retryMax,
+    }),
   };
 
   if (env.DB) {
@@ -569,9 +678,10 @@ const createTransformPayload = (
   return telegramWebhookHandler;
 };
 
-const createRequestHandler = (env: WorkerEnv) => {
+const createRequestHandler = async (env: WorkerEnv) => {
   const runtime = validateRuntimeConfig(env);
-  const adapters = createPortOverrides(env, runtime);
+  const aiRuntime = await readAiConcurrencyConfig(env);
+  const adapters = createPortOverrides(env, runtime, aiRuntime);
 
   const composition = composeWorker({
     env: {
@@ -617,7 +727,7 @@ const createRequestHandler = (env: WorkerEnv) => {
   return { router, transformPayload };
 };
 
-type RequestHandlerResult = ReturnType<typeof createRequestHandler>;
+type RequestHandlerResult = Awaited<ReturnType<typeof createRequestHandler>>;
 
 type RouterCacheEntry = RequestHandlerResult & { version?: string | number };
 
@@ -654,24 +764,33 @@ const getEnvironmentVersion = (env: WorkerEnv): string | number | undefined => {
   return undefined;
 };
 
-let routerCache: WeakMap<WorkerEnv, RouterCacheEntry> = new WeakMap();
+type RouterCacheValue = { version?: string | number; promise: Promise<RouterCacheEntry> };
 
-const getCachedRequestHandler = (env: WorkerEnv): RouterCacheEntry => {
+let routerCache: WeakMap<WorkerEnv, RouterCacheValue> = new WeakMap();
+
+const getCachedRequestHandler = async (env: WorkerEnv): Promise<RouterCacheEntry> => {
   const version = getEnvironmentVersion(env);
   const cached = routerCache.get(env);
 
-  if (cached && cached.version === version) {
-    return cached;
+  if (cached) {
+    try {
+      const entry = await cached.promise;
+      if (cached.version === version && entry.version === version) {
+        return entry;
+      }
+    } catch {
+      // ignore errors from previous initialization attempts
+    }
   }
 
-  const entry = createRequestHandler(env);
-  const enriched: RouterCacheEntry = {
-    ...entry,
-    version,
-  };
+  const promise = createRequestHandler(env).then((entry) => {
+    const enriched: RouterCacheEntry = { ...entry, version };
+    routerCache.set(env, { version, promise: Promise.resolve(enriched) });
+    return enriched;
+  });
 
-  routerCache.set(env, enriched);
-  return enriched;
+  routerCache.set(env, { version, promise });
+  return promise;
 };
 
 const clearRouterCache = (env?: WorkerEnv) => {
@@ -685,7 +804,7 @@ const clearRouterCache = (env?: WorkerEnv) => {
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext): Promise<Response> {
-    const { router } = getCachedRequestHandler(env);
+    const { router } = await getCachedRequestHandler(env);
     return router.handle(request, ctx);
   },
 };

@@ -1,5 +1,6 @@
 import type { AiPort, ConversationTurn } from '../../ports';
 import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
+import { createAiLimiter } from './concurrency-limiter';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -14,6 +15,12 @@ export interface OpenAIResponsesAdapterOptions {
   baseUrl?: string;
   requestTimeoutMs?: number;
   maxRetries?: number;
+  runtime: {
+    maxConcurrency: number;
+    maxQueueSize: number;
+    requestTimeoutMs: number;
+    retryMax: number;
+  };
   logger?: {
     warn?: (message: string, details?: Record<string, unknown>) => void;
     error?: (message: string, details?: Record<string, unknown>) => void;
@@ -247,13 +254,24 @@ export const createOpenAIResponsesAdapter = (
     return options.promptVariables;
   })();
 
+  const runtime = options.runtime;
+  const limiter = createAiLimiter({
+    maxConcurrency: runtime.maxConcurrency,
+    maxQueueSize: runtime.maxQueueSize,
+  });
+
   const fetchImpl = options.fetchApi ?? fetch;
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-  const timeoutBudgetMs = Math.min(
-    options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS,
-    DEFAULT_TIMEOUT_MS,
+  const runtimeTimeoutMs = Math.max(1, Math.floor(runtime.requestTimeoutMs));
+  const timeoutBudgetMs = Math.max(
+    1,
+    Math.min(options.requestTimeoutMs ?? runtimeTimeoutMs, DEFAULT_TIMEOUT_MS),
   );
-  const maxRetries = Math.max(1, Math.min(options.maxRetries ?? DEFAULT_MAX_RETRIES, DEFAULT_MAX_RETRIES));
+  const runtimeRetryMax = Math.max(1, Math.floor(runtime.retryMax));
+  const maxRetries = Math.max(
+    1,
+    Math.min(options.maxRetries ?? runtimeRetryMax, DEFAULT_MAX_RETRIES),
+  );
   const { logger } = options;
 
   const execute = async (
@@ -345,10 +363,6 @@ export const createOpenAIResponsesAdapter = (
 
   return {
     async reply(input) {
-      let attempt = 0;
-      let lastError: unknown;
-
-      const deadline = Date.now() + timeoutBudgetMs;
       const previousResponseId = extractPreviousResponseId(input.context);
 
       const body: Record<string, unknown> = {
@@ -371,63 +385,97 @@ export const createOpenAIResponsesAdapter = (
 
       const serializedBody = JSON.stringify(body);
 
-      while (attempt < maxRetries) {
-        const remainingTime = deadline - Date.now();
-        if (remainingTime <= 0) {
-          logger?.error?.('openai-responses global timeout exceeded', { attempt });
-          throw createWrappedError(new Error('OpenAI Responses request timed out'));
+      let release: (() => void) | undefined;
+      try {
+        release = await limiter.acquire({
+          onQueue: (stats) => {
+            // eslint-disable-next-line no-console
+            console.info('[ai][limiter-queued]', stats);
+          },
+          onAcquire: ({ queueWaitMs, ...stats }) => {
+            // eslint-disable-next-line no-console
+            console.info('[ai][limiter-acquired]', { ...stats, queueWaitMs });
+          },
+          onDrop: (stats) => {
+            // eslint-disable-next-line no-console
+            console.error('[ai][limiter-dropped]', stats);
+          },
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'AI_QUEUE_FULL') {
+          const stats = limiter.getStats();
+          logger?.error?.('openai-responses queue full', stats);
+          throw error;
         }
 
-        try {
-          const attemptTimeout = Math.max(1, remainingTime);
-          const { payload, requestId } = await execute(
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${options.apiKey}`,
-                'Content-Type': 'application/json',
-              },
-              body: serializedBody,
-            },
-            attempt,
-            attemptTimeout,
-          );
+        throw error instanceof Error ? error : new Error('AI_QUEUE_FULL');
+      }
 
-          const { text, usedOutputText } = extractTextFromPayload(payload);
-          // eslint-disable-next-line no-console
-          console.info('[ai][parsed]', {
-            attempt,
-            requestId: requestId ?? null,
-            usedOutputText,
-            length: text.length,
-            previousResponseId: previousResponseId ?? null,
-          });
+      let attempt = 0;
+      let lastError: unknown;
+      const deadline = Date.now() + timeoutBudgetMs;
 
-          return {
-            text,
-            metadata: {
-              responseId: payload.id,
-              status: payload.status,
-              requestId,
-              usedOutputText,
-              previousResponseId,
-            },
-          };
-        } catch (error) {
-          lastError = error;
-          const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
-          if (!retryable || attempt === maxRetries - 1) {
-            if (
-              error instanceof Error
-              && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
-            ) {
-              throw error;
-            }
-            throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
+      try {
+        while (attempt < maxRetries) {
+          const remainingTime = deadline - Date.now();
+          if (remainingTime <= 0) {
+            logger?.error?.('openai-responses global timeout exceeded', { attempt });
+            throw createWrappedError(new Error('OpenAI Responses request timed out'));
           }
 
-          attempt += 1;
+          try {
+            const attemptTimeout = Math.max(1, remainingTime);
+            const { payload, requestId } = await execute(
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${options.apiKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: serializedBody,
+              },
+              attempt,
+              attemptTimeout,
+            );
+
+            const { text, usedOutputText } = extractTextFromPayload(payload);
+            // eslint-disable-next-line no-console
+            console.info('[ai][parsed]', {
+              attempt,
+              requestId: requestId ?? null,
+              usedOutputText,
+              length: text.length,
+              previousResponseId: previousResponseId ?? null,
+            });
+
+            return {
+              text,
+              metadata: {
+                responseId: payload.id,
+                status: payload.status,
+                requestId,
+                usedOutputText,
+                previousResponseId,
+              },
+            };
+          } catch (error) {
+            lastError = error;
+            const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
+            if (!retryable || attempt === maxRetries - 1) {
+              if (
+                error instanceof Error
+                && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
+              ) {
+                throw error;
+              }
+              throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
+            }
+
+            attempt += 1;
+          }
         }
+      } finally {
+        release?.();
       }
 
       if (

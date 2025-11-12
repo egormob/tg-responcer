@@ -23,6 +23,12 @@ describe('createOpenAIResponsesAdapter', () => {
       maxRetries: number;
       promptId: string;
       promptVariables: Record<string, unknown>;
+      runtime: {
+        maxConcurrency: number;
+        maxQueueSize: number;
+        requestTimeoutMs: number;
+        retryMax: number;
+      };
     }> = {},
   ): AiPort =>
     createOpenAIResponsesAdapter({
@@ -33,6 +39,12 @@ describe('createOpenAIResponsesAdapter', () => {
       maxRetries: options.maxRetries,
       promptId: options.promptId,
       promptVariables: options.promptVariables,
+      runtime: {
+        maxConcurrency: options.runtime?.maxConcurrency ?? 2,
+        maxQueueSize: options.runtime?.maxQueueSize ?? 8,
+        requestTimeoutMs: options.runtime?.requestTimeoutMs ?? options.timeout ?? 5_000,
+        retryMax: options.runtime?.retryMax ?? options.maxRetries ?? 3,
+      },
     });
 
   it('throws helpful error when model is empty', () => {
