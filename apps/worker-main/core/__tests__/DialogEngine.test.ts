@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DialogEngine } from '../DialogEngine';
 import type { AiPort, MessagingPort, RateLimitPort, StoragePort, StoredMessage } from '../../ports';
+import { REQUEST_RETRY_PROMPT } from '../../shared/fallback-messages';
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -434,5 +435,107 @@ describe('DialogEngine', () => {
     expect(saveUserResolved).toBe(true);
     expect(appendResolved).toBe(true);
     expect(getRecentResolved).toBe(true);
+  });
+
+  it('возвращает безопасный fallback при сбросе очереди ИИ', async () => {
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'fallback-drop' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockRejectedValue(new Error('AI_QUEUE_DROPPED')),
+    };
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const now = vi.fn(() => new Date('2024-01-01T10:00:00Z'));
+
+    const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+
+    const result = await engine.handleMessage(createMessageOverrides());
+
+    expect(result).toEqual({
+      status: 'replied',
+      response: { text: REQUEST_RETRY_PROMPT, messageId: 'fallback-drop' },
+    });
+
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: REQUEST_RETRY_PROMPT,
+    });
+
+    expect(storage.appendMessage).toHaveBeenCalledTimes(2);
+    expect(storage.appendMessage).toHaveBeenNthCalledWith(2, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      threadId: undefined,
+      role: 'assistant',
+      text: REQUEST_RETRY_PROMPT,
+      timestamp: new Date('2024-01-01T10:00:00Z'),
+      metadata: { degraded: true, reason: 'AI_QUEUE_DROPPED', messageId: 'fallback-drop' },
+    });
+  });
+
+  it('возвращает безопасный fallback при истечении ожидания очереди ИИ', async () => {
+    const messaging: MessagingPort = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'fallback-timeout' }),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const ai: AiPort = {
+      reply: vi.fn().mockRejectedValue(new Error('AI_QUEUE_TIMEOUT')),
+    };
+
+    const storage: StoragePort = {
+      saveUser: vi.fn().mockResolvedValue({ utmDegraded: false }),
+      appendMessage: vi.fn().mockResolvedValue(undefined),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
+    };
+
+    const rateLimit: RateLimitPort = {
+      checkAndIncrement: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const now = vi.fn(() => new Date('2024-01-01T10:00:00Z'));
+
+    const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+
+    const result = await engine.handleMessage(createMessageOverrides());
+
+    expect(result).toEqual({
+      status: 'replied',
+      response: { text: REQUEST_RETRY_PROMPT, messageId: 'fallback-timeout' },
+    });
+
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: REQUEST_RETRY_PROMPT,
+    });
+
+    expect(storage.appendMessage).toHaveBeenCalledTimes(2);
+    expect(storage.appendMessage).toHaveBeenNthCalledWith(2, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      threadId: undefined,
+      role: 'assistant',
+      text: REQUEST_RETRY_PROMPT,
+      timestamp: new Date('2024-01-01T10:00:00Z'),
+      metadata: { degraded: true, reason: 'AI_QUEUE_TIMEOUT', messageId: 'fallback-timeout' },
+    });
   });
 });
