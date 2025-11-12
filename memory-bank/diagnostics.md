@@ -20,11 +20,11 @@
    *Impact:* Breaks priorities №1 and №2 (consistency of stored dialogue).
    *Status:* Resolved — 2025-11-16 проверка 3.1 завершена на продовом чате: записи `assistant` появляются только после подтверждённой отправки, содержат `messageId`, дублей и записей без `messageId` не обнаружено; fallback не срабатывал. См. [Cloudflare лог негативного прогона](../logs/cloudflare-sendtext-failure-2025-11-16.log) с подавленной записью `assistant` при искусственном отказе `sendText`.
 
-4. **D1 adapter exhausts retries too early**  
-   *Scope:* `apps/worker-main/adapters/d1-storage/index.ts` (`runWithRetry`).  
-   *Symptoms:* After three quick attempts storage gives up during load, causing fallback and lost writes.  
-   *Impact:* Breaks priority №2 (long-term memory) and degrades high-load handling.  
-   *Status:* Pending fix — Step 4 of roadmap.
+4. **AI backpressure без контроля очереди**
+   *Scope:* `adapters/openai-responses` (конкурентный доступ к OpenAI, конфиг очереди).
+   *Symptoms:* До внедрения семафора воркер запускал неограниченное число fetch’ей, задержки AI приводили к росту TTFB и таймаутам.
+   *Impact:* Нарушает приоритет №1 (стабильный UX) и создаёт ложные тревоги по таймаутам.
+   *Status:* Resolved — реализован вариант A (см. [REPORT-ai-throughput-20251116](../reports/REPORT-ai-throughput-20251116.md)): `AI_MAX_CONCURRENCY = 4`, `AI_QUEUE_MAX_SIZE = 64`, `AI_TIMEOUT_MS = 12000 мс`, `AI_RETRY_MAX = 2`. Диагностика `/admin/diag?q=ai-queue` отдаёт `status: ok`, `active: 0`, `queued: 0`, `droppedSinceBoot: 0`; тревоги настроены на `queued ≥ 48` (Warning, >30 с) и любое `droppedSinceBoot > 0` (Critical). Артефакты smoke-прогона — `memory-bank/logs/ai-queue-smoke-2025-11-16.md`.
 
 5. **Telegram export stops after first page**  
    *Scope:* `apps/worker-main/features/export/createTelegramExportCommandHandler.ts`.  
@@ -53,6 +53,7 @@
 ## Observed signals & references
 
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
+- Smoke-прогон варианта A: `memory-bank/logs/ai-queue-smoke-2025-11-16.md` с ссылками на tail-лог и снимок диагностики.
 - Cloudflare negative run (2025-11-16) — [dialog-engine][sendText][error] зафиксирован, сохранение `assistant` подавлено, запись отсутствует без `messageId` (см. `../logs/cloudflare-sendtext-failure-2025-11-16.log`).
 - Admin export CSV missing user conversations and UTM column.
 - Self-test payload from `https://tg-responcer.egormob.workers.dev/admin/selftest?token=***` returning 500 with `openAiOk: false`.
