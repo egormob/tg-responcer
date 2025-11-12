@@ -6,3 +6,5 @@ export { createBindingsDiagnosticsRoute } from './bindings-route';
 export type { CreateBindingsDiagnosticsRouteOptions } from './bindings-route';
 export { createKnownUsersClearRoute } from './known-users-route';
 export type { CreateKnownUsersClearRouteOptions } from './known-users-route';
+export { createD1StressRoute } from './d1-stress-route';
+export type { CreateD1StressRouteOptions } from './d1-stress-route';

@@ -321,6 +321,7 @@ export interface RouterOptions {
     knownUsersClear?: (request: Request) => Promise<Response>;
     broadcastToken?: string;
     broadcast?: (request: Request) => Promise<Response>;
+    d1Stress?: (request: Request) => Promise<Response>;
   };
 }
 
@@ -674,6 +675,19 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         return options.admin.knownUsersClear(auth.request);
+      }
+
+      if (pathname === '/admin/d1-stress') {
+        if (!options.admin?.d1Stress) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        return options.admin.d1Stress(auth.request);
       }
 
       if (pathname === '/admin/diag') {

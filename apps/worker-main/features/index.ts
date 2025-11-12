@@ -62,6 +62,7 @@ export type {
   BroadcastSendResultDelivery,
 } from './broadcast';
 export {
+  createD1StressRoute,
   createSelfTestRoute,
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
@@ -70,6 +71,7 @@ export {
   type CreateEnvzRouteOptions,
   type CreateBindingsDiagnosticsRouteOptions,
   type CreateKnownUsersClearRouteOptions,
+  type CreateD1StressRouteOptions,
 } from './admin-diagnostics';
 export {
   createTelegramWebhookHandler,
