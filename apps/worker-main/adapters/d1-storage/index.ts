@@ -32,9 +32,10 @@ const NOOP_LOGGER: Logger = {
   },
 };
 
-const MAX_RETRY_ATTEMPTS = 3;
+const MAX_RETRY_ATTEMPTS = 6;
 const RETRY_BASE_DELAY_MS = 100;
 const RETRY_BACKOFF_FACTOR = 2;
+const RETRY_SUCCESS_LOG_THRESHOLD = 3;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -45,52 +46,143 @@ interface RetryContext {
   details?: Record<string, unknown>;
 }
 
+const getErrorMessage = (error: unknown): string | undefined => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+
+  return undefined;
+};
+
+const NON_RETRYABLE_ERROR_PATTERNS = [
+  /SQLITE_CONSTRAINT/i,
+  /constraint failed/i,
+  /no such table/i,
+  /no such column/i,
+  /has no column named/i,
+  /syntax error/i,
+  /wrong number of arguments/i,
+  /malformed/i,
+  /schema/i,
+];
+
+const isRetryableError = (error: unknown): boolean => {
+  if (!error) {
+    return true;
+  }
+
+  const message = getErrorMessage(error);
+
+  if (typeof message === 'string') {
+    if (NON_RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message))) {
+      return false;
+    }
+  }
+
+  if (typeof error === 'object' && error) {
+    const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+    if (typeof code === 'string') {
+      if (/SQLITE_CONSTRAINT/i.test(code) || /VALIDATION/i.test(code)) {
+        return false;
+      }
+    }
+
+    const status = 'status' in error ? (error as { status?: unknown }).status : undefined;
+    if (status === 400 || status === 422) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const getRetryDelay = (attempt: number): number => {
+  const backoff = RETRY_BASE_DELAY_MS * RETRY_BACKOFF_FACTOR ** (attempt - 1);
+  const jitter = 0.5 + Math.random();
+  return Math.round(backoff * jitter);
+};
+
 const runWithRetry = async <T>(
   logger: Logger,
   context: RetryContext,
   action: () => Promise<T>,
 ): Promise<T | undefined> => {
   let attempt = 0;
-  let delay = RETRY_BASE_DELAY_MS;
-  let lastErrorDetails: Record<string, unknown> | undefined;
   let lastError: unknown;
+  let hadRetryableError = false;
+  let finalErrorDetails: Record<string, unknown> | undefined;
+  let finalErrorWasRetryable = true;
 
   while (attempt < MAX_RETRY_ATTEMPTS) {
     attempt += 1;
 
     try {
-      return await action();
+      const result = await action();
+
+      if (hadRetryableError && attempt >= RETRY_SUCCESS_LOG_THRESHOLD) {
+        logger.warn(`[d1-storage] ${context.operation} succeeded after retries`, {
+          ...context.details,
+          attempts: attempt,
+          maxAttempts: MAX_RETRY_ATTEMPTS,
+        });
+      }
+
+      return result;
     } catch (error) {
       lastError = error;
+      const retryable = isRetryableError(error);
       const errorDetails: Record<string, unknown> = {
         ...context.details,
         attempt,
         maxAttempts: MAX_RETRY_ATTEMPTS,
-        error: error instanceof Error ? error.message : String(error),
+        error: getErrorMessage(error) ?? String(error),
+        retryable,
       };
 
-      lastErrorDetails = errorDetails;
-
-      if (attempt >= MAX_RETRY_ATTEMPTS) {
+      if (!retryable) {
+        logger.warn(`[d1-storage] ${context.operation} failed with non-retryable error`, errorDetails);
+        finalErrorDetails = errorDetails;
+        finalErrorWasRetryable = false;
         break;
       }
 
+      hadRetryableError = true;
+
+      if (attempt >= MAX_RETRY_ATTEMPTS) {
+        finalErrorDetails = errorDetails;
+        break;
+      }
+
+      const delay = getRetryDelay(attempt);
       logger.warn(`[d1-storage] ${context.operation} failed, retrying`, {
         ...errorDetails,
         nextDelayMs: delay,
       });
 
       await wait(delay);
-      delay *= RETRY_BACKOFF_FACTOR;
     }
   }
 
-  if (lastErrorDetails) {
-    logger.warn(`[d1-storage] ${context.operation} exhausted retries`, lastErrorDetails);
+  if (finalErrorDetails) {
+    if (finalErrorWasRetryable) {
+      logger.warn(`[d1-storage] ${context.operation} exhausted retries`, finalErrorDetails);
+    }
   }
 
   if (lastError instanceof Error) {
     throw lastError;
+  }
+
+  if (finalErrorDetails && !finalErrorWasRetryable) {
+    throw new Error(`Non-retryable error during ${context.operation}: ${String(lastError)}`);
   }
 
   throw new Error(`Unknown error during ${context.operation}`);
