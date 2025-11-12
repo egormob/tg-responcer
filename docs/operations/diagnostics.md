@@ -82,3 +82,35 @@ Self-test пишет два читаемых сообщения:
 Сбрасывает in-memory кэш UTM-источников известных пользователей.
 Возвращает JSON-ответ `{ "ok": true, "cleared": <количество записей> }`,
 где `cleared` — число удалённых записей.
+
+## `POST /admin/d1-stress`
+
+Нагрузочный прогон D1 выполняется только при включённом флаге `STRESS_TEST_ENABLED`.
+По умолчанию флаг выключен, поэтому ручка отвечает `404 Not Found` и ничего не
+запускает. Для запуска задайте `STRESS_TEST_ENABLED=1` (через Secrets/Vars) и
+обновите воркер.
+
+Запрос требует валидного `x-admin-token` и всегда возвращает JSON со сводкой.
+Параметры запроса:
+
+- `durationSec` — длительность прогона в секундах (по умолчанию 120, максимум 300).
+- `concurrency` — `auto` (по умолчанию, адаптивно 8–32 потоков) или конкретное
+  число потоков (1–32).
+
+Во время прогона выполняются только операции `saveUser` и `appendMessage` над
+тестовыми пользователями, все записи помечаются `metadata.stress=true` и
+`metadata.runId=<uuid>`.
+
+### Логи Cloudflare
+
+Фильтруйте по ключам `$metadata.message`:
+
+- `[d1-stress][start] runId=<uuid> durationSec=<int> concurrency=<int>`
+- `[d1-stress][retry] op=<op> attempt=<n> error=<class|code>`
+- `[d1-stress][success_after_retry] op=<op> attempts=<n>`
+- `[d1-stress][max_retries_exceeded] op=<op> attempts=<n> error=<class|code>`
+- `[d1-stress][non_retryable] op=<op> error=<class|code>`
+- `[d1-stress][done] runId=<uuid> totals={<json>}`
+
+Ответ ручки содержит распределение попыток (`attemptsDistribution`) и агрегаты,
+поэтому можно сверять числа с логами.

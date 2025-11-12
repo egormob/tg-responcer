@@ -19,6 +19,7 @@ import {
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
   createKnownUsersClearRoute,
+  createD1StressRoute,
   createImmediateBroadcastSender,
   createRateLimitNotifier,
   createSelfTestRoute,
@@ -66,6 +67,7 @@ interface WorkerBindings {
   RATE_LIMIT_NOTIFIER_WINDOW_MS?: string | number;
   DB?: D1Database;
   RATE_LIMIT_KV?: WorkerRateLimitNamespace;
+  STRESS_TEST_ENABLED?: unknown;
 }
 
 type WorkerRateLimitNamespace = LimitsFlagKvNamespace & RateLimitKvNamespace;
@@ -417,6 +419,12 @@ const createAdminRoutes = (
       cache: knownUsers,
     }),
   };
+
+  if (isEnabledFlag(env.STRESS_TEST_ENABLED) && env.DB) {
+    routes.d1Stress = createD1StressRoute({
+      storage: composition.ports.storage,
+    });
+  }
 
   const exportToken = getTrimmedString(env.ADMIN_EXPORT_TOKEN);
   if (exportToken && env.DB) {

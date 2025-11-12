@@ -978,6 +978,60 @@ describe('http router', () => {
     expect(knownUsersClear).toHaveBeenCalledTimes(1);
   });
 
+  it('returns 404 for d1 stress route when not configured', async () => {
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+      },
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/d1-stress', {
+        method: 'POST',
+        headers: { 'x-admin-token': 'secret' },
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('requires admin token for d1 stress route', async () => {
+    const d1Stress = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      }));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'secret',
+        d1Stress,
+      },
+    });
+
+    const unauthorized = await router.handle(
+      new Request('https://example.com/admin/d1-stress', { method: 'POST' }),
+    );
+    expect(unauthorized.status).toBe(401);
+    expect(d1Stress).not.toHaveBeenCalled();
+
+    const response = await router.handle(
+      new Request('https://example.com/admin/d1-stress', {
+        method: 'POST',
+        headers: { 'x-admin-token': 'secret' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(d1Stress).toHaveBeenCalledTimes(1);
+  });
+
   it('delegates admin diag route when configured', async () => {
     const diag = vi.fn().mockResolvedValue(new Response('diag', { status: 200 }));
     const router = createRouter({
