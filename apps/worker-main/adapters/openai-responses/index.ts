@@ -1,6 +1,7 @@
 import type { AiPort, ConversationTurn } from '../../ports';
 import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
 import { createAiLimiter } from './concurrency-limiter';
+import { getFriendlyOverloadMessage } from './overload-message';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -177,6 +178,30 @@ const createAbortSignal = (timeoutMs: number): { signal: AbortSignal; dispose: (
 
 const DEFAULT_ERROR_MESSAGE = 'OpenAI Responses request failed';
 
+const textEncoder = new TextEncoder();
+
+const createUserIdHash = (userId: string): string => {
+  const encoded = textEncoder.encode(userId);
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < encoded.length; index += 1) {
+    hash ^= encoded[index] ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
+const waitFor = (ms: number): Promise<void> => {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+};
+
 const createWrappedError = (cause: unknown, fallbackMessage?: string): Error => {
   const suffix = cause instanceof Error && cause.message ? `: ${cause.message}` : '';
   const error = new Error(`${fallbackMessage ?? DEFAULT_ERROR_MESSAGE}${suffix}`);
@@ -317,7 +342,11 @@ export const createOpenAIResponsesAdapter = (
             attempt,
             requestId,
           });
-          throw new Error('AI_NON_2XX');
+          const terminalError = new Error('AI_NON_2XX');
+          if (requestId) {
+            (terminalError as { requestId?: string }).requestId = requestId;
+          }
+          throw terminalError;
         }
 
         logger?.warn?.('openai-responses retryable failure', {
@@ -326,7 +355,7 @@ export const createOpenAIResponsesAdapter = (
           requestId,
         });
 
-        throw Object.assign(error, { retryable: true });
+        throw Object.assign(error, { retryable: true, requestId });
       }
 
       const payload = (await response.json()) as ResponsesApiSuccessPayload;
@@ -355,7 +384,9 @@ export const createOpenAIResponsesAdapter = (
       }
 
       logger?.warn?.('openai-responses retryable network error', { attempt });
-      throw Object.assign(error instanceof Error ? error : new Error('retryable failure'), { retryable: true });
+      throw Object.assign(error instanceof Error ? error : new Error('retryable failure'), {
+        retryable: true,
+      });
     } finally {
       dispose();
     }
@@ -384,98 +415,179 @@ export const createOpenAIResponsesAdapter = (
       }
 
       const serializedBody = JSON.stringify(body);
+      const deadline = Date.now() + timeoutBudgetMs;
+      const userIdHash = createUserIdHash(input.userId);
+      const overloadMessage = getFriendlyOverloadMessage(input.languageCode);
 
-      let release: (() => void) | undefined;
-      try {
-        release = await limiter.acquire({
-          onQueue: (stats) => {
-            // eslint-disable-next-line no-console
-            console.info('[ai][limiter-queued]', stats);
-          },
-          onAcquire: ({ queueWaitMs, ...stats }) => {
-            // eslint-disable-next-line no-console
-            console.info('[ai][limiter-acquired]', { ...stats, queueWaitMs });
-          },
-          onDrop: (stats) => {
-            // eslint-disable-next-line no-console
-            console.error('[ai][limiter-dropped]', stats);
-          },
-        });
-      } catch (error) {
-        if (error instanceof Error && error.message === 'AI_QUEUE_FULL') {
-          const stats = limiter.getStats();
-          logger?.error?.('openai-responses queue full', stats);
-          throw error;
+      let lastError: unknown;
+
+      for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+        const remainingBeforeAcquire = deadline - Date.now();
+        if (remainingBeforeAcquire <= 0) {
+          // eslint-disable-next-line no-console
+          console.error('[ai][timeout]', {
+            phase: 'budget_exhausted',
+            attempt: attempt + 1,
+            userIdHash,
+          });
+          throw new Error('AI_QUEUE_TIMEOUT');
         }
 
-        throw error instanceof Error ? error : new Error('AI_QUEUE_FULL');
-      }
+        let release: (() => void) | undefined;
+        let queueWaitMs = 0;
+        let shouldRetry = false;
+        let retryDelayMs = 0;
 
-      let attempt = 0;
-      let lastError: unknown;
-      const deadline = Date.now() + timeoutBudgetMs;
-
-      try {
-        while (attempt < maxRetries) {
-          const remainingTime = deadline - Date.now();
-          if (remainingTime <= 0) {
-            logger?.error?.('openai-responses global timeout exceeded', { attempt });
-            throw createWrappedError(new Error('OpenAI Responses request timed out'));
-          }
-
-          try {
-            const attemptTimeout = Math.max(1, remainingTime);
-            const { payload, requestId } = await execute(
-              {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${options.apiKey}`,
-                  'Content-Type': 'application/json',
-                },
-                body: serializedBody,
-              },
-              attempt,
-              attemptTimeout,
-            );
-
-            const { text, usedOutputText } = extractTextFromPayload(payload);
+        try {
+          release = await limiter.acquire({
+            onQueue: (stats) => {
+              // eslint-disable-next-line no-console
+              console.info('[ai][limiter-queued]', stats);
+            },
+            onAcquire: ({ queueWaitMs: waitMs, ...stats }) => {
+              queueWaitMs = waitMs;
+              // eslint-disable-next-line no-console
+              console.info('[ai][limiter-acquired]', { ...stats, queueWaitMs: waitMs });
+            },
+            onDrop: (stats) => {
+              // eslint-disable-next-line no-console
+              console.error('[ai][limiter-dropped]', stats);
+            },
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message === 'AI_QUEUE_DROPPED') {
+            const stats = limiter.getStats();
+            logger?.error?.('openai-responses queue full', stats);
             // eslint-disable-next-line no-console
-            console.info('[ai][parsed]', {
-              attempt,
-              requestId: requestId ?? null,
-              usedOutputText,
-              length: text.length,
-              previousResponseId: previousResponseId ?? null,
+            console.error('[ai][dropped]', {
+              reason: 'queue_overflow',
+              userIdHash,
+              active: stats.active,
+              queued: stats.queued,
+              maxQueueSize: stats.maxQueueSize,
             });
 
             return {
-              text,
+              text: overloadMessage,
               metadata: {
-                responseId: payload.id,
-                status: payload.status,
-                requestId,
-                usedOutputText,
+                degraded: true,
+                reason: 'queue_overflow',
                 previousResponseId,
               },
             };
-          } catch (error) {
-            lastError = error;
-            const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
-            if (!retryable || attempt === maxRetries - 1) {
-              if (
-                error instanceof Error
-                && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
-              ) {
-                throw error;
-              }
-              throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
+          }
+
+          throw error instanceof Error ? error : new Error('AI_QUEUE_DROPPED');
+        }
+
+        try {
+          const now = Date.now();
+          if (now > deadline) {
+            // eslint-disable-next-line no-console
+            console.error('[ai][timeout]', {
+              phase: 'queue_wait',
+              attempt: attempt + 1,
+              queueWaitMs,
+              userIdHash,
+            });
+            throw new Error('AI_QUEUE_TIMEOUT');
+          }
+
+          const remainingTime = deadline - now;
+          const attemptTimeout = Math.max(1, remainingTime);
+          const { payload, requestId } = await execute(
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${options.apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: serializedBody,
+            },
+            attempt,
+            attemptTimeout,
+          );
+
+          const { text, usedOutputText } = extractTextFromPayload(payload);
+          // eslint-disable-next-line no-console
+          console.info('[ai][parsed]', {
+            attempt,
+            requestId: requestId ?? null,
+            usedOutputText,
+            length: text.length,
+            previousResponseId: previousResponseId ?? null,
+          });
+
+          return {
+            text,
+            metadata: {
+              responseId: payload.id,
+              status: payload.status,
+              requestId,
+              usedOutputText,
+              previousResponseId,
+            },
+          };
+        } catch (error) {
+          lastError = error;
+
+          const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
+          if (!retryable || attempt === maxRetries - 1) {
+            if (
+              error instanceof Error
+              && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
+            ) {
+              throw error;
             }
 
-            attempt += 1;
+            if (error instanceof Error && error.message === 'AI_QUEUE_TIMEOUT') {
+              throw error;
+            }
+
+            throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
           }
+
+          const reason =
+            error instanceof Error && typeof error.message === 'string' && error.message.trim().length > 0
+              ? error.message
+              : DEFAULT_ERROR_MESSAGE;
+
+          const requestId =
+            typeof (error as { requestId?: unknown }).requestId === 'string'
+              ? ((error as { requestId?: string }).requestId as string)
+              : undefined;
+
+          // eslint-disable-next-line no-console
+          console.warn('[ai][retry]', {
+            attempt: attempt + 1,
+            reason,
+            requestId: requestId ?? null,
+            userIdHash,
+          });
+
+          const baseDelayMs = 1_000 * 2 ** attempt;
+          const jitterFactor = 0.8 + Math.random() * 0.4;
+          retryDelayMs = Math.round(baseDelayMs * jitterFactor);
+          shouldRetry = true;
+        } finally {
+          release?.();
         }
-      } finally {
-        release?.();
+
+        if (shouldRetry) {
+          const remainingBeforeSleep = deadline - Date.now();
+          if (remainingBeforeSleep <= 0) {
+            // eslint-disable-next-line no-console
+            console.error('[ai][timeout]', {
+              phase: 'before_retry_sleep',
+              attempt: attempt + 1,
+              userIdHash,
+            });
+            throw new Error('AI_QUEUE_TIMEOUT');
+          }
+
+          const delayMs = Math.min(Math.max(0, retryDelayMs), Math.max(0, remainingBeforeSleep));
+          await waitFor(delayMs);
+        }
       }
 
       if (

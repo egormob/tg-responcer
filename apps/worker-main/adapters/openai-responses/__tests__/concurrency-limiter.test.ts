@@ -57,7 +57,7 @@ describe('createAiLimiter', () => {
     const limiter = createAiLimiter({ maxConcurrency: 1, maxQueueSize: 0 });
 
     const release = await limiter.acquire();
-    await expect(limiter.acquire()).rejects.toThrow('AI_QUEUE_FULL');
+    await expect(limiter.acquire()).rejects.toThrow('AI_QUEUE_DROPPED');
     expect(limiter.getStats()).toMatchObject({ active: 1, queued: 0, dropped: 1 });
 
     release();
