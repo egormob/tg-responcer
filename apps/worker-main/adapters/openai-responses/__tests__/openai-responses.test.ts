@@ -2,7 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AiPort, ConversationTurn } from '../../../ports';
 import { createOpenAIResponsesAdapter } from '..';
+import { REQUEST_RETRY_PROMPT } from '../../../shared/fallback-messages';
 import { getFriendlyOverloadMessage } from '../overload-message';
+
+describe('getFriendlyOverloadMessage', () => {
+  it('returns the safe fallback for any locale', () => {
+    expect(getFriendlyOverloadMessage()).toBe(REQUEST_RETRY_PROMPT);
+    expect(getFriendlyOverloadMessage('ru')).toBe(REQUEST_RETRY_PROMPT);
+    expect(getFriendlyOverloadMessage('ru-RU')).toBe(REQUEST_RETRY_PROMPT);
+    expect(getFriendlyOverloadMessage('en')).toBe(REQUEST_RETRY_PROMPT);
+  });
+});
 
 const createFetchMock = () => vi.fn<Parameters<typeof fetch>, Promise<Response>>();
 
@@ -451,7 +461,7 @@ describe('createOpenAIResponsesAdapter', () => {
       languageCode: 'ru',
     });
 
-    expect(overloadResult.text).toBe(getFriendlyOverloadMessage('ru'));
+    expect(overloadResult.text).toBe(REQUEST_RETRY_PROMPT);
     expect(overloadResult.metadata).toMatchObject({ degraded: true, reason: 'queue_overflow' });
 
     resolveFirst?.();
