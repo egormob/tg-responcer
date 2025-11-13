@@ -12,7 +12,7 @@
 2. **Проверка и фиксация переменных окружения**
    - На странице Settings → Variables убедиться, что заполнены `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ADMIN_TOKEN` и другие обязательные параметры.
    - Сохранить скриншот/экспорт значений и приложить ссылку в журнал проверки (`verification-protocol.md`).
-   - Убедиться, что `OPENAI_PROMPT_VARIABLES` хранится как JSON-объект (Cloudflare UI) и что воркер его принимает (см. `apps/worker-main/index.ts`).
+   - Убедиться, что `OPENAI_PROMPT_VARIABLES` хранится как JSON-объект (Cloudflare UI) и что воркер его принимает (см. `apps/worker-main/index.ts`). Если промпт не требует переменных, запишите в секрет пустой объект `{}` — Cloudflare сохранит его, `/admin/envz` покажет `true`, а адаптер отправит OpenAI пустой `variables` без влияния на ответ.
    - Для автоматизации загрузки секретов использовать `scripts/bootstrap-cloudflare-secrets.sh`. Скрипт читает значения из переменных окружения `CF_SECRET_<NAME>` (если заданы) либо поочередно вызывает `wrangler secret put <NAME>` в интерактивном режиме для `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_PROMPT_ID`, `OPENAI_PROMPT_VARIABLES`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ADMIN_TOKEN`.
 
 3. **Применение миграций на чистой базе**
