@@ -1,4 +1,9 @@
-import type { AiPort, AiQueueStats, ConversationTurn } from '../../ports';
+import type {
+  AiPort,
+  AiQueueStats,
+  ConversationTurn,
+  AiQueueConfigSources,
+} from '../../ports';
 import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
 import { createAiLimiter, type AiLimiterStats } from './concurrency-limiter';
 import { getFriendlyOverloadMessage } from './overload-message';
@@ -21,6 +26,7 @@ export interface OpenAIResponsesAdapterOptions {
     maxQueueSize: number;
     requestTimeoutMs: number;
     retryMax: number;
+    sources?: AiQueueConfigSources;
   };
   logger?: {
     warn?: (message: string, details?: Record<string, unknown>) => void;
@@ -57,7 +63,8 @@ interface ResponsesApiSuccessPayload {
 
 const sanitizeOutputText = (text: string): string => sanitizeVisibleText(text);
 
-const isRetryableStatus = (status: number): boolean => status === 429 || status >= 500;
+const isRetryableStatus = (status: number): boolean =>
+  status === 408 || status === 429 || status >= 500;
 
 const mapTurnToContentType = (role: ConversationTurn['role']): string => {
   switch (role) {
@@ -98,7 +105,10 @@ const buildInputMessages = (
   ];
 };
 
-const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
+const mapLimiterStatsToQueueStats = (
+  stats: AiLimiterStats,
+  runtime?: { requestTimeoutMs: number; retryMax: number; sources?: AiQueueConfigSources },
+): AiQueueStats => ({
   active: stats.active,
   queued: stats.queued,
   maxConcurrency: stats.maxConcurrency,
@@ -106,6 +116,13 @@ const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
   droppedSinceBoot: stats.droppedSinceBoot,
   avgWaitMs: stats.avgWaitMs,
   lastDropAt: stats.lastDropAt,
+  ...(runtime
+    ? {
+        requestTimeoutMs: runtime.requestTimeoutMs,
+        retryMax: runtime.retryMax,
+        sources: runtime.sources,
+      }
+    : {}),
 });
 
 const createQueueLogPayload = (
@@ -412,7 +429,11 @@ export const createOpenAIResponsesAdapter = (
 
   return {
     getQueueStats(): AiQueueStats {
-      return mapLimiterStatsToQueueStats(limiter.getStats());
+      return mapLimiterStatsToQueueStats(limiter.getStats(), {
+        requestTimeoutMs: runtimeTimeoutMs,
+        retryMax: runtimeRetryMax,
+        sources: runtime.sources,
+      });
     },
     async reply(input) {
       const previousResponseId = extractPreviousResponseId(input.context);

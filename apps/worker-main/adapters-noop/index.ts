@@ -106,6 +106,15 @@ export const createNoopAiPort = (options?: CreateNoopPortsOptions): AiPort => ({
       droppedSinceBoot: 0,
       avgWaitMs: 0,
       lastDropAt: null,
+      requestTimeoutMs: 0,
+      retryMax: 0,
+      sources: {
+        maxConcurrency: 'default',
+        maxQueueSize: 'default',
+        requestTimeoutMs: 'default',
+        retryMax: 'default',
+        kvConfig: null,
+      },
     };
   },
 });

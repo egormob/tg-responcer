@@ -44,6 +44,7 @@ import {
 } from './http';
 import type { MessagingPort } from './ports';
 import type { CompositionResult } from './composition';
+import type { AiQueueConfigSources, AiQueueConfigSource } from './ports';
 import { parsePromptVariables } from './shared/prompt-variables';
 
 interface WorkerBindings {
@@ -92,8 +93,14 @@ const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const DEFAULT_AI_MAX_CONCURRENCY = 4;
 const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
-const DEFAULT_AI_TIMEOUT_MS = 12_000;
-const DEFAULT_AI_RETRY_MAX = 2;
+// 18 s покрывает наблюдаемые пики латентности OpenAI (12–16 с) и остаётся
+// внутри глобального лимита Cloudflare Workers в 20 с.
+const DEFAULT_AI_TIMEOUT_MS = 18_000;
+// Даём до трёх попыток, чтобы не выбрасывать пограничные тайм-ауты, но не
+// превышать общий бюджет ожидания.
+const DEFAULT_AI_RETRY_MAX = 3;
+
+type AiRuntimeConfigKey = 'AI_MAX_CONCURRENCY' | 'AI_QUEUE_MAX_SIZE' | 'AI_TIMEOUT_MS' | 'AI_RETRY_MAX';
 
 const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -295,10 +302,10 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
   };
 
   const kvConfig = await readKvConfig();
-  const sources: Record<string, 'kv' | 'env' | 'default'> = {};
+  const sources: Partial<Record<AiRuntimeConfigKey, AiQueueConfigSource>> = {};
 
   const resolveValue = (
-    key: 'AI_MAX_CONCURRENCY' | 'AI_QUEUE_MAX_SIZE' | 'AI_TIMEOUT_MS' | 'AI_RETRY_MAX',
+    key: AiRuntimeConfigKey,
     envValue: unknown,
     parser: (value: unknown) => number | undefined,
     fallback: number,
@@ -374,6 +381,13 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     maxQueueSize,
     requestTimeoutMs,
     retryMax,
+    sources: {
+      maxConcurrency: sources.AI_MAX_CONCURRENCY ?? 'default',
+      maxQueueSize: sources.AI_QUEUE_MAX_SIZE ?? 'default',
+      requestTimeoutMs: sources.AI_TIMEOUT_MS ?? 'default',
+      retryMax: sources.AI_RETRY_MAX ?? 'default',
+      kvConfig: kvConfig ? 'AI_QUEUE_CONFIG' : null,
+    },
   };
 };
 
@@ -396,6 +410,7 @@ interface AiConcurrencyConfig {
   readonly maxQueueSize: number;
   readonly requestTimeoutMs: number;
   readonly retryMax: number;
+  readonly sources: AiQueueConfigSources;
 }
 
 interface RuntimeConfig {

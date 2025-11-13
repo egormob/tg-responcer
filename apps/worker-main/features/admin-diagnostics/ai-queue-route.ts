@@ -81,5 +81,8 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
       droppedSinceBoot: stats.droppedSinceBoot,
       avgWaitMs: stats.avgWaitMs,
       lastDropAt,
+      requestTimeoutMs: stats.requestTimeoutMs ?? null,
+      retryMax: stats.retryMax ?? null,
+      sources: stats.sources ?? null,
     });
   };

@@ -21,6 +21,15 @@ describe('createAiQueueDiagRoute', () => {
         droppedSinceBoot: 0,
         avgWaitMs: 12,
         lastDropAt: null,
+        requestTimeoutMs: 18_000,
+        retryMax: 3,
+        sources: {
+          maxConcurrency: 'kv',
+          maxQueueSize: 'kv',
+          requestTimeoutMs: 'env',
+          retryMax: 'default',
+          kvConfig: 'AI_QUEUE_CONFIG',
+        },
       }),
     });
 
@@ -37,6 +46,15 @@ describe('createAiQueueDiagRoute', () => {
       droppedSinceBoot: 0,
       avgWaitMs: 12,
       lastDropAt: null,
+      requestTimeoutMs: 18_000,
+      retryMax: 3,
+      sources: {
+        maxConcurrency: 'kv',
+        maxQueueSize: 'kv',
+        requestTimeoutMs: 'env',
+        retryMax: 'default',
+        kvConfig: 'AI_QUEUE_CONFIG',
+      },
     });
   });
 
@@ -66,6 +84,9 @@ describe('createAiQueueDiagRoute', () => {
       droppedSinceBoot: 0,
       avgWaitMs: 42,
       lastDropAt: null,
+      requestTimeoutMs: null,
+      retryMax: null,
+      sources: null,
     });
   });
 
@@ -96,6 +117,9 @@ describe('createAiQueueDiagRoute', () => {
       maxQueue: 64,
       droppedSinceBoot: 2,
       avgWaitMs: 75,
+      requestTimeoutMs: null,
+      retryMax: null,
+      sources: null,
     });
     expect(body.lastDropAt).toBe(new Date(now).toISOString());
   });
