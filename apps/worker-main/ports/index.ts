@@ -83,6 +83,8 @@ export interface AiQueueConfigSources {
   maxQueueSize: 'kv' | 'env' | 'default';
   requestTimeoutMs: 'kv' | 'env' | 'default';
   retryMax: 'kv' | 'env' | 'default';
+  baseUrls: 'kv' | 'env' | 'default';
+  endpointFailoverThreshold: 'kv' | 'env' | 'default';
   kvConfig: 'AI_QUEUE_CONFIG' | null;
 }
 
@@ -97,6 +99,12 @@ export interface AiQueueStats {
   requestTimeoutMs: number;
   retryMax: number;
   sources: AiQueueConfigSources;
+  endpoints: {
+    activeEndpointId: string;
+    activeBaseUrl: string;
+    backupBaseUrls: string[];
+    failoverCounts: Record<string, number>;
+  };
 }
 
 export interface AiPort {

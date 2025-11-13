@@ -32,6 +32,8 @@ const defaultSources = {
   maxQueueSize: 'default',
   requestTimeoutMs: 'default',
   retryMax: 'default',
+  baseUrls: 'default',
+  endpointFailoverThreshold: 'default',
   kvConfig: null,
 } as const;
 
@@ -42,16 +44,22 @@ const createAdapter = (
     maxRetries: number;
     promptId: string;
     promptVariables: Record<string, unknown>;
+    baseUrls: string[];
+    endpointFailoverThreshold: number;
     runtime: {
       maxConcurrency: number;
       maxQueueSize: number;
       requestTimeoutMs: number;
       retryMax: number;
+      baseUrls: string[];
+      endpointFailoverThreshold: number;
       sources?: {
         maxConcurrency: 'kv' | 'env' | 'default';
         maxQueueSize: 'kv' | 'env' | 'default';
         requestTimeoutMs: 'kv' | 'env' | 'default';
         retryMax: 'kv' | 'env' | 'default';
+        baseUrls: 'kv' | 'env' | 'default';
+        endpointFailoverThreshold: 'kv' | 'env' | 'default';
         kvConfig: 'AI_QUEUE_CONFIG' | null;
       };
     };
@@ -65,11 +73,18 @@ const createAdapter = (
       maxRetries: options.maxRetries,
       promptId: options.promptId,
       promptVariables: options.promptVariables,
+      baseUrls: options.baseUrls,
+      endpointFailoverThreshold:
+        options.endpointFailoverThreshold ?? options.runtime?.endpointFailoverThreshold ?? 3,
       runtime: {
         maxConcurrency: options.runtime?.maxConcurrency ?? 2,
         maxQueueSize: options.runtime?.maxQueueSize ?? 8,
         requestTimeoutMs: options.runtime?.requestTimeoutMs ?? options.timeout ?? 5_000,
         retryMax: options.runtime?.retryMax ?? options.maxRetries ?? 3,
+        baseUrls: options.runtime?.baseUrls ?? options.baseUrls ?? [
+          'https://api.openai.com/v1/responses',
+        ],
+        endpointFailoverThreshold: options.runtime?.endpointFailoverThreshold ?? 3,
         sources: {
           ...defaultSources,
           ...(options.runtime?.sources ?? {}),
@@ -143,6 +158,8 @@ const createAdapter = (
         requestId: 'req_123',
         usedOutputText: false,
         previousResponseId: undefined,
+        endpointId: 'endpoint_1',
+        baseUrl: 'https://api.openai.com/v1/responses',
       },
     });
 
@@ -234,9 +251,89 @@ const createAdapter = (
         maxQueueSize: 'env',
         requestTimeoutMs: 'kv',
         retryMax: 'env',
+        baseUrls: 'default',
+        endpointFailoverThreshold: 'default',
         kvConfig: 'AI_QUEUE_CONFIG',
       },
+      endpoints: {
+        activeBaseUrl: 'https://api.openai.com/v1/responses',
+        backupBaseUrls: [],
+        failoverCounts: { endpoint_1: 0 },
+      },
     });
+  });
+
+  it('rotates to next endpoint after retryable timeout', async () => {
+    vi.useFakeTimers();
+    const randomMock = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    try {
+      const fetchMock = createFetchMock();
+      const abortError = new Error('Aborted');
+      abortError.name = 'AbortError';
+
+      fetchMock
+        .mockRejectedValueOnce(abortError)
+        .mockResolvedValueOnce(
+          createResponse({
+            id: 'resp_backup',
+            status: 'completed',
+            output_text: 'Backup ok',
+          }),
+        );
+
+      const baseUrls = [
+        'https://api.openai.com/v1/responses?cf_region=us',
+        'https://api.openai.com/v1/responses?cf_region=eu',
+      ];
+
+      const adapter = createAdapter(fetchMock, {
+        timeout: 5_000,
+        maxRetries: 2,
+        baseUrls,
+        endpointFailoverThreshold: 1,
+        runtime: {
+          maxConcurrency: 1,
+          maxQueueSize: 4,
+          requestTimeoutMs: 5_000,
+          retryMax: 2,
+          baseUrls,
+          endpointFailoverThreshold: 1,
+        },
+      });
+
+      const replyPromise = adapter.reply({ userId: 'user', text: 'Hi', context: [] });
+
+      await vi.runAllTimersAsync();
+
+      await expect(replyPromise).resolves.toEqual({
+        text: 'Backup ok',
+        metadata: {
+          responseId: 'resp_backup',
+          status: 'completed',
+          requestId: 'req_123',
+          usedOutputText: true,
+          previousResponseId: undefined,
+          endpointId: 'endpoint_2',
+          baseUrl: baseUrls[1],
+        },
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(baseUrls[0]);
+      expect(fetchMock.mock.calls[1]?.[0]).toBe(baseUrls[1]);
+
+      const stats = adapter.getQueueStats?.();
+      expect(stats?.endpoints).toEqual({
+        activeEndpointId: 'endpoint_2',
+        activeBaseUrl: baseUrls[1],
+        backupBaseUrls: [baseUrls[0]],
+        failoverCounts: { endpoint_1: 1, endpoint_2: 0 },
+      });
+    } finally {
+      randomMock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('passes previous_response_id when context metadata includes responseId', async () => {
@@ -271,6 +368,8 @@ const createAdapter = (
         requestId: 'req_123',
         usedOutputText: true,
         previousResponseId: 'resp_prev',
+        endpointId: 'endpoint_1',
+        baseUrl: 'https://api.openai.com/v1/responses',
       },
     });
 
@@ -313,6 +412,8 @@ const createAdapter = (
         requestId: 'req_123',
         usedOutputText: false,
         previousResponseId: undefined,
+        endpointId: 'endpoint_1',
+        baseUrl: 'https://api.openai.com/v1/responses',
       },
     });
   });
@@ -348,6 +449,8 @@ const createAdapter = (
         requestId: 'req_123',
         usedOutputText: true,
         previousResponseId: undefined,
+        endpointId: 'endpoint_1',
+        baseUrl: 'https://api.openai.com/v1/responses',
       },
     });
   });
@@ -374,6 +477,8 @@ const createAdapter = (
         requestId: 'req_123',
         usedOutputText: true,
         previousResponseId: undefined,
+        endpointId: 'endpoint_1',
+        baseUrl: 'https://api.openai.com/v1/responses',
       },
     });
   });

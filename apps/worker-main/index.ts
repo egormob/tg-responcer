@@ -74,6 +74,8 @@ interface WorkerBindings {
   AI_QUEUE_MAX_SIZE?: string | number;
   AI_TIMEOUT_MS?: string | number;
   AI_RETRY_MAX?: string | number;
+  AI_BASE_URLS?: string | string[];
+  AI_ENDPOINT_FAILOVER_THRESHOLD?: string | number;
 }
 
 type WorkerRateLimitNamespace = LimitsFlagKvNamespace & RateLimitKvNamespace;
@@ -94,6 +96,8 @@ const DEFAULT_AI_MAX_CONCURRENCY = 4;
 const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
 const DEFAULT_AI_TIMEOUT_MS = 18_000;
 const DEFAULT_AI_RETRY_MAX = 3;
+const DEFAULT_AI_BASE_URL = 'https://api.openai.com/v1/responses';
+const DEFAULT_AI_ENDPOINT_FAILOVER_THRESHOLD = 3;
 
 const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -162,6 +166,80 @@ const toPositiveDurationMs = (value: unknown): number | undefined => {
   }
 
   return undefined;
+};
+
+const normalizeAiBaseUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') {
+      return undefined;
+    }
+
+    parsed.hash = '';
+
+    if (parsed.pathname !== '/v1/responses') {
+      return undefined;
+    }
+
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseAiBaseUrls = (value: unknown): string[] | undefined => {
+  const toArray = (candidate: unknown): unknown[] | undefined => {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed.length === 0) {
+        return undefined;
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // fall through to comma-separated format
+      }
+
+      const pieces = trimmed
+        .split(',')
+        .map((piece) => piece.trim())
+        .filter((piece) => piece.length > 0);
+
+      return pieces.length > 0 ? pieces : undefined;
+    }
+
+    return undefined;
+  };
+
+  const candidateArray = toArray(value);
+  if (!candidateArray) {
+    return undefined;
+  }
+
+  const normalized = candidateArray
+    .map((entry) => normalizeAiBaseUrl(entry))
+    .filter((entry): entry is string => typeof entry === 'string');
+
+  const unique = [...new Set(normalized)];
+
+  return unique.length > 0 ? unique : undefined;
 };
 
 const getTrimmedString = (value: unknown): string | undefined => {
@@ -300,6 +378,8 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     maxQueueSize: 'default',
     requestTimeoutMs: 'default',
     retryMax: 'default',
+    baseUrls: 'default',
+    endpointFailoverThreshold: 'default',
     kvConfig: kvConfig ? 'AI_QUEUE_CONFIG' : null,
   };
 
@@ -310,8 +390,35 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     sources[key] = source;
   };
 
+  const setNumericSourceForKey = (
+    key:
+      | 'AI_MAX_CONCURRENCY'
+      | 'AI_QUEUE_MAX_SIZE'
+      | 'AI_TIMEOUT_MS'
+      | 'AI_RETRY_MAX'
+      | 'AI_ENDPOINT_FAILOVER_THRESHOLD',
+    source: 'kv' | 'env' | 'default',
+  ) => {
+    if (key === 'AI_MAX_CONCURRENCY') {
+      setSource('maxConcurrency', source);
+    } else if (key === 'AI_QUEUE_MAX_SIZE') {
+      setSource('maxQueueSize', source);
+    } else if (key === 'AI_TIMEOUT_MS') {
+      setSource('requestTimeoutMs', source);
+    } else if (key === 'AI_RETRY_MAX') {
+      setSource('retryMax', source);
+    } else {
+      setSource('endpointFailoverThreshold', source);
+    }
+  };
+
   const resolveValue = (
-    key: 'AI_MAX_CONCURRENCY' | 'AI_QUEUE_MAX_SIZE' | 'AI_TIMEOUT_MS' | 'AI_RETRY_MAX',
+    key:
+      | 'AI_MAX_CONCURRENCY'
+      | 'AI_QUEUE_MAX_SIZE'
+      | 'AI_TIMEOUT_MS'
+      | 'AI_RETRY_MAX'
+      | 'AI_ENDPOINT_FAILOVER_THRESHOLD',
     envValue: unknown,
     parser: (value: unknown) => number | undefined,
     fallback: number,
@@ -320,15 +427,7 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     if (kvCandidate !== undefined) {
       const parsed = parser(kvCandidate);
       if (parsed !== undefined) {
-        if (key === 'AI_MAX_CONCURRENCY') {
-          setSource('maxConcurrency', 'kv');
-        } else if (key === 'AI_QUEUE_MAX_SIZE') {
-          setSource('maxQueueSize', 'kv');
-        } else if (key === 'AI_TIMEOUT_MS') {
-          setSource('requestTimeoutMs', 'kv');
-        } else {
-          setSource('retryMax', 'kv');
-        }
+        setNumericSourceForKey(key, 'kv');
         return parsed;
       }
 
@@ -337,15 +436,7 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
 
     const parsedEnv = parser(envValue);
     if (parsedEnv !== undefined) {
-      if (key === 'AI_MAX_CONCURRENCY') {
-        setSource('maxConcurrency', 'env');
-      } else if (key === 'AI_QUEUE_MAX_SIZE') {
-        setSource('maxQueueSize', 'env');
-      } else if (key === 'AI_TIMEOUT_MS') {
-        setSource('requestTimeoutMs', 'env');
-      } else {
-        setSource('retryMax', 'env');
-      }
+      setNumericSourceForKey(key, 'env');
       return parsedEnv;
     }
 
@@ -353,15 +444,7 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
       console.warn('[ai-config] invalid environment override', { key, value: envValue });
     }
 
-    if (key === 'AI_MAX_CONCURRENCY') {
-      setSource('maxConcurrency', 'default');
-    } else if (key === 'AI_QUEUE_MAX_SIZE') {
-      setSource('maxQueueSize', 'default');
-    } else if (key === 'AI_TIMEOUT_MS') {
-      setSource('requestTimeoutMs', 'default');
-    } else {
-      setSource('retryMax', 'default');
-    }
+    setNumericSourceForKey(key, 'default');
     return fallback;
   };
 
@@ -389,6 +472,42 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     toPositiveInteger,
     DEFAULT_AI_RETRY_MAX,
   );
+  const endpointFailoverThreshold = resolveValue(
+    'AI_ENDPOINT_FAILOVER_THRESHOLD',
+    env.AI_ENDPOINT_FAILOVER_THRESHOLD,
+    toPositiveInteger,
+    DEFAULT_AI_ENDPOINT_FAILOVER_THRESHOLD,
+  );
+
+  const baseUrls = (() => {
+    const kvCandidate = kvConfig
+      ? ((kvConfig as Record<string, unknown>)['AI_BASE_URLS']
+          ?? (kvConfig as Record<string, unknown>).aiBaseUrls)
+      : undefined;
+    if (kvCandidate !== undefined) {
+      const parsed = parseAiBaseUrls(kvCandidate);
+      if (parsed && parsed.length > 0) {
+        setSource('baseUrls', 'kv');
+        return parsed;
+      }
+
+      console.warn('[ai-config] invalid AI_QUEUE_CONFIG override', { key: 'AI_BASE_URLS', value: kvCandidate });
+    }
+
+    const envCandidate = env.AI_BASE_URLS;
+    if (envCandidate !== undefined) {
+      const parsed = parseAiBaseUrls(envCandidate);
+      if (parsed && parsed.length > 0) {
+        setSource('baseUrls', 'env');
+        return parsed;
+      }
+
+      console.warn('[ai-config] invalid environment override', { key: 'AI_BASE_URLS', value: envCandidate });
+    }
+
+    setSource('baseUrls', 'default');
+    return [DEFAULT_AI_BASE_URL];
+  })();
 
   console.info('[ai][config]', {
     values: {
@@ -396,6 +515,8 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
       maxQueueSize,
       requestTimeoutMs,
       retryMax,
+      baseUrls,
+      endpointFailoverThreshold,
     },
     sources,
   });
@@ -405,6 +526,8 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     maxQueueSize,
     requestTimeoutMs,
     retryMax,
+    baseUrls,
+    endpointFailoverThreshold,
     sources,
   };
 };
@@ -428,6 +551,8 @@ interface AiConcurrencyConfig {
   readonly maxQueueSize: number;
   readonly requestTimeoutMs: number;
   readonly retryMax: number;
+  readonly baseUrls: ReadonlyArray<string>;
+  readonly endpointFailoverThreshold: number;
   readonly sources: AiQueueConfigSources;
 }
 
@@ -488,6 +613,8 @@ const createPortOverrides = (
       model: runtime.openAi.model,
       promptId: runtime.openAi.promptId,
       promptVariables: runtime.openAi.promptVariables,
+      baseUrls: [...aiRuntime.baseUrls],
+      endpointFailoverThreshold: aiRuntime.endpointFailoverThreshold,
       runtime: aiRuntime,
       requestTimeoutMs: aiRuntime.requestTimeoutMs,
       maxRetries: aiRuntime.retryMax,

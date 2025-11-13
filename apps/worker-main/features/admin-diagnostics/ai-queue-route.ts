@@ -83,11 +83,18 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
       droppedSinceBoot: stats.droppedSinceBoot,
       avgWaitMs: stats.avgWaitMs,
       lastDropAt,
+      endpoints: {
+        activeBaseUrl: stats.endpoints.activeBaseUrl,
+        backupBaseUrls: stats.endpoints.backupBaseUrls,
+        failoverCounts: stats.endpoints.failoverCounts,
+      },
       sources: {
         maxConcurrency: stats.sources.maxConcurrency,
         maxQueueSize: stats.sources.maxQueueSize,
         requestTimeoutMs: stats.sources.requestTimeoutMs,
         retryMax: stats.sources.retryMax,
+        baseUrls: stats.sources.baseUrls,
+        endpointFailoverThreshold: stats.sources.endpointFailoverThreshold,
         kvConfig: stats.sources.kvConfig,
       },
     });
