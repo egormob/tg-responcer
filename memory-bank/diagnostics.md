@@ -54,6 +54,7 @@
 
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
 - Smoke-прогон варианта C: `memory-bank/logs/ai-queue-smoke-2025-11-16.md` (лог, diag JSON), подтверждает `sources.*='kv'` и отсутствие `droppedSinceBoot`.
+- DIAG-PACKET 2025-11-13 — `memory-bank/logs/diag-packet-2025-11-13-pre-step5-load-monitoring.md`: внешний Pre-Step 5 gate показывает стабильные `/admin/diag?q=ai-queue` до/после нагрузки (`status:"ok"`, `active=0`, `queued=0`, `droppedSinceBoot=0`, `kvConfig:null`), прохождение `/admin/d1-stress` без `max_retries_exceeded` и редкие `OpenAI Responses request timed out`, перекрываемые safe fallback.
 - Cloudflare negative run (2025-11-16) — [dialog-engine][sendText][error] зафиксирован, сохранение `assistant` подавлено, запись отсутствует без `messageId` (см. `../logs/cloudflare-sendtext-failure-2025-11-16.log`).
 - Стресс-тест AI/D1 (2025-11-17) — см. `../logs/stress-test-2025-11-17-ai-queue.md`: фиксируем `wrangler tail` фрагменты `[ai][config]` + скрин `/admin/diag?q=ai-queue` (до/во время/после) и указываем путь к внешним артефактам (tail-лог, diag PNG/JSON). `/admin/diag` должен подтверждать `sources.*='kv'`; если `kvConfig:null`, это блокер шага [RoadMap Step 4.4](../RoadMap.md).
 - Admin export CSV missing user conversations and UTM column.
