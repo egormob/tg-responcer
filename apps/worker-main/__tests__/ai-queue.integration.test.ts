@@ -54,6 +54,13 @@ describe('ai queue integration', () => {
           maxQueueSize: 64,
           requestTimeoutMs: 60_000,
           retryMax: 3,
+          sources: {
+            maxConcurrency: 'default',
+            maxQueueSize: 'default',
+            requestTimeoutMs: 'default',
+            retryMax: 'default',
+            kvConfig: null,
+          },
         },
       });
 

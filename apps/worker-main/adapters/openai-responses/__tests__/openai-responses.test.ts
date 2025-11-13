@@ -27,22 +27,37 @@ describe('createOpenAIResponsesAdapter', () => {
   const apiKey = 'test-key';
   const model = 'gpt-4o-mini';
 
-  const createAdapter = (
-    fetchMock: ReturnType<typeof createFetchMock>,
-    options: Partial<{
-      timeout: number;
-      maxRetries: number;
-      promptId: string;
-      promptVariables: Record<string, unknown>;
-      runtime: {
-        maxConcurrency: number;
-        maxQueueSize: number;
-        requestTimeoutMs: number;
-        retryMax: number;
+const defaultSources = {
+  maxConcurrency: 'default',
+  maxQueueSize: 'default',
+  requestTimeoutMs: 'default',
+  retryMax: 'default',
+  kvConfig: null,
+} as const;
+
+const createAdapter = (
+  fetchMock: ReturnType<typeof createFetchMock>,
+  options: Partial<{
+    timeout: number;
+    maxRetries: number;
+    promptId: string;
+    promptVariables: Record<string, unknown>;
+    runtime: {
+      maxConcurrency: number;
+      maxQueueSize: number;
+      requestTimeoutMs: number;
+      retryMax: number;
+      sources?: {
+        maxConcurrency: 'kv' | 'env' | 'default';
+        maxQueueSize: 'kv' | 'env' | 'default';
+        requestTimeoutMs: 'kv' | 'env' | 'default';
+        retryMax: 'kv' | 'env' | 'default';
+        kvConfig: 'AI_QUEUE_CONFIG' | null;
       };
-    }> = {},
-  ): AiPort =>
-    createOpenAIResponsesAdapter({
+    };
+  }> = {},
+): AiPort =>
+  createOpenAIResponsesAdapter({
       apiKey,
       model,
       fetchApi: fetchMock,
@@ -55,6 +70,10 @@ describe('createOpenAIResponsesAdapter', () => {
         maxQueueSize: options.runtime?.maxQueueSize ?? 8,
         requestTimeoutMs: options.runtime?.requestTimeoutMs ?? options.timeout ?? 5_000,
         retryMax: options.runtime?.retryMax ?? options.maxRetries ?? 3,
+        sources: {
+          ...defaultSources,
+          ...(options.runtime?.sources ?? {}),
+        },
       },
     });
 
@@ -185,6 +204,39 @@ describe('createOpenAIResponsesAdapter', () => {
     const [, init] = fetchMock.mock.calls[0] ?? [];
     const payload = JSON.parse((init?.body as string) ?? '{}');
     expect(payload.prompt).toEqual({ id: 'pmpt_12345', variables: { tone: 'friendly' } });
+  });
+
+  it('reports runtime values and sources via getQueueStats', () => {
+    const adapter = createAdapter(createFetchMock(), {
+      runtime: {
+        maxConcurrency: 6,
+        maxQueueSize: 40,
+        requestTimeoutMs: 25_000,
+        retryMax: 4,
+        sources: {
+          maxConcurrency: 'kv',
+          maxQueueSize: 'env',
+          requestTimeoutMs: 'kv',
+          retryMax: 'env',
+          kvConfig: 'AI_QUEUE_CONFIG',
+        },
+      },
+    });
+
+    const stats = adapter.getQueueStats?.();
+    expect(stats).toMatchObject({
+      maxConcurrency: 6,
+      maxQueue: 40,
+      requestTimeoutMs: 25_000,
+      retryMax: 4,
+      sources: {
+        maxConcurrency: 'kv',
+        maxQueueSize: 'env',
+        requestTimeoutMs: 'kv',
+        retryMax: 'env',
+        kvConfig: 'AI_QUEUE_CONFIG',
+      },
+    });
   });
 
   it('passes previous_response_id when context metadata includes responseId', async () => {

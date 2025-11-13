@@ -1,4 +1,9 @@
-import type { AiPort, AiQueueStats, ConversationTurn } from '../../ports';
+import type {
+  AiPort,
+  AiQueueConfigSources,
+  AiQueueStats,
+  ConversationTurn,
+} from '../../ports';
 import { sanitizeVisibleText, stripControlCharacters } from '../../shared';
 import { createAiLimiter, type AiLimiterStats } from './concurrency-limiter';
 import { getFriendlyOverloadMessage } from './overload-message';
@@ -21,6 +26,7 @@ export interface OpenAIResponsesAdapterOptions {
     maxQueueSize: number;
     requestTimeoutMs: number;
     retryMax: number;
+    sources: AiQueueConfigSources;
   };
   logger?: {
     warn?: (message: string, details?: Record<string, unknown>) => void;
@@ -99,7 +105,10 @@ const buildInputMessages = (
   ];
 };
 
-const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
+const mapLimiterStatsToQueueStats = (
+  stats: AiLimiterStats,
+  runtime: OpenAIResponsesAdapterOptions['runtime'],
+): AiQueueStats => ({
   active: stats.active,
   queued: stats.queued,
   maxConcurrency: stats.maxConcurrency,
@@ -107,13 +116,17 @@ const mapLimiterStatsToQueueStats = (stats: AiLimiterStats): AiQueueStats => ({
   droppedSinceBoot: stats.droppedSinceBoot,
   avgWaitMs: stats.avgWaitMs,
   lastDropAt: stats.lastDropAt,
+  requestTimeoutMs: runtime.requestTimeoutMs,
+  retryMax: runtime.retryMax,
+  sources: runtime.sources,
 });
 
 const createQueueLogPayload = (
   stats: AiLimiterStats,
+  runtime: OpenAIResponsesAdapterOptions['runtime'],
   extra: Record<string, unknown>,
 ): Record<string, unknown> => ({
-  ...mapLimiterStatsToQueueStats(stats),
+  ...mapLimiterStatsToQueueStats(stats, runtime),
   ...extra,
 });
 
@@ -413,7 +426,7 @@ export const createOpenAIResponsesAdapter = (
 
   return {
     getQueueStats(): AiQueueStats {
-      return mapLimiterStatsToQueueStats(limiter.getStats());
+      return mapLimiterStatsToQueueStats(limiter.getStats(), runtime);
     },
     async reply(input) {
       const previousResponseId = extractPreviousResponseId(input.context);
@@ -449,7 +462,7 @@ export const createOpenAIResponsesAdapter = (
           // eslint-disable-next-line no-console
           console.error(
             '[ai][timeout]',
-            createQueueLogPayload(limiter.getStats(), {
+            createQueueLogPayload(limiter.getStats(), runtime, {
               phase: 'budget_exhausted',
               attempt: attempt + 1,
               userIdHash,
@@ -470,24 +483,24 @@ export const createOpenAIResponsesAdapter = (
           release = await limiter.acquire({
             onQueue: (stats) => {
               // eslint-disable-next-line no-console
-              console.info(
-                '[ai][queue_enter]',
-                createQueueLogPayload(stats, {
-                  requestId: null,
-                  userIdHash,
-                  queueWaitMs: 0,
-                }),
-              );
-            },
-            onAcquire: ({ queueWaitMs: waitMs, ...stats }) => {
-              queueWaitMs = waitMs;
-              // eslint-disable-next-line no-console
-              console.info(
-                '[ai][queue_leave]',
-                createQueueLogPayload(stats, {
-                  requestId: null,
-                  userIdHash,
-                  queueWaitMs: waitMs,
+            console.info(
+              '[ai][queue_enter]',
+              createQueueLogPayload(stats, runtime, {
+                requestId: null,
+                userIdHash,
+                queueWaitMs: 0,
+              }),
+            );
+          },
+          onAcquire: ({ queueWaitMs: waitMs, ...stats }) => {
+            queueWaitMs = waitMs;
+            // eslint-disable-next-line no-console
+            console.info(
+              '[ai][queue_leave]',
+              createQueueLogPayload(stats, runtime, {
+                requestId: null,
+                userIdHash,
+                queueWaitMs: waitMs,
                 }),
               );
             },
@@ -502,7 +515,7 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][dropped]',
-              createQueueLogPayload(stats, {
+              createQueueLogPayload(stats, runtime, {
                 reason: 'queue_overflow',
                 userIdHash,
                 requestId: null,
@@ -530,7 +543,7 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), {
+              createQueueLogPayload(limiter.getStats(), runtime, {
                 phase: 'queue_wait',
                 attempt: attempt + 1,
                 queueWaitMs,
@@ -608,7 +621,7 @@ export const createOpenAIResponsesAdapter = (
           // eslint-disable-next-line no-console
           console.warn(
             '[ai][retry]',
-            createQueueLogPayload(limiter.getStats(), {
+            createQueueLogPayload(limiter.getStats(), runtime, {
               attempt: attempt + 1,
               reason,
               requestId: requestId ?? null,
@@ -631,7 +644,7 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), {
+              createQueueLogPayload(limiter.getStats(), runtime, {
                 phase: 'before_retry_sleep',
                 attempt: attempt + 1,
                 userIdHash,

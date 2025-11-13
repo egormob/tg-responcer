@@ -78,8 +78,17 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
       queued: stats.queued,
       maxConcurrency: stats.maxConcurrency,
       maxQueue: stats.maxQueue,
+      requestTimeoutMs: stats.requestTimeoutMs,
+      retryMax: stats.retryMax,
       droppedSinceBoot: stats.droppedSinceBoot,
       avgWaitMs: stats.avgWaitMs,
       lastDropAt,
+      sources: {
+        maxConcurrency: stats.sources.maxConcurrency,
+        maxQueueSize: stats.sources.maxQueueSize,
+        requestTimeoutMs: stats.sources.requestTimeoutMs,
+        retryMax: stats.sources.retryMax,
+        kvConfig: stats.sources.kvConfig,
+      },
     });
   };

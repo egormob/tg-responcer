@@ -42,7 +42,7 @@ import {
   type TypingIndicator,
   type TelegramAdminCommandContext,
 } from './http';
-import type { MessagingPort } from './ports';
+import type { AiQueueConfigSources, MessagingPort } from './ports';
 import type { CompositionResult } from './composition';
 import { parsePromptVariables } from './shared/prompt-variables';
 
@@ -92,8 +92,8 @@ const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const DEFAULT_AI_MAX_CONCURRENCY = 4;
 const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
-const DEFAULT_AI_TIMEOUT_MS = 12_000;
-const DEFAULT_AI_RETRY_MAX = 2;
+const DEFAULT_AI_TIMEOUT_MS = 18_000;
+const DEFAULT_AI_RETRY_MAX = 3;
 
 const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -295,7 +295,20 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
   };
 
   const kvConfig = await readKvConfig();
-  const sources: Record<string, 'kv' | 'env' | 'default'> = {};
+  const sources: AiQueueConfigSources = {
+    maxConcurrency: 'default',
+    maxQueueSize: 'default',
+    requestTimeoutMs: 'default',
+    retryMax: 'default',
+    kvConfig: kvConfig ? 'AI_QUEUE_CONFIG' : null,
+  };
+
+  const setSource = (
+    key: keyof Omit<AiQueueConfigSources, 'kvConfig'>,
+    source: AiQueueConfigSources[keyof Omit<AiQueueConfigSources, 'kvConfig'>],
+  ) => {
+    sources[key] = source;
+  };
 
   const resolveValue = (
     key: 'AI_MAX_CONCURRENCY' | 'AI_QUEUE_MAX_SIZE' | 'AI_TIMEOUT_MS' | 'AI_RETRY_MAX',
@@ -307,7 +320,15 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     if (kvCandidate !== undefined) {
       const parsed = parser(kvCandidate);
       if (parsed !== undefined) {
-        sources[key] = 'kv';
+        if (key === 'AI_MAX_CONCURRENCY') {
+          setSource('maxConcurrency', 'kv');
+        } else if (key === 'AI_QUEUE_MAX_SIZE') {
+          setSource('maxQueueSize', 'kv');
+        } else if (key === 'AI_TIMEOUT_MS') {
+          setSource('requestTimeoutMs', 'kv');
+        } else {
+          setSource('retryMax', 'kv');
+        }
         return parsed;
       }
 
@@ -316,7 +337,15 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
 
     const parsedEnv = parser(envValue);
     if (parsedEnv !== undefined) {
-      sources[key] = 'env';
+      if (key === 'AI_MAX_CONCURRENCY') {
+        setSource('maxConcurrency', 'env');
+      } else if (key === 'AI_QUEUE_MAX_SIZE') {
+        setSource('maxQueueSize', 'env');
+      } else if (key === 'AI_TIMEOUT_MS') {
+        setSource('requestTimeoutMs', 'env');
+      } else {
+        setSource('retryMax', 'env');
+      }
       return parsedEnv;
     }
 
@@ -324,7 +353,15 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
       console.warn('[ai-config] invalid environment override', { key, value: envValue });
     }
 
-    sources[key] = 'default';
+    if (key === 'AI_MAX_CONCURRENCY') {
+      setSource('maxConcurrency', 'default');
+    } else if (key === 'AI_QUEUE_MAX_SIZE') {
+      setSource('maxQueueSize', 'default');
+    } else if (key === 'AI_TIMEOUT_MS') {
+      setSource('requestTimeoutMs', 'default');
+    } else {
+      setSource('retryMax', 'default');
+    }
     return fallback;
   };
 
@@ -360,13 +397,7 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
       requestTimeoutMs,
       retryMax,
     },
-    sources: {
-      maxConcurrency: sources.AI_MAX_CONCURRENCY ?? 'default',
-      maxQueueSize: sources.AI_QUEUE_MAX_SIZE ?? 'default',
-      requestTimeoutMs: sources.AI_TIMEOUT_MS ?? 'default',
-      retryMax: sources.AI_RETRY_MAX ?? 'default',
-      kvConfig: kvConfig ? 'AI_QUEUE_CONFIG' : null,
-    },
+    sources,
   });
 
   return {
@@ -374,6 +405,7 @@ const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyCon
     maxQueueSize,
     requestTimeoutMs,
     retryMax,
+    sources,
   };
 };
 
@@ -396,6 +428,7 @@ interface AiConcurrencyConfig {
   readonly maxQueueSize: number;
   readonly requestTimeoutMs: number;
   readonly retryMax: number;
+  readonly sources: AiQueueConfigSources;
 }
 
 interface RuntimeConfig {
