@@ -360,6 +360,54 @@ describe('createOpenAIResponsesAdapter', () => {
     });
   });
 
+  it('waits for semaphore release before starting queued requests', async () => {
+    const fetchMock = createFetchMock();
+    let resolveFirst: (() => void) | undefined;
+
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFirst = () =>
+            resolve(
+              createResponse({
+                id: 'resp_one',
+                status: 'completed',
+                output_text: 'First slot',
+              }),
+            );
+        }),
+    );
+
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_two',
+        status: 'completed',
+        output_text: 'Second slot',
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock, {
+      runtime: { maxConcurrency: 1, maxQueueSize: 1, requestTimeoutMs: 5_000, retryMax: 1 },
+    });
+
+    const firstCall = adapter.reply({ userId: 'user-1', text: 'Hold slot', context: [] });
+
+    await Promise.resolve();
+
+    const secondCall = adapter.reply({ userId: 'user-2', text: 'Need slot', context: [] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.();
+    await firstCall;
+
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await expect(secondCall).resolves.toMatchObject({ text: 'Second slot' });
+  });
+
   it('retries on retryable errors and succeeds', async () => {
     vi.useFakeTimers();
     const randomMock = vi.spyOn(Math, 'random').mockReturnValue(0.5);
@@ -396,6 +444,44 @@ describe('createOpenAIResponsesAdapter', () => {
 
       await expect(replyPromise).resolves.toMatchObject({ text: 'Done' });
 
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      randomMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries on HTTP 408 and succeeds', async () => {
+    vi.useFakeTimers();
+    const randomMock = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    try {
+      const fetchMock = createFetchMock();
+      fetchMock
+        .mockResolvedValueOnce(
+          createResponse(
+            { error: { message: 'timeout' } },
+            { status: 408, headers: { 'x-request-id': 'req_timeout' } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          createResponse({
+            id: 'resp_408_success',
+            status: 'completed',
+            output: [
+              { type: 'message', content: [{ type: 'output_text', text: 'Recovered' }] },
+            ],
+          }),
+        );
+
+      const adapter = createAdapter(fetchMock);
+
+      const replyPromise = adapter.reply({ userId: 'u', text: 'Ping', context: [] });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.runAllTimersAsync();
+
+      await expect(replyPromise).resolves.toMatchObject({ text: 'Recovered' });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       randomMock.mockRestore();
@@ -483,18 +569,44 @@ describe('createOpenAIResponsesAdapter', () => {
 
   it('throws AI_NON_2XX when non-retryable response persists', async () => {
     const fetchMock = createFetchMock();
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ error: { message: 'bad request' } }), {
-        status: 400,
-        headers: { 'x-request-id': 'req_bad' },
-      }),
+    fetchMock.mockImplementation(
+      () =>
+        new Response(JSON.stringify({ error: { message: 'bad request' } }), {
+          status: 400,
+          headers: { 'x-request-id': 'req_bad' },
+        }),
     );
 
-    const adapter = createAdapter(fetchMock, { maxRetries: 1 });
+    const adapter = createAdapter(fetchMock, { maxRetries: 2 });
 
     await expect(
       adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
     ).rejects.toThrow('AI_NON_2XX');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors maxRetries when fetch rejects without retryable flag', async () => {
+    vi.useFakeTimers();
+    const randomMock = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    try {
+      const fetchMock = createFetchMock();
+      fetchMock.mockRejectedValue(new Error('socket hang up'));
+
+      const adapter = createAdapter(fetchMock, { maxRetries: 2 });
+
+      const replyPromise = adapter.reply({ userId: 'u', text: 'Ping', context: [] });
+      replyPromise.catch(() => {});
+
+      await vi.runAllTimersAsync();
+
+      await expect(replyPromise).rejects.toThrow(/openai responses/i);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      randomMock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('aborts when retries exhaust the global timeout budget', async () => {
