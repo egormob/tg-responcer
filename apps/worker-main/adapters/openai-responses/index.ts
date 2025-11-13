@@ -11,6 +11,7 @@ import { getFriendlyOverloadMessage } from './overload-message';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_ENDPOINT_FAILOVER_THRESHOLD = 3;
 
 export interface OpenAIResponsesAdapterOptions {
   apiKey: string;
@@ -19,8 +20,10 @@ export interface OpenAIResponsesAdapterOptions {
   promptVariables?: Record<string, unknown>;
   fetchApi?: typeof fetch;
   baseUrl?: string;
+  baseUrls?: ReadonlyArray<string>;
   requestTimeoutMs?: number;
   maxRetries?: number;
+  endpointFailoverThreshold?: number;
   runtime: {
     maxConcurrency: number;
     maxQueueSize: number;
@@ -108,6 +111,7 @@ const buildInputMessages = (
 const mapLimiterStatsToQueueStats = (
   stats: AiLimiterStats,
   runtime: OpenAIResponsesAdapterOptions['runtime'],
+  endpoints: AiQueueStats['endpoints'],
 ): AiQueueStats => ({
   active: stats.active,
   queued: stats.queued,
@@ -119,14 +123,16 @@ const mapLimiterStatsToQueueStats = (
   requestTimeoutMs: runtime.requestTimeoutMs,
   retryMax: runtime.retryMax,
   sources: runtime.sources,
+  endpoints,
 });
 
 const createQueueLogPayload = (
   stats: AiLimiterStats,
   runtime: OpenAIResponsesAdapterOptions['runtime'],
+  endpoints: AiQueueStats['endpoints'],
   extra: Record<string, unknown>,
 ): Record<string, unknown> => ({
-  ...mapLimiterStatsToQueueStats(stats, runtime),
+  ...mapLimiterStatsToQueueStats(stats, runtime, endpoints),
   ...extra,
 });
 
@@ -318,7 +324,121 @@ export const createOpenAIResponsesAdapter = (
   });
 
   const fetchImpl = options.fetchApi ?? fetch;
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  const configuredBaseUrls = (() => {
+    if (Array.isArray(options.baseUrls) && options.baseUrls.length > 0) {
+      const normalized = options.baseUrls
+        .map((url) => (typeof url === 'string' ? url.trim() : ''))
+        .filter((url) => url.length > 0);
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    if (typeof options.baseUrl === 'string' && options.baseUrl.trim().length > 0) {
+      return [options.baseUrl.trim()];
+    }
+
+    return [DEFAULT_BASE_URL];
+  })();
+
+  const endpoints = configuredBaseUrls.map((url, index) => ({
+    id: `endpoint_${index + 1}`,
+    url,
+  }));
+
+  if (endpoints.length === 0) {
+    endpoints.push({ id: 'endpoint_1', url: DEFAULT_BASE_URL });
+  }
+
+  const failoverCounts = new Map<string, number>();
+  endpoints.forEach((endpoint) => {
+    failoverCounts.set(endpoint.id, 0);
+  });
+
+  const endpointHealth = endpoints.map(() => ({
+    consecutiveRetryableErrors: 0,
+    lastFailureAt: null as number | null,
+  }));
+
+  let activeEndpointIndex = 0;
+
+  const endpointFailoverThreshold = Math.max(
+    1,
+    Math.floor(options.endpointFailoverThreshold ?? DEFAULT_ENDPOINT_FAILOVER_THRESHOLD),
+  );
+
+  const getEndpointByIndex = (index: number): { id: string; url: string } =>
+    endpoints[index] ?? endpoints[0];
+
+  const getEndpointDiagnostics = (): AiQueueStats['endpoints'] => {
+    const activeEndpoint = getEndpointByIndex(activeEndpointIndex);
+    return {
+      activeEndpointId: activeEndpoint.id,
+      activeBaseUrl: activeEndpoint.url,
+      backupBaseUrls: endpoints
+        .filter((_, index) => index !== activeEndpointIndex)
+        .map((endpoint) => endpoint.url),
+      failoverCounts: Object.fromEntries(
+        endpoints.map((endpoint) => [endpoint.id, failoverCounts.get(endpoint.id) ?? 0]),
+      ),
+    };
+  };
+
+  const markEndpointSuccess = (index: number) => {
+    const health = endpointHealth[index];
+    if (health) {
+      health.consecutiveRetryableErrors = 0;
+      health.lastFailureAt = null;
+    }
+  };
+
+  const markRetryableFailure = (index: number, reason: string) => {
+    const health = endpointHealth[index];
+    if (!health) {
+      return;
+    }
+
+    health.consecutiveRetryableErrors += 1;
+    health.lastFailureAt = Date.now();
+
+    if (health.consecutiveRetryableErrors < endpointFailoverThreshold) {
+      return;
+    }
+
+    if (endpoints.length <= 1 || index !== activeEndpointIndex) {
+      health.consecutiveRetryableErrors = 0;
+      return;
+    }
+
+    const previousEndpoint = endpoints[index];
+    const nextIndex = (index + 1) % endpoints.length;
+    const nextEndpoint = endpoints[nextIndex];
+
+    activeEndpointIndex = nextIndex;
+    failoverCounts.set(previousEndpoint.id, (failoverCounts.get(previousEndpoint.id) ?? 0) + 1);
+
+    const nextHealth = endpointHealth[nextIndex];
+    if (nextHealth) {
+      nextHealth.consecutiveRetryableErrors = 0;
+      nextHealth.lastFailureAt = null;
+    }
+
+    const consecutiveFailures = health.consecutiveRetryableErrors;
+
+    // eslint-disable-next-line no-console
+    console.warn('[ai][endpoint_failover]', {
+      reason,
+      from: previousEndpoint.id,
+      fromBaseUrl: previousEndpoint.url,
+      to: nextEndpoint.id,
+      toBaseUrl: nextEndpoint.url,
+      threshold: endpointFailoverThreshold,
+      consecutiveFailures,
+    });
+
+    health.consecutiveRetryableErrors = 0;
+  };
+
   const runtimeTimeoutMs = Math.max(1, Math.floor(runtime.requestTimeoutMs));
   const timeoutBudgetMs = Math.max(
     1,
@@ -335,14 +455,18 @@ export const createOpenAIResponsesAdapter = (
     requestInit: RequestInit,
     attempt: number,
     attemptTimeoutMs: number,
-  ): Promise<{ payload: ResponsesApiSuccessPayload; requestId?: string }> => {
+  ): Promise<{ payload: ResponsesApiSuccessPayload; requestId?: string; endpointId: string; baseUrl: string }> => {
+    const endpointIndex = activeEndpointIndex;
+    const endpoint = getEndpointByIndex(endpointIndex);
+    const requestBaseUrl = endpoint.url;
+    const endpointId = endpoint.id;
     const { signal, dispose } = createAbortSignal(attemptTimeoutMs);
 
     try {
       // eslint-disable-next-line no-console
-      console.info('[ai][request]', { attempt });
+      console.info('[ai][request]', { attempt, endpointId, baseUrl: requestBaseUrl });
 
-      const response = await fetchImpl(baseUrl, {
+      const response = await fetchImpl(requestBaseUrl, {
         ...requestInit,
         signal,
       });
@@ -365,6 +489,8 @@ export const createOpenAIResponsesAdapter = (
           status: response.status,
           attempt,
           requestId,
+          endpointId,
+          baseUrl: requestBaseUrl,
           body: rawBody,
         });
 
@@ -387,13 +513,20 @@ export const createOpenAIResponsesAdapter = (
           requestId,
         });
 
-        throw Object.assign(error, { retryable: true, requestId });
+        markRetryableFailure(endpointIndex, `http_${response.status}`);
+        throw Object.assign(error, { retryable: true, requestId, endpointId, baseUrl: requestBaseUrl });
       }
 
       const payload = (await response.json()) as ResponsesApiSuccessPayload;
       // eslint-disable-next-line no-console
-      console.info('[ai][ok]', { attempt, requestId: requestId ?? null });
-      return { payload, requestId };
+      console.info('[ai][ok]', {
+        attempt,
+        requestId: requestId ?? null,
+        endpointId,
+        baseUrl: requestBaseUrl,
+      });
+      markEndpointSuccess(endpointIndex);
+      return { payload, requestId, endpointId, baseUrl: requestBaseUrl };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         const timeoutError = new Error('OpenAI Responses request timed out');
@@ -403,7 +536,10 @@ export const createOpenAIResponsesAdapter = (
         }
 
         logger?.warn?.('openai-responses retryable timeout', { attempt });
-        throw Object.assign(timeoutError, { retryable: true });
+        // eslint-disable-next-line no-console
+        console.warn('[ai][timeout]', { attempt, endpointId, baseUrl: requestBaseUrl });
+        markRetryableFailure(endpointIndex, 'timeout');
+        throw Object.assign(timeoutError, { retryable: true, endpointId, baseUrl: requestBaseUrl });
       }
 
       if (error instanceof Error && (error as { retryable?: boolean }).retryable === true) {
@@ -416,8 +552,11 @@ export const createOpenAIResponsesAdapter = (
       }
 
       logger?.warn?.('openai-responses retryable network error', { attempt });
+      markRetryableFailure(endpointIndex, 'network_error');
       throw Object.assign(error instanceof Error ? error : new Error('retryable failure'), {
         retryable: true,
+        endpointId,
+        baseUrl: requestBaseUrl,
       });
     } finally {
       dispose();
@@ -426,7 +565,7 @@ export const createOpenAIResponsesAdapter = (
 
   return {
     getQueueStats(): AiQueueStats {
-      return mapLimiterStatsToQueueStats(limiter.getStats(), runtime);
+      return mapLimiterStatsToQueueStats(limiter.getStats(), runtime, getEndpointDiagnostics());
     },
     async reply(input) {
       const previousResponseId = extractPreviousResponseId(input.context);
@@ -462,7 +601,7 @@ export const createOpenAIResponsesAdapter = (
           // eslint-disable-next-line no-console
           console.error(
             '[ai][timeout]',
-            createQueueLogPayload(limiter.getStats(), runtime, {
+            createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
               phase: 'budget_exhausted',
               attempt: attempt + 1,
               userIdHash,
@@ -485,7 +624,7 @@ export const createOpenAIResponsesAdapter = (
               // eslint-disable-next-line no-console
             console.info(
               '[ai][queue_enter]',
-              createQueueLogPayload(stats, runtime, {
+              createQueueLogPayload(stats, runtime, getEndpointDiagnostics(), {
                 requestId: null,
                 userIdHash,
                 queueWaitMs: 0,
@@ -497,12 +636,12 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.info(
               '[ai][queue_leave]',
-              createQueueLogPayload(stats, runtime, {
+              createQueueLogPayload(stats, runtime, getEndpointDiagnostics(), {
                 requestId: null,
                 userIdHash,
                 queueWaitMs: waitMs,
-                }),
-              );
+              }),
+            );
             },
             onDrop: (stats) => {
               lastDropStats = stats;
@@ -515,7 +654,7 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][dropped]',
-              createQueueLogPayload(stats, runtime, {
+              createQueueLogPayload(stats, runtime, getEndpointDiagnostics(), {
                 reason: 'queue_overflow',
                 userIdHash,
                 requestId: null,
@@ -543,7 +682,7 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), runtime, {
+              createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
                 phase: 'queue_wait',
                 attempt: attempt + 1,
                 queueWaitMs,
@@ -556,7 +695,7 @@ export const createOpenAIResponsesAdapter = (
 
           const remainingTime = deadline - now;
           const attemptTimeout = Math.max(1, remainingTime);
-          const { payload, requestId } = await execute(
+          const { payload, requestId, endpointId, baseUrl } = await execute(
             {
               method: 'POST',
               headers: {
@@ -577,6 +716,8 @@ export const createOpenAIResponsesAdapter = (
             usedOutputText,
             length: text.length,
             previousResponseId: previousResponseId ?? null,
+            endpointId,
+            baseUrl,
           });
 
           return {
@@ -587,6 +728,8 @@ export const createOpenAIResponsesAdapter = (
               requestId,
               usedOutputText,
               previousResponseId,
+              endpointId,
+              baseUrl,
             },
           };
         } catch (error) {
@@ -608,6 +751,15 @@ export const createOpenAIResponsesAdapter = (
             throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
           }
 
+          const endpointId =
+            typeof (error as { endpointId?: unknown }).endpointId === 'string'
+              ? ((error as { endpointId?: string }).endpointId as string)
+              : undefined;
+          const baseUrl =
+            typeof (error as { baseUrl?: unknown }).baseUrl === 'string'
+              ? ((error as { baseUrl?: string }).baseUrl as string)
+              : undefined;
+
           const reason =
             error instanceof Error && typeof error.message === 'string' && error.message.trim().length > 0
               ? error.message
@@ -621,12 +773,14 @@ export const createOpenAIResponsesAdapter = (
           // eslint-disable-next-line no-console
           console.warn(
             '[ai][retry]',
-            createQueueLogPayload(limiter.getStats(), runtime, {
+            createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
               attempt: attempt + 1,
               reason,
               requestId: requestId ?? null,
               userIdHash,
               queueWaitMs,
+              endpointId: endpointId ?? null,
+              baseUrl: baseUrl ?? null,
             }),
           );
 
@@ -644,12 +798,14 @@ export const createOpenAIResponsesAdapter = (
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), runtime, {
+              createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
                 phase: 'before_retry_sleep',
                 attempt: attempt + 1,
                 userIdHash,
                 requestId: null,
                 queueWaitMs,
+                endpointId: endpointId ?? null,
+                baseUrl: baseUrl ?? null,
               }),
             );
             throw new Error('AI_QUEUE_TIMEOUT');
