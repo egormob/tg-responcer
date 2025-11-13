@@ -579,15 +579,15 @@ export const createOpenAIResponsesAdapter = (
         } catch (error) {
           lastError = error;
 
+          if (
+            error instanceof Error
+            && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
+          ) {
+            throw error;
+          }
+
           const retryable = error instanceof Error && (error as { retryable?: boolean }).retryable === true;
           if (!retryable || attempt === maxRetries - 1) {
-            if (
-              error instanceof Error
-              && (error.message === 'AI_NON_2XX' || error.message === 'AI_EMPTY_REPLY')
-            ) {
-              throw error;
-            }
-
             if (error instanceof Error && error.message === 'AI_QUEUE_TIMEOUT') {
               throw error;
             }

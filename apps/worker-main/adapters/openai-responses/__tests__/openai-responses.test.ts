@@ -583,7 +583,7 @@ describe('createOpenAIResponsesAdapter', () => {
       adapter.reply({ userId: 'u', text: 'Ping', context: [] }),
     ).rejects.toThrow('AI_NON_2XX');
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('honors maxRetries when fetch rejects without retryable flag', async () => {
