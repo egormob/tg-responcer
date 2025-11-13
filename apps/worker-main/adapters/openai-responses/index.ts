@@ -57,7 +57,8 @@ interface ResponsesApiSuccessPayload {
 
 const sanitizeOutputText = (text: string): string => sanitizeVisibleText(text);
 
-const isRetryableStatus = (status: number): boolean => status === 429 || status >= 500;
+const isRetryableStatus = (status: number): boolean =>
+  status === 408 || status === 429 || status >= 500;
 
 const mapTurnToContentType = (role: ConversationTurn['role']): string => {
   switch (role) {
