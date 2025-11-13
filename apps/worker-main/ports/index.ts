@@ -78,6 +78,14 @@ export interface MessagingPort {
   }): Promise<void>;
 }
 
+export interface AiQueueConfigSources {
+  maxConcurrency: 'kv' | 'env' | 'default';
+  maxQueueSize: 'kv' | 'env' | 'default';
+  requestTimeoutMs: 'kv' | 'env' | 'default';
+  retryMax: 'kv' | 'env' | 'default';
+  kvConfig: 'AI_QUEUE_CONFIG' | null;
+}
+
 export interface AiQueueStats {
   active: number;
   queued: number;
@@ -86,6 +94,9 @@ export interface AiQueueStats {
   droppedSinceBoot: number;
   avgWaitMs: number;
   lastDropAt: number | null;
+  requestTimeoutMs: number;
+  retryMax: number;
+  sources: AiQueueConfigSources;
 }
 
 export interface AiPort {
