@@ -676,6 +676,9 @@ export const createOpenAIResponsesAdapter = (
           throw error instanceof Error ? error : new Error('AI_QUEUE_DROPPED');
         }
 
+        let retryEndpointId: string | undefined;
+        let retryBaseUrl: string | undefined;
+
         try {
           const now = Date.now();
           if (now > deadline) {
@@ -751,11 +754,11 @@ export const createOpenAIResponsesAdapter = (
             throw createWrappedError(error instanceof Error ? error : new Error(DEFAULT_ERROR_MESSAGE));
           }
 
-          const endpointId =
+          retryEndpointId =
             typeof (error as { endpointId?: unknown }).endpointId === 'string'
               ? ((error as { endpointId?: string }).endpointId as string)
               : undefined;
-          const baseUrl =
+          retryBaseUrl =
             typeof (error as { baseUrl?: unknown }).baseUrl === 'string'
               ? ((error as { baseUrl?: string }).baseUrl as string)
               : undefined;
@@ -779,8 +782,8 @@ export const createOpenAIResponsesAdapter = (
               requestId: requestId ?? null,
               userIdHash,
               queueWaitMs,
-              endpointId: endpointId ?? null,
-              baseUrl: baseUrl ?? null,
+              endpointId: retryEndpointId ?? null,
+              baseUrl: retryBaseUrl ?? null,
             }),
           );
 
@@ -804,8 +807,8 @@ export const createOpenAIResponsesAdapter = (
                 userIdHash,
                 requestId: null,
                 queueWaitMs,
-                endpointId: endpointId ?? null,
-                baseUrl: baseUrl ?? null,
+                endpointId: retryEndpointId ?? null,
+                baseUrl: retryBaseUrl ?? null,
               }),
             );
             throw new Error('AI_QUEUE_TIMEOUT');
