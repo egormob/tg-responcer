@@ -1,6 +1,7 @@
 node_modules/
 logs/*
 !logs/check-roadmap.log
+!logs/limits-6-1-tail.json
 snapshot/
 .DS_Store
 

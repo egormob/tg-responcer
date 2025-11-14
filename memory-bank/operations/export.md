@@ -40,6 +40,14 @@
 - Если выгрузка была обрезана по лимиту, бот уведомляет: «⚠️ Экспорт ограничен первыми 5000 строками…». Сообщение приходит сразу после подготовки CSV.
 - В заголовке `x-utm-sources` CSV-handler возвращает уникальные UTM источники текущей страницы; бот аккумулирует их между страницами и прикладывает полный список в лог выгрузки и KV.
 
+### Разделение лимитов
+| `LIMITS_ENABLED` | Пользовательские сообщения | Админские маршруты (`rawRateLimit`) | Кулдаун `/export` |
+| --- | --- | --- | --- |
+| `1` | Активен стандартный rate-limit пользователя | Активен `rawRateLimit` (лимитирует `/export`, `/broadcast`, `/admin/*`) | 60 с TTL в KV, уведомление «Экспорт формируется, подождите 60 секунд» |
+| `0` | Пользовательские лимиты отключены, сообщения проходят без 429 | `rawRateLimit` остаётся строгим, блокирует повторные `/export` | По-прежнему 60 с TTL, HTTP 429 и уведомление на повторных попытках |
+
+> **Важно:** флаг `LIMITS_ENABLED` не влияет на `rawRateLimit`. Всегда проверяйте, что TTL в `AI_CONTROL_KV` и `RATE_LIMIT_KV` ≥ 60 секунд, чтобы избежать регрессии к историческому значению 30 секунд.
+
 ## Проверка записи UTM при регистрации
 1. Отправь из тестового аккаунта `/start src_TEST-CAMPAIGN` и зафиксируй `chat_id` из ответа Telegram. После обработки воркер должен залогировать `[utm-tracking] saveUser result` с `utmSource:"src_TEST-CAMPAIGN"` без ошибок `utmDegraded`.
 2. Убедись, что значение попало в D1: `wrangler d1 execute $DB --command "SELECT utm_source FROM users WHERE user_id='<chat_id>'"` должно вернуть `src_TEST-CAMPAIGN`.
@@ -56,6 +64,7 @@
 
 ## Последние проверки
 - 2025-11-09: `npx vitest run apps/worker-main/features/utm-tracking/__tests__/parse-start-payload.test.ts apps/worker-main/http/__tests__/telegram-webhook.test.ts` — подтверждена поддержка `src.`-payload и сохранения регистра в `utm_source`.
+- 2025-11-23: **ПРОВЕРКА 6.1** — `LIMITS_ENABLED=0` отключает только пользовательские лимиты, админский `/export` остаётся под `rawRateLimit` и кулдауном 60 с. Артефакты: `logs/limits-6-1-tail.json`, `reports/REPORT-limits-export-cooldown-20251123.md`.
 
 ### Диагностика ошибок отправки админ-команд
 - При ошибках доставки `/admin`-ответов бот логирует `failed to send admin help response` или `failed to send admin status response` с полями `status` и `description`. Значения берутся из ответа Telegram API (например, `403` + `Forbidden: bot was blocked by the user`).
