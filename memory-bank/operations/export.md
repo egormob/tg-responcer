@@ -34,6 +34,13 @@
 5. Экспорт сейчас не содержит отдельных колонок `utm_*`. Чтобы BI увидела UTM-значения, используй выгрузку `users.utm_source` или добавь их вручную в копию CSV перед импортом.
 6. Зафиксируй результат проверки в журнале прогресса с ссылкой на файл экспорта.
 
+## Проверка записи UTM при регистрации
+1. Отправь из тестового аккаунта `/start src_TEST-CAMPAIGN` и зафиксируй `chat_id` из ответа Telegram. После обработки воркер должен залогировать `[utm-tracking] saveUser result` с `utmSource:"src_TEST-CAMPAIGN"` без ошибок `utmDegraded`.
+2. Убедись, что значение попало в D1: `wrangler d1 execute $DB --command "SELECT utm_source FROM users WHERE user_id='<chat_id>'"` должно вернуть `src_TEST-CAMPAIGN`.
+3. Отправь в тот же чат любое сообщение без payload (обычное «ping»). В `wrangler tail` проверь, что лог маршрута (`route: telegram.message`) содержит `message.user.utmSource='src_TEST-CAMPAIGN'`, а повторного вызова `saveUser` нет.
+4. Выполни диагностический запрос `curl -H "X-Admin-Token: $ADMIN_TOKEN" https://<worker>/admin/known-users/clear` и убедись, что `size` и `userIdHashes[]` содержат недавно активного пользователя (значение очищается после запроса, поэтому запускать после проверки).
+5. Если на любом шаге появляется `[d1-storage] utm_source column missing` или `utmDegraded:true`, повторяй `saveUser` с тем же пользователем до появления лога `utm_source column restored` и только потом продолжаем выгрузки.
+
 ## Контрольные проверки
 - `npm run check:roadmap` — убеждаемся, что статус шага М7.Ш8 синхронизирован с памятками.
 - Разовый ручной прогон `/export` из админ-чата: payload должен попасть в KV и далее в CSV.

@@ -74,6 +74,37 @@ describe('transformTelegramUpdate', () => {
     expect(result.route).toBe('telegram.message.start_payload');
   });
 
+  it('normalizes bigint identifiers while attaching /start utm payload', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/start src_BIG-ID';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/start'.length },
+    ];
+    update.message.from = {
+      ...(update.message.from ?? { first_name: 'Anon' }),
+      id: 987654321987654321n,
+    };
+    update.message.chat.id = 222222222222222222n;
+    update.message.message_id = 333333333333333333n;
+
+    const result = await transformTelegramUpdate(update);
+
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.user.userId).toBe('987654321987654321');
+    expect(typeof result.message.user.userId).toBe('string');
+    expect(result.message.user.utmSource).toBe('src_BIG-ID');
+    expect(result.message.chat.id).toBe('222222222222222222');
+    expect(result.message.messageId).toBe('333333333333333333');
+  });
+
   it('attaches utmSource when startapp payload provided for mini app', async () => {
     const update = createBaseUpdate();
     update.startapp = 'src_MINI-App';
