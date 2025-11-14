@@ -150,4 +150,26 @@ describe('composeWorker', () => {
     expect(kv.get).toHaveBeenCalledWith('LIMITS_ENABLED');
     expect(adapters.rateLimit.checkAndIncrement).not.toHaveBeenCalled();
   });
+
+  it('keeps raw rate limit enabled for admin ports when limits flag disables user limiter', async () => {
+    const adapters = createPortOverrides();
+    adapters.rateLimit.checkAndIncrement.mockResolvedValue('limit');
+
+    const kv = {
+      get: vi.fn().mockResolvedValue('0'),
+    };
+
+    const composition = composeWorker({
+      env: { RATE_LIMIT_KV: kv },
+      adapters,
+    });
+
+    const userResult = await composition.ports.rateLimit.checkAndIncrement({ userId: 'user-5' });
+    expect(userResult).toBe('ok');
+    expect(adapters.rateLimit.checkAndIncrement).not.toHaveBeenCalled();
+
+    const adminResult = await composition.ports.rawRateLimit.checkAndIncrement({ userId: 'admin-1' });
+    expect(adminResult).toBe('limit');
+    expect(adapters.rateLimit.checkAndIncrement).toHaveBeenCalledTimes(1);
+  });
 });

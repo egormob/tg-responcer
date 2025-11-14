@@ -15,6 +15,10 @@ export interface PortOverrides {
   rateLimit: RateLimitPort;
 }
 
+export interface CompositionPorts extends PortOverrides {
+  rawRateLimit: RateLimitPort;
+}
+
 export interface ComposeOptions {
   env: ComposeEnv;
   adapters?: Partial<PortOverrides>;
@@ -24,7 +28,7 @@ export interface ComposeOptions {
 
 export interface CompositionResult {
   dialogEngine: DialogEngine;
-  ports: PortOverrides;
+  ports: CompositionPorts;
   webhookSecret?: string;
 }
 
@@ -42,16 +46,19 @@ export const composeWorker = (options: ComposeOptions): CompositionResult => {
   const noopPorts = createNoopPorts();
   const basePorts = mergePorts(options.adapters, noopPorts);
 
+  const rawRateLimitPort = basePorts.rateLimit;
+
   const rateLimitPort = options.env.RATE_LIMIT_KV
     ? createRateLimitToggle({
         kv: options.env.RATE_LIMIT_KV,
-        rateLimit: basePorts.rateLimit,
+        rateLimit: rawRateLimitPort,
       })
-    : basePorts.rateLimit;
+    : rawRateLimitPort;
 
-  const ports: PortOverrides = {
+  const ports: CompositionPorts = {
     ...basePorts,
     rateLimit: rateLimitPort,
+    rawRateLimit: rawRateLimitPort,
   };
 
   const dialogEngine = new DialogEngine(
