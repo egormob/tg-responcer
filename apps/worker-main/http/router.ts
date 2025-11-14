@@ -496,6 +496,55 @@ export const createRouter = (options: RouterOptions) => {
       return new Response(reason, { status: 400 });
     }
 
+    const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
+      const normalizedText = message.text.trimStart();
+      if (!normalizedText.startsWith('/')) {
+        return undefined;
+      }
+
+      const [commandToken] = normalizedText.split(/\s+/, 1);
+      if (!commandToken) {
+        return undefined;
+      }
+
+      const normalizedCommand = commandToken.split('@')[0]?.toLowerCase();
+      if (normalizedCommand !== '/start') {
+        return undefined;
+      }
+
+      const firstName = message.user.firstName?.trim();
+      const greetingText = firstName && firstName.length > 0 ? `Привет, ${firstName}!` : 'Привет!';
+
+      const greetingLogDetails = messageLogDetails
+        ? { ...messageLogDetails, route: 'system_start' }
+        : {
+            action: 'sendText' as const,
+            route: 'system_start',
+            updateId,
+            chatIdNormalized: message.chat.id,
+            fromId: message.user.userId,
+            messageId: message.messageId,
+          };
+
+      const sendResult = await logMessagingCall(greetingLogDetails, () =>
+        options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: greetingText,
+        }),
+      );
+
+      return jsonResponse({
+        status: 'ok',
+        messageId: sendResult.messageId ?? null,
+      });
+    };
+
+    const systemCommandResponse = await maybeHandleSystemCommand();
+    if (systemCommandResponse) {
+      return systemCommandResponse;
+    }
+
     const runDialog = async () => {
       const executeDialog = () => options.dialogEngine.handleMessage(message);
 

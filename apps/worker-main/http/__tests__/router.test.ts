@@ -23,11 +23,12 @@ describe('http router', () => {
     handleMessage: vi.fn(),
   }) as unknown as DialogEngine;
 
-  const createMessagingMock = () => ({
+  const createMessagingMock = (overrides?: Partial<MessagingPort>) => ({
     sendTyping: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({}),
     editMessageText: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
   }) as unknown as MessagingPort;
 
   const createStorageMock = () => ({
@@ -128,6 +129,77 @@ describe('http router', () => {
     expect(message.user.userId).toBe('user-1');
     expect(message.chat.threadId).toBe('thread-9');
     expect(message.receivedAt).toBeInstanceOf(Date);
+  });
+
+  it('greets user locally on /start without invoking dialog engine', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'start-1' });
+    const messaging = createMessagingMock({ sendText });
+    const handleMessage = vi.fn();
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+    });
+
+    const payload = {
+      user: { userId: 'user-1', firstName: 'Егор' },
+      chat: { id: 'chat-1' },
+      text: '/start src_TEST',
+      receivedAt: '2024-03-01T00:00:00.000Z',
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'start-1' });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: 'Привет, Егор!',
+    });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to generic greeting when first name missing', async () => {
+    const sendText = vi.fn().mockResolvedValue({});
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+    });
+
+    const payload = {
+      user: { userId: 'user-2' },
+      chat: { id: 'chat-2', threadId: 'th-1' },
+      text: '/start',
+      receivedAt: '2024-03-01T00:00:00.000Z',
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
+    expect(sendText).toHaveBeenCalledWith({
+      chatId: 'chat-2',
+      threadId: 'th-1',
+      text: 'Привет!',
+    });
+    expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
   });
 
   it('sends fallback message when dialog engine signals rate limit without notifier', async () => {
