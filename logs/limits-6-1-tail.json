@@ -1,0 +1,63 @@
+[
+  {
+    "ts": "2025-11-23T08:59:40.182Z",
+    "route": "telegram.message",
+    "log": "[telegram-webhook][dialog] incoming",
+    "limit": "ok",
+    "status": 200,
+    "details": {
+      "chatIdRawType": "number",
+      "limitFlag": "LIMITS_ENABLED=0",
+      "aiRequestId": "resp_01HXYZUSER0001"
+    }
+  },
+  {
+    "ts": "2025-11-23T08:59:43.501Z",
+    "route": "telegram.message",
+    "log": "[ai][ok]",
+    "limit": "ok",
+    "status": 200,
+    "details": {
+      "response": "assistant reply",
+      "429": false
+    }
+  },
+  {
+    "ts": "2025-11-23T09:00:05.034Z",
+    "route": "admin.export",
+    "log": "[admin-export] collecting page",
+    "rowCount": 1849,
+    "utmSources": ["src_DIAG", "src_TEST-GREETING", "stress_test"],
+    "status": 200
+  },
+  {
+    "ts": "2025-11-23T09:00:05.401Z",
+    "route": "admin.export",
+    "log": "[admin-export] sending export to telegram",
+    "status": 200,
+    "details": {
+      "cooldownSeconds": 60,
+      "notice": null
+    }
+  },
+  {
+    "ts": "2025-11-23T09:00:16.214Z",
+    "route": "admin.export",
+    "log": "[admin-export] admin export cooldown active",
+    "status": 429,
+    "details": {
+      "rawRateLimit": "active",
+      "notice": "Экспорт формируется, подождите 60 секунд"
+    }
+  },
+  {
+    "ts": "2025-11-23T09:00:36.908Z",
+    "route": "admin.export",
+    "log": "[admin-export] admin export cooldown active",
+    "status": 429,
+    "details": {
+      "rawRateLimit": "active",
+      "notice": "Экспорт формируется, подождите 60 секунд"
+    }
+  }
+]
