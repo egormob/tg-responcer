@@ -8,9 +8,9 @@
    *Impact:* Violates priority №1 (stable UX under load) and causes perceived downtime.  
    *Status:* Pending fix — Step 2 of roadmap.
 
-2. **Temporary AI/Telegram errors immediately trigger fallback message**  
-   *Scope:* `DialogEngine.handleMessage`, `apps/worker-main/infra/safe-webhook` (no retries).  
-   *Symptoms:* Message "⚠️ → 🔁💬" appears for every 429/500 from OpenAI/Telegram.  
+2. **Temporary AI/Telegram errors immediately trigger fallback message**
+   *Scope:* `DialogEngine.handleMessage`, `apps/worker-main/infra/safe-webhook` (no retries).
+   *Symptoms:* Message "Я на секунду отвлекся... Пожалуйста, отправьте сообщение ещё раз 🔁💬" appears for every 429/500 from OpenAI/Telegram.
    *Impact:* Users lose replies, admins see false incident spikes; violates priority №1.  
    *Status:* Pending fix — Step 3 of roadmap.
 
@@ -60,10 +60,10 @@
 - Self-test payload from `https://tg-responcer.egormob.workers.dev/admin/selftest?token=***` returning 500 with `openAiOk: false`.
 - Lossless Telegram ID parser подтверждён: `chatIdRawType` и `chatIdNormalizedHash` стабильны, ручной прогон `/start`/self-test не показывает `400 Bad Request` от Bot API.
 
-### Operations memo — `⚠️ → 🔁💬`
+### Operations memo — `Я на секунду отвлекся... Пожалуйста, отправьте сообщение ещё раз 🔁💬`
 
-- Символ `⚠️ → 🔁💬` фиксирует мягкий отказ OpenAI/Telegram. Считаем **допустимым** при наличии в логах явного `(warn) [ai][timeout] reason: 'OpenAI Responses request timed out' requestId=…` или `openaiError.requestId`, т.е. совпадает с RoadMap Step 4.4 критериями (`requestTimeoutMs`, `retryMax`), и сопровождается `sources.*='kv'` в `/admin/diag`.
-- Сигнал становится **actionable**, если всплеск `⚠️ → 🔁💬` не сопровождается `requestId`/timeout-контекстом или происходит при `max_retries_exceeded`/`kvConfig:null`. В этом случае эскалируем по Step 4.4: собираем `wrangler tail` (с `requestId`, `ai-queue` метриками), скрин `/admin/diag?q=ai-queue`, лог `/admin/d1-stress` (если запущен).
+- Сообщение `Я на секунду отвлекся... Пожалуйста, отправьте сообщение ещё раз 🔁💬` фиксирует мягкий отказ OpenAI/Telegram. Считаем **допустимым** при наличии в логах явного `(warn) [ai][timeout] reason: 'OpenAI Responses request timed out' requestId=…` или `openaiError.requestId`, т.е. совпадает с RoadMap Step 4.4 критериями (`requestTimeoutMs`, `retryMax`), и сопровождается `sources.*='kv'` в `/admin/diag`.
+- Сигнал становится **actionable**, если всплеск `Я на секунду отвлекся... Пожалуйста, отправьте сообщение ещё раз 🔁💬` не сопровождается `requestId`/timeout-контекстом или происходит при `max_retries_exceeded`/`kvConfig:null`. В этом случае эскалируем по Step 4.4: собираем `wrangler tail` (с `requestId`, `ai-queue` метриками), скрин `/admin/diag?q=ai-queue`, лог `/admin/d1-stress` (если запущен).
 - Для `/admin/d1-stress` и pre-Step 5 наблюдения сохраняем: (1) Cloudflare tail `logs/stress-test-YYYY-MM-DD-ai-queue.log`, (2) diag JSON/PNG в каталоге внешних артефактов + ссылка в `memory-bank/logs/stress-test-*.md`, (3) снимок `/admin/d1-stress` ответа (внешнее хранилище). Это служит источником истины при сверке с `reports/REPORT-ai-throughput-20251116.md` и RoadMap.
 
 ## Next steps
