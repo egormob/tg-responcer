@@ -71,12 +71,12 @@ const isRetryableStatus = (status: number): boolean =>
 
 const mapTurnToContentType = (role: ConversationTurn['role']): string => {
   switch (role) {
-    case 'user':
-      return 'input_text';
     case 'assistant':
       return 'output_text';
+    case 'system':
+    case 'user':
     default:
-      return 'text';
+      return 'input_text';
   }
 };
 
