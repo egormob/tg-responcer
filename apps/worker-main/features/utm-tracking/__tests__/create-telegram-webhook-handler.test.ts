@@ -44,6 +44,22 @@ const createStartUpdate = (payload: string | undefined): TelegramUpdate => {
   };
 };
 
+const createCommandUpdate = (command: string, argument?: string): TelegramUpdate => {
+  if (!baseUpdate.message) {
+    throw new Error('Base update must include message');
+  }
+
+  const text = argument ? `${command} ${argument}` : command;
+  return {
+    ...baseUpdate,
+    message: {
+      ...baseUpdate.message,
+      text,
+      entities: [{ type: 'bot_command', offset: 0, length: command.length }],
+    },
+  };
+};
+
 describe('createTelegramWebhookHandler', () => {
   it('stores utmSource on first /start payload', async () => {
     const storage = createStorageMock();
@@ -357,6 +373,44 @@ describe('createTelegramWebhookHandler', () => {
     const savePromise = waitUntil.mock.calls[0]?.[0];
     await expect(savePromise).resolves.toBeUndefined();
   });
+
+  it('tracks admin commands in system command matcher even when handler declines', async () => {
+    const storage = createStorageMock();
+    const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: { handleAdminCommand },
+    });
+
+    await handler(createCommandUpdate('/admin', 'export now'));
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handler.isSystemCommand('/admin export now')).toBe(true);
+    expect(handler.isSystemCommand('/export')).toBe(false);
+  });
+
+  it('registers broadcast command as system command when handler ignores it', async () => {
+    const storage = createStorageMock();
+    const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: { handleAdminCommand },
+    });
+
+    await handler(createCommandUpdate('/broadcast'));
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handler.isSystemCommand('/broadcast')).toBe(true);
+  });
+
+  it('does not treat unknown commands as system ones', async () => {
+    const storage = createStorageMock();
+    const handler = createTelegramWebhookHandler({ storage });
+
+    expect(handler.isSystemCommand('/fff')).toBe(false);
+    await handler(createCommandUpdate('/fff'));
+    expect(handler.isSystemCommand('/fff')).toBe(false);
+  });
 });
 
 describe('worker integration with cached router', () => {
@@ -434,10 +488,7 @@ describe('worker integration with cached router', () => {
     );
 
     expect(composeWorkerMock).toHaveBeenCalledTimes(1);
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(handleMessage.mock.calls[0]?.[0]?.user.utmSource).toBe('src_DEMO');
-
-    handleMessage.mockClear();
+    expect(handleMessage).not.toHaveBeenCalled();
 
     const followUpUpdate: TelegramUpdate = {
       ...baseUpdate,

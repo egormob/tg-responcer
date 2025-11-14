@@ -7,6 +7,7 @@ import type {
   TransformPayloadContext,
   TransformPayloadResult,
 } from '../../http/router';
+import type { SystemCommandMatcher } from '../../http/router';
 import type { StoragePort } from '../../ports';
 import {
   createKnownUsersCache,
@@ -98,6 +99,7 @@ const handledResult = (response?: Response): HandledWebhookResult => ({
 
 export type TelegramWebhookHandler = TransformPayload & {
   knownUsers: KnownUsersCache;
+  isSystemCommand: SystemCommandMatcher;
 };
 
 export const createTelegramWebhookHandler = (
@@ -107,6 +109,41 @@ export const createTelegramWebhookHandler = (
   // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
   // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
   const knownUsersCache = createKnownUsersCache();
+  const systemCommands = new Set<string>(['/start']);
+
+  const registerSystemCommand = (command: string | undefined) => {
+    if (typeof command !== 'string') {
+      return;
+    }
+
+    const normalized = command.startsWith('/') ? command : undefined;
+    if (!normalized) {
+      return;
+    }
+
+    systemCommands.add(normalized);
+  };
+
+  const normalizeCommandFromText = (text: string): string | undefined => {
+    if (typeof text !== 'string') {
+      return undefined;
+    }
+
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('/')) {
+      return undefined;
+    }
+
+    const whitespaceIndex = trimmed.search(/\s/u);
+    const token = whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex);
+    const normalized = token.split('@')[0]?.toLowerCase();
+    return normalized && normalized.length > 0 ? normalized : undefined;
+  };
+
+  const isSystemCommand: SystemCommandMatcher = (text) => {
+    const normalized = normalizeCommandFromText(text);
+    return normalized ? systemCommands.has(normalized) : false;
+  };
 
   const forgetUser = (userId: unknown) => {
     if (typeof userId === 'string') {
@@ -137,7 +174,10 @@ export const createTelegramWebhookHandler = (
     // eslint-disable-next-line no-console
     console.info('[utm-tracking] incoming payload', safePayloadSnapshot(payload));
 
-    const result = await transformTelegramUpdate(payload, transformOptions);
+    const result = await transformTelegramUpdate(payload, {
+      ...transformOptions,
+      onSystemCommand: registerSystemCommand,
+    });
 
     if (isMessageResult(result)) {
       const { message } = result;
@@ -221,5 +261,5 @@ export const createTelegramWebhookHandler = (
     return result;
   };
 
-  return Object.assign(handler, { knownUsers: knownUsersCache });
+  return Object.assign(handler, { knownUsers: knownUsersCache, isSystemCommand });
 };

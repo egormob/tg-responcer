@@ -496,6 +496,7 @@ export interface TelegramWebhookFeatures {
 export interface TelegramWebhookOptions {
   botUsername?: string;
   features?: TelegramWebhookFeatures;
+  onSystemCommand?: (command: string) => void;
 }
 
 const toHandledResult = (response?: Response): HandledWebhookResult => ({
@@ -551,6 +552,7 @@ const handleAdminCommand = async (
     return undefined;
   }
 
+  options.onSystemCommand?.(context.command);
   const response = await handler(context);
   if (!response) {
     return undefined;

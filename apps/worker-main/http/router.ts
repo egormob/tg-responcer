@@ -20,6 +20,27 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const normalizeCommandFromText = (text: string): string | undefined => {
+  if (typeof text !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('/')) {
+    return undefined;
+  }
+
+  const whitespaceIndex = trimmed.search(/\s/u);
+  const commandToken = whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex);
+  const normalized = commandToken.split('@')[0]?.toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+};
+
+export type SystemCommandMatcher = (text: string) => boolean;
+
+const defaultSystemCommandMatcher: SystemCommandMatcher = (text) =>
+  normalizeCommandFromText(text) === '/start';
+
 const isIncomingMessageCandidate = (value: unknown): value is IncomingMessage => {
   if (!isRecord(value)) {
     return false;
@@ -77,6 +98,8 @@ export type TransformPayload = (
   payload: unknown,
   context?: TransformPayloadContext,
 ) => TransformPayloadResult | Promise<TransformPayloadResult>;
+
+type TransformPayloadWithCommands = TransformPayload & { isSystemCommand?: SystemCommandMatcher };
 
 const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =>
   isRecord(value) && value.kind === 'handled';
@@ -344,9 +367,13 @@ export interface RouterHandleContext {
 }
 
 export const createRouter = (options: RouterOptions) => {
-  const transformPayload =
-    options.transformPayload ??
-    (async (payload: unknown) => parseIncomingMessage(payload));
+  const defaultTransformPayload: TransformPayloadWithCommands = Object.assign(
+    async (payload: unknown) => parseIncomingMessage(payload),
+    { isSystemCommand: defaultSystemCommandMatcher },
+  );
+
+  const transformPayload = (options.transformPayload ?? defaultTransformPayload) as TransformPayloadWithCommands;
+  const systemCommandMatcher = transformPayload.isSystemCommand ?? defaultSystemCommandMatcher;
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
   const handleNotFound = () => new Response('Not Found', { status: 404 });
@@ -497,47 +524,45 @@ export const createRouter = (options: RouterOptions) => {
     }
 
     const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
-      const normalizedText = message.text.trimStart();
-      if (!normalizedText.startsWith('/')) {
+      const normalizedCommand = normalizeCommandFromText(message.text);
+      if (!normalizedCommand) {
         return undefined;
       }
 
-      const [commandToken] = normalizedText.split(/\s+/, 1);
-      if (!commandToken) {
+      if (normalizedCommand === '/start') {
+        const firstName = message.user.firstName?.trim();
+        const greetingText = firstName && firstName.length > 0 ? `Привет, ${firstName}!` : 'Привет!';
+
+        const greetingLogDetails = messageLogDetails
+          ? { ...messageLogDetails, route: 'system_start' }
+          : {
+              action: 'sendText' as const,
+              route: 'system_start',
+              updateId,
+              chatIdNormalized: message.chat.id,
+              fromId: message.user.userId,
+              messageId: message.messageId,
+            };
+
+        const sendResult = await logMessagingCall(greetingLogDetails, () =>
+          options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: greetingText,
+          }),
+        );
+
+        return jsonResponse({
+          status: 'ok',
+          messageId: sendResult.messageId ?? null,
+        });
+      }
+
+      if (!systemCommandMatcher(message.text)) {
         return undefined;
       }
 
-      const normalizedCommand = commandToken.split('@')[0]?.toLowerCase();
-      if (normalizedCommand !== '/start') {
-        return undefined;
-      }
-
-      const firstName = message.user.firstName?.trim();
-      const greetingText = firstName && firstName.length > 0 ? `Привет, ${firstName}!` : 'Привет!';
-
-      const greetingLogDetails = messageLogDetails
-        ? { ...messageLogDetails, route: 'system_start' }
-        : {
-            action: 'sendText' as const,
-            route: 'system_start',
-            updateId,
-            chatIdNormalized: message.chat.id,
-            fromId: message.user.userId,
-            messageId: message.messageId,
-          };
-
-      const sendResult = await logMessagingCall(greetingLogDetails, () =>
-        options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: greetingText,
-        }),
-      );
-
-      return jsonResponse({
-        status: 'ok',
-        messageId: sendResult.messageId ?? null,
-      });
+      return jsonResponse({ status: 'ok', messageId: null });
     };
 
     const systemCommandResponse = await maybeHandleSystemCommand();
