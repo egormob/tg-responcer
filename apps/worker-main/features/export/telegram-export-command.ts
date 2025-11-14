@@ -245,7 +245,7 @@ const buildTelegramFormData = (
 };
 
 const EXPORT_COOLDOWN_KEY_PREFIX = 'rate-limit:';
-const EXPORT_COOLDOWN_TTL_SECONDS = 30;
+const EXPORT_COOLDOWN_TTL_SECONDS = 60; // Cloudflare KV требует минимум 60 секунд TTL
 const EXPORT_COOLDOWN_VALUE = '1';
 const EXPORT_COOLDOWN_RESPONSE = {
   error: 'Please wait up to 30 seconds before requesting another export.',
@@ -382,7 +382,7 @@ const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
   '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
   '- /broadcast — мгновенная рассылка',
-  '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 30 секунд.',
+  '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 60 секунд.',
 ].join('\n');
 
 const parseUtmSourcesHeader = (value: string | null): string[] | undefined => {
