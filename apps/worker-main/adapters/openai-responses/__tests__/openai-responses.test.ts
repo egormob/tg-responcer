@@ -179,7 +179,7 @@ const createAdapter = (
       input: [
         {
           role: 'system',
-          content: [{ type: 'text', text: 'You are helpful.' }],
+          content: [{ type: 'input_text', text: 'You are helpful.' }],
         },
         {
           role: 'assistant',
@@ -197,6 +197,57 @@ const createAdapter = (
     const userMessage = payload.input?.[2]?.content?.[0]?.text ?? '';
     expect(userMessage).toBe('How are you?');
     expect([...userMessage].map((char) => char.charCodeAt(0))).not.toContain(7);
+  });
+
+  it('serializes system-only context without falling back to legacy text content', async () => {
+    const fetchMock = createFetchMock();
+    fetchMock.mockResolvedValueOnce(
+      createResponse({
+        id: 'resp_system_only',
+        status: 'completed',
+        output_text: 'Acknowledged',
+      }),
+    );
+
+    const adapter = createAdapter(fetchMock);
+
+    await expect(
+      adapter.reply({
+        userId: 'user-2',
+        text: 'Execute',
+        context: [
+          { role: 'system', text: 'You are precise.' },
+          { role: 'system', text: 'Never guess.' },
+        ],
+      }),
+    ).resolves.toMatchObject({ text: 'Acknowledged' });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const payload = JSON.parse((init?.body as string) ?? '{}');
+
+    expect(payload.input).toEqual([
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: 'You are precise.' }],
+      },
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: 'Never guess.' }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Execute' }],
+      },
+    ]);
+
+    const allContentPieces = (
+      Array.isArray(payload.input)
+        ? payload.input.flatMap(
+            (message: { content?: Array<{ type?: string }> }) => message.content ?? [],
+          )
+        : []
+    ).map((piece) => piece?.type);
+    expect(allContentPieces).not.toContain('text');
   });
 
   it('includes prompt block when prompt id and variables are provided', async () => {
