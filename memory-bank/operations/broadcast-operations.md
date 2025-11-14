@@ -34,6 +34,15 @@
 - Команда отклоняется для пользователей вне whitelist: бот отвечает `forbidden`/`access denied` и ничего не отправляет.
 - Повторное использование `/broadcast` требует повторного ввода команды и текста; промежуточных очередей нет.
 
+### Управляемый пул отправок (2025-11-24)
+- `minimal-broadcast-service` отправляет сообщения через фиксированный пул. Дефолтные параметры: `poolSize=4`, `maxAttempts=3`, `baseDelayMs=1000`, `jitterRatio=0.2`.
+- При `429 Too Many Requests` считывается `retry_after` (если Telegram вернул его) и используется максимальное значение между `retry_after` и экспоненциальным бэкоффом.
+- Логи Cloudflare:
+  - `broadcast pool initialized` — фиксирует `requestedBy`, `recipients`, `poolSize`, `maxAttempts`, `baseDelayMs`, `jitterRatio`.
+  - `broadcast throttled` — появляется на каждом `429`, показывает `attempt`, `delayMs`, `retryAfterMs` и `poolSize`.
+  - `broadcast pool completed` — итог рассылки: `delivered`, `failed`, `throttled429`, `durationMs`.
+- Для ПРОВЕРКИ 7.1 используем ≥10 получателей, смотрим `poolSize` и `throttled429` в хвосте `wrangler tail`, сопоставляем длительность с ожидаемым бэкоффом.
+
 ## Операционный чек-лист
 1. **Подготовка окружения**
    - Убедиться, что `ADMIN_TG_IDS` содержит актуальные ID администраторов.
