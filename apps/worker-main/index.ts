@@ -787,7 +787,10 @@ const createTransformPayload = (
       })
     : undefined;
 
-  const broadcastEnabled = isEnabledFlag(env.BROADCAST_ENABLED);
+  const broadcastEnabled =
+    typeof env.BROADCAST_ENABLED === 'undefined'
+      ? true
+      : isEnabledFlag(env.BROADCAST_ENABLED);
   const broadcastRecipients = broadcastEnabled ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS) : [];
 
   if (broadcastEnabled && broadcastRecipients.length === 0) {
