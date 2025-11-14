@@ -3,5 +3,6 @@ export type {
   ComposeEnv,
   ComposeOptions,
   CompositionResult,
+  CompositionPorts,
   PortOverrides,
 } from './compose';

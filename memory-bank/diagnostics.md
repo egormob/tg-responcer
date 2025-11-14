@@ -32,11 +32,11 @@
    *Impact:* Breaks priorities №3 and №4 (UTM tracking & admin export).  
    *Status:* Pending fix — Step 5 of roadmap.
 
-6. **Global LIMITS_ENABLED flag disables admin safeguards**  
-   *Scope:* `apps/worker-main/compose.ts` (rate-limit toggle applied to all ports).  
-   *Symptoms:* Disabling limits for dialogues removes throttling from `/export` and `/broadcast`.  
-   *Impact:* Risks overload of D1 & Telegram; violates priorities №1 and №4.  
-   *Status:* Pending fix — Step 6 of roadmap.
+6. **Global LIMITS_ENABLED flag disables admin safeguards**
+   *Scope:* `apps/worker-main/compose.ts` (rate-limit toggle applied to all ports).
+   *Symptoms:* Disabling limits for dialogues removes throttling from `/export` and `/broadcast`.
+   *Impact:* Risks overload of D1 & Telegram; violates priorities №1 and №4.
+   *Status:* Resolved — 2025-11-23 `composeWorker` возвращает «сырые» `ports.rawRateLimit` для админских модулей, `/export` подключён к этому порту, а новый тест `apps/worker-main/composition/__tests__/compose.test.ts` воспроизводит `LIMITS_ENABLED=0` и проверяет, что пользовательский лимитер отключается, но админский остаётся строгим. **ПРОВЕРКА 6.1** теперь требует интеграционный техтест с KV-флагом и боевой спам `/export`, чтобы подтвердить отсутствие 429 для пользователя и сохранение 429 для админов.
 
 7. **Broadcast sender floods Telegram without throttling**  
    *Scope:* `apps/worker-main/features/broadcast/minimal-broadcast-service.ts`.  

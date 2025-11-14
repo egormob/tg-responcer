@@ -776,7 +776,7 @@ const createTransformPayload = (
         botToken,
         adminAccess,
         handleExport: csvExportHandler,
-        rateLimit: composition.ports.rateLimit,
+        rateLimit: composition.ports.rawRateLimit,
         messaging: composition.ports.messaging,
         adminAccessKv: env.ADMIN_TG_IDS,
         cooldownKv: adminExportKv,
