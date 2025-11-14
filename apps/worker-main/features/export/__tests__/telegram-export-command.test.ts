@@ -168,7 +168,7 @@ describe('createTelegramExportCommandHandler', () => {
         'Доступные команды администратора:',
         '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
         '- /broadcast — мгновенная рассылка',
-        '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 30 секунд.',
+        '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 60 секунд.',
       ].join('\n'),
     });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -501,7 +501,7 @@ describe('createTelegramExportCommandHandler', () => {
     expect(firstResponse?.status).toBe(200);
     expect(cooldownKv.store.get('rate-limit:42')).toEqual({
       value: '1',
-      expirationTtl: 30,
+      expirationTtl: 60,
     });
 
     fetchMock.mockClear();
@@ -558,7 +558,7 @@ describe('createTelegramExportCommandHandler', () => {
     ).toHaveLength(0);
     expect(fallbackKv.store.get('rate-limit:42')).toEqual({
       value: '1',
-      expirationTtl: 30,
+      expirationTtl: 60,
     });
 
     const secondResponse = await handler(createContext({ command: '/export' }));

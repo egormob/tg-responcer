@@ -24,7 +24,7 @@
 
 - `/admin status` — проверка whitelisting (ожидай `admin-ok`).
 - `/broadcast` — минимальная рассылка: бот запросит текст (≤4096 символов) и отправит его мгновенно при наличии прав администратора.
-- `/export [from] [to]` — выгружает CSV за указанный период (формат `YYYY-MM-DD`). Команда ограничена cooldown'ом: не чаще одного раза в 30 секунд.
+- `/export [from] [to]` — выгружает CSV за указанный период (формат `YYYY-MM-DD`). Команда ограничена cooldown'ом: не чаще одного раза в 60 секунд (минимальный TTL Cloudflare KV).
 
 ## Пошаговая выгрузка
 1. Выполни запрос: `curl -H "X-Admin-Token: $ADMIN_EXPORT_TOKEN" "https://<worker>/admin/export?from=YYYY-MM-DD&to=YYYY-MM-DD" -o export.csv`.
