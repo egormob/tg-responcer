@@ -251,8 +251,132 @@ const EXPORT_COOLDOWN_RESPONSE = {
   error: 'Please wait up to 30 seconds before requesting another export.',
 };
 const EXPORT_LOG_TTL_SECONDS = 60 * 60 * 24 * 30;
+const EXPORT_ROW_LIMIT = 5000;
+const EXPORT_PAGE_LIMIT = 1000;
 
 const textDecoder = new TextDecoder('utf-8');
+const EXPORT_EMPTY_NOTICE =
+  'За выбранный период нет новых сообщений — CSV содержит только заголовок. Уточните даты и повторите /export.';
+const EXPORT_LIMIT_NOTICE =
+  `⚠️ Экспорт ограничен первыми ${EXPORT_ROW_LIMIT} строками. Сузьте диапазон или разбейте выгрузку на несколько команд.`;
+
+const countCsvRows = (csvText: string): number => {
+  const newlineMatches = csvText.match(/\n/g) ?? [];
+  return Math.max(newlineMatches.length - 1, 0);
+};
+
+const stripCsvHeaderBytes = (data: Uint8Array): Uint8Array => {
+  const lfIndex = data.indexOf(0x0a);
+  if (lfIndex === -1) {
+    return new Uint8Array(0);
+  }
+
+  return data.subarray(lfIndex + 1);
+};
+
+const mergeCsvChunks = (chunks: Uint8Array[], totalLength: number): Uint8Array => {
+  if (chunks.length === 0) {
+    return new Uint8Array(0);
+  }
+
+  if (chunks.length === 1) {
+    return chunks[0];
+  }
+
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return merged;
+};
+
+type HandleExportFn = CreateTelegramExportCommandHandlerOptions['handleExport'];
+
+interface PaginatedExportSuccess {
+  ok: true;
+  data: Uint8Array;
+  rowCount: number;
+  utmSources?: string[];
+  limitReached: boolean;
+}
+
+interface PaginatedExportFailure {
+  ok: false;
+  response: Response;
+}
+
+type PaginatedExportResult = PaginatedExportSuccess | PaginatedExportFailure;
+
+const collectPaginatedExport = async (
+  handleExport: HandleExportFn,
+  request: Pick<AdminExportRequest, 'from' | 'to' | 'signal'>,
+): Promise<PaginatedExportResult> => {
+  const csvChunks: Uint8Array[] = [];
+  const utmSourceSet = new Set<string>();
+  let totalBytes = 0;
+  let cursor: string | undefined;
+  let rowCount = 0;
+  let limitReached = false;
+
+  while (rowCount < EXPORT_ROW_LIMIT) {
+    const remainingRows = EXPORT_ROW_LIMIT - rowCount;
+    const limit = Math.min(EXPORT_PAGE_LIMIT, Math.max(remainingRows, 1));
+
+    const response = await handleExport({
+      ...request,
+      cursor,
+      limit,
+    });
+
+    if (!response.ok) {
+      return { ok: false, response };
+    }
+
+    const pageUtmSources = parseUtmSourcesHeader(response.headers.get('x-utm-sources'));
+    if (pageUtmSources) {
+      for (const source of pageUtmSources) {
+        utmSourceSet.add(source);
+      }
+    }
+
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    const csvText = textDecoder.decode(buffer);
+    const pageRowCount = countCsvRows(csvText);
+
+    const isFirstChunk = csvChunks.length === 0;
+    const chunk = isFirstChunk ? buffer : stripCsvHeaderBytes(buffer);
+    if (isFirstChunk || chunk.length > 0) {
+      csvChunks.push(chunk);
+      totalBytes += chunk.length;
+    }
+
+    rowCount += pageRowCount;
+
+    const nextCursor = response.headers.get('x-next-cursor');
+    if (!nextCursor) {
+      break;
+    }
+
+    if (pageRowCount === 0) {
+      break;
+    }
+
+    if (rowCount >= EXPORT_ROW_LIMIT) {
+      limitReached = true;
+      break;
+    }
+
+    cursor = nextCursor;
+  }
+
+  const data = mergeCsvChunks(csvChunks, totalBytes);
+  const utmSources = utmSourceSet.size > 0 ? Array.from(utmSourceSet) : undefined;
+
+  return { ok: true, data, rowCount, utmSources, limitReached };
+};
 
 const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
@@ -498,13 +622,11 @@ export const createTelegramExportCommandHandler = (
 
     const abortController = new AbortController();
 
-    let exportResponse: Response;
+    let exportResult: PaginatedExportResult;
     try {
-      exportResponse = await options.handleExport({
+      exportResult = await collectPaginatedExport(options.handleExport, {
         from,
         to,
-        cursor: undefined,
-        limit: undefined,
         signal: abortController.signal,
       });
     } catch (error) {
@@ -516,20 +638,40 @@ export const createTelegramExportCommandHandler = (
       return json({ error: 'Failed to create export' }, { status: 500 });
     }
 
-    if (!exportResponse.ok) {
+    if (!exportResult.ok) {
       logger.warn('export handler returned non-ok response', {
-        status: exportResponse.status,
+        status: exportResult.response.status,
         userId,
         chatId: context.chat.id,
       });
-      return exportResponse;
+      return exportResult.response;
     }
 
-    const utmSources = parseUtmSourcesHeader(exportResponse.headers.get('x-utm-sources'));
-    const data = new Uint8Array(await exportResponse.arrayBuffer());
-    const csvText = textDecoder.decode(data);
-    const newlineMatches = csvText.match(/\n/g) ?? [];
-    const rowCount = Math.max(newlineMatches.length - 1, 0);
+    const { data, rowCount, utmSources, limitReached } = exportResult;
+
+    const sendExportNotice = async (text: string, commandLabel: string) => {
+      try {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text,
+        });
+      } catch (error) {
+        await logAdminMessagingError(
+          'failed to send export notification',
+          { userId, chatId: context.chat.id, threadId: context.chat.threadId },
+          error,
+          commandLabel,
+        );
+      }
+    };
+
+    if (rowCount === 0) {
+      await sendExportNotice(EXPORT_EMPTY_NOTICE, 'export_notice_empty');
+    } else if (limitReached) {
+      await sendExportNotice(EXPORT_LIMIT_NOTICE, 'export_notice_truncated');
+    }
+
     const formData = buildTelegramFormData(context.chat.id, context.chat.threadId, data);
 
     const requestTimestamp = now();
@@ -540,9 +682,13 @@ export const createTelegramExportCommandHandler = (
       from: from?.toISOString(),
       to: to?.toISOString(),
       requestedAt: requestTimestamp.toISOString(),
+      rowCount,
     };
     if (utmSources) {
       exportLogDetails.utmSources = utmSources;
+    }
+    if (limitReached) {
+      exportLogDetails.rowLimitReached = true;
     }
     logger.info('sending export to telegram', exportLogDetails);
 
@@ -624,6 +770,9 @@ export const createTelegramExportCommandHandler = (
       };
       if (utmSources) {
         payload.utmSources = utmSources;
+      }
+      if (limitReached) {
+        payload.rowLimitReached = true;
       }
 
       try {

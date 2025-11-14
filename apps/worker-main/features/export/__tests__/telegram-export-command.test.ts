@@ -256,7 +256,7 @@ describe('createTelegramExportCommandHandler', () => {
       from: undefined,
       to: undefined,
       cursor: undefined,
-      limit: undefined,
+      limit: 1000,
       signal: expect.any(AbortSignal),
     });
 
@@ -275,6 +275,98 @@ describe('createTelegramExportCommandHandler', () => {
     const document = body.get('document');
     expect(document).toBeInstanceOf(Blob);
     await expect((document as Blob).text()).resolves.toBe('message_id,chat_id,utm_source\n1,chat-1,src_demo\n');
+  });
+
+  it('iterates export cursor until all pages are merged', async () => {
+    const firstResponse = new Response('message_id,chat_id,utm_source\n1,chat-1,src_a\n', {
+      status: 200,
+      headers: {
+        'x-next-cursor': 'cursor-1',
+        'x-utm-sources': JSON.stringify(['src_a']),
+      },
+    });
+    const secondResponse = new Response('message_id,chat_id,utm_source\n2,chat-2,src_b\n', {
+      status: 200,
+      headers: {
+        'x-utm-sources': JSON.stringify(['src_b']),
+      },
+    });
+    const handleExport = vi
+      .fn()
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce(secondResponse);
+    const { handler } = createHandler({ handleExport });
+
+    const response = await handler(createContext({ command: '/export' }));
+
+    expect(response?.status).toBe(200);
+    expect(handleExport).toHaveBeenCalledTimes(2);
+    expect(handleExport).toHaveBeenNthCalledWith(1, {
+      from: undefined,
+      to: undefined,
+      cursor: undefined,
+      limit: 1000,
+      signal: expect.any(AbortSignal),
+    });
+    expect(handleExport).toHaveBeenNthCalledWith(2, {
+      from: undefined,
+      to: undefined,
+      cursor: 'cursor-1',
+      limit: 1000,
+      signal: expect.any(AbortSignal),
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const document = (init?.body as FormData).get('document');
+    expect(document).toBeInstanceOf(Blob);
+    await expect((document as Blob).text()).resolves.toBe(
+      'message_id,chat_id,utm_source\n1,chat-1,src_a\n2,chat-2,src_b\n',
+    );
+  });
+
+  it('notifies admin when row limit is reached', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const rows = Array.from({ length: 5000 }, (_, index) => `${index + 1},chat-${index + 1},src_limit`).join('\n');
+    const csv = `message_id,chat_id,utm_source\n${rows}\n`;
+    const handleExport = vi.fn().mockResolvedValue(
+      new Response(csv, {
+        status: 200,
+        headers: {
+          'x-next-cursor': 'cursor-limit',
+          'x-utm-sources': JSON.stringify(['src_limit']),
+        },
+      }),
+    );
+
+    const { handler } = createHandler({ handleExport, sendTextMock });
+
+    const response = await handler(createContext({ command: '/export' }));
+
+    expect(response?.status).toBe(200);
+    expect(handleExport).toHaveBeenCalledTimes(1);
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: '⚠️ Экспорт ограничен первыми 5000 строками. Сузьте диапазон или разбейте выгрузку на несколько команд.',
+    });
+  });
+
+  it('notifies admin when export has no rows', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const handleExport = vi.fn().mockResolvedValue(
+      new Response('message_id,chat_id,utm_source\n', { status: 200 }),
+    );
+
+    const { handler } = createHandler({ handleExport, sendTextMock });
+
+    const response = await handler(createContext({ command: '/export' }));
+
+    expect(response?.status).toBe(200);
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: 'За выбранный период нет новых сообщений — CSV содержит только заголовок. Уточните даты и повторите /export.',
+    });
   });
 
   it('records export delivery failure diagnostics when Telegram returns an error', async () => {
@@ -317,7 +409,7 @@ describe('createTelegramExportCommandHandler', () => {
       from: new Date('2024-01-01T00:00:00Z'),
       to: new Date('2024-02-01T00:00:00Z'),
       cursor: undefined,
-      limit: undefined,
+      limit: 1000,
       signal: expect.any(AbortSignal),
     });
   });
@@ -550,7 +642,7 @@ describe('createTelegramExportCommandHandler', () => {
       from: new Date('2024-01-01T00:00:00Z'),
       to: undefined,
       cursor: undefined,
-      limit: undefined,
+      limit: 1000,
       signal: expect.any(AbortSignal),
     });
   });
