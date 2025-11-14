@@ -202,6 +202,84 @@ describe('http router', () => {
     expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
   });
 
+  it('skips dialog engine when transform marks message as system command', async () => {
+    const handleMessage = vi.fn();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const messaging = createMessagingMock();
+    const systemMessage = {
+      user: { userId: 'user-3' },
+      chat: { id: 'chat-3' },
+      text: '/export',
+      messageId: 'm-3',
+      receivedAt: new Date('2024-03-02T00:00:00.000Z'),
+    };
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({ kind: 'message', message: systemMessage }),
+      { isSystemCommand: (text: string) => text.trimStart().startsWith('/export') },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({ any: 'payload' }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('treats unknown slash-prefixed text as regular message when not registered as system command', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok', messageId: '42' },
+    });
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const messaging = createMessagingMock();
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'user-4' },
+          chat: { id: 'chat-4' },
+          text: '/fff unknown',
+          messageId: 'm-4',
+          receivedAt: new Date('2024-03-02T01:00:00.000Z'),
+        },
+      }),
+      { isSystemCommand: (text: string) => text.trimStart().startsWith('/export') },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: '42' });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/fff unknown');
+  });
+
   it('sends fallback message when dialog engine signals rate limit without notifier', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const messaging = createMessagingMock();
