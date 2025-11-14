@@ -485,13 +485,8 @@ describe('createTelegramExportCommandHandler', () => {
   });
 
   it('prevents repeated export requests within cooldown window', async () => {
-    const { handleExport, adminAccess, rateLimit } = createHandler();
     const cooldownKv = createFakeKv();
-    const handler = createTelegramExportCommandHandler({
-      botToken,
-      handleExport,
-      adminAccess,
-      rateLimit,
+    const { handler, handleExport, sendTextMock } = createHandler({
       cooldownKv,
       now: () => new Date('2024-02-01T00:00:00Z'),
     });
@@ -506,11 +501,18 @@ describe('createTelegramExportCommandHandler', () => {
 
     fetchMock.mockClear();
     handleExport.mockClear();
+    sendTextMock.mockClear();
 
     const secondResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
     expect(secondResponse?.status).toBe(429);
     await expect(secondResponse?.json()).resolves.toEqual({
-      error: 'Please wait up to 30 seconds before requesting another export.',
+      error: 'Экспорт формируется, подождите 60 секунд',
+    });
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: 'Экспорт формируется, подождите 60 секунд',
     });
     expect(handleExport).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();

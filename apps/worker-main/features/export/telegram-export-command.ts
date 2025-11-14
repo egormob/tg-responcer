@@ -247,8 +247,9 @@ const buildTelegramFormData = (
 const EXPORT_COOLDOWN_KEY_PREFIX = 'rate-limit:';
 const EXPORT_COOLDOWN_TTL_SECONDS = 60; // Cloudflare KV требует минимум 60 секунд TTL
 const EXPORT_COOLDOWN_VALUE = '1';
+const EXPORT_COOLDOWN_NOTICE = 'Экспорт формируется, подождите 60 секунд';
 const EXPORT_COOLDOWN_RESPONSE = {
-  error: 'Please wait up to 30 seconds before requesting another export.',
+  error: EXPORT_COOLDOWN_NOTICE,
 };
 const EXPORT_LOG_TTL_SECONDS = 60 * 60 * 24 * 30;
 const EXPORT_ROW_LIMIT = 5000;
@@ -614,6 +615,21 @@ export const createTelegramExportCommandHandler = (
           userId,
           chatId: context.chat.id,
         });
+
+        try {
+          await options.messaging.sendText({
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+            text: EXPORT_COOLDOWN_NOTICE,
+          });
+        } catch (error) {
+          await logAdminMessagingError(
+            'failed to send export cooldown notice',
+            { userId, chatId: context.chat.id, threadId: context.chat.threadId },
+            error,
+            'export_cooldown_notice',
+          );
+        }
         return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
       }
 
