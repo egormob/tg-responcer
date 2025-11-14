@@ -30,6 +30,10 @@
   `marker_in_fallback_output`, `request_failed`, `noop_adapter_response`).
 - `openAiLatencyMs`, `openAiUsedOutputText`, `openAiSample`,
   `openAiResponseId` — телеметрия и сниппет ответа (маркер вырезается).
+- `openAiEndpointId`, `openAiBaseUrl` — какая нода двухэндпоинтовой
+  архитектуры OpenAI-адаптера отработала последней. Значения берутся из
+  метаданных ответа: например, `endpoint_1` + `https://api.openai.com/v1/responses`
+  для основного региона и другой base URL для бэкапа.
 - `telegramOk` — `true`, если Bot API принял `sendTyping` и `sendMessage`.
 - `telegramReason` — `chat_id_missing` (query-параметр не передан и
   whitelist пуст), либо `send_failed` (Bot API вернул ошибку).
@@ -47,13 +51,39 @@
 Self-test пишет два читаемых сообщения:
 
 ```
-[admin:selftest][openai] { scope, check, ok, reason?, responseId?, latencyMs? }
-[admin:selftest][telegram] { scope, check, ok, route, chatIdRawType, chatIdRawHash, chatIdNormalizedHash, status?, reason? }
+[admin:selftest][openai] {
+  scope,
+  check,
+  ok,
+  endpointId?,
+  baseUrl?,
+  reason?,
+  responseId?,
+  latencyMs?,
+  sample?
+}
+[admin:selftest][telegram] {
+  scope,
+  check,
+  ok,
+  route,
+  chatIdRawType,
+  chatIdRawHash,
+  chatIdNormalizedHash,
+  status?,
+  reason?
+}
 ```
 
 Второе сообщение дополнительно содержит `chatIdSource`, `description`,
 `latencyMs` и совпадающие хэши `chatIdRawHash` / `chatIdNormalizedHash`,
 чтобы легко отследить преобразования ID.
+
+Первое сообщение теперь помогает операторам понимать, какой базовый URL
+двухэндпоинтовой конфигурации OpenAI вернул ошибку или задержку: при
+срабатывании failover в лог и тело ответа попадают `openAiEndpointId` и
+`openAiBaseUrl`, поэтому сразу видно, что, например, упал `endpoint_1`
+(`api.openai.com`) и воркер ушёл на бэкап в `endpoint_2`.
 
 ### Контроль целостности записи ответов
 
@@ -77,7 +107,16 @@ Self-test пишет два читаемых сообщения:
   поле `secrets`, отражающее наличие обязательных секретов без раскрытия
   значений.
 - `q=ai-queue` — показывает состояние очереди AI-лимитера. Ответ содержит
-  `{ active, queued, maxConcurrency, maxQueue, droppedSinceBoot, avgWaitMs }`.
+  сводку `{ status, active, queued, maxConcurrency, maxQueue, requestTimeoutMs,
+  retryMax, droppedSinceBoot, avgWaitMs, lastDropAt }` и блоки `endpoints`
+  (`activeBaseUrl`, `backupBaseUrls`, `failoverCounts`) и `sources`. В `sources`
+  отображаются происхождение каждого лимита (`kv`/`env`/`default`), список
+  активных `baseUrls`, `endpointFailoverThreshold` и указание на текущий
+  `AI_CONTROL_KV`. Благодаря этому оператор сразу видит, какой base URL
+  считается активным, какие бэкапы включены и почему (например, KV подменил
+  дефолт). Это особенно важно для двухэндпоинтовой архитектуры OpenAI —
+  если self-test упал, можно сопоставить `openAiBaseUrl`/`openAiEndpointId`
+  с состоянием очереди и понять, какая нода деградирует.
 
 ## `GET /admin/known-users/clear`
 

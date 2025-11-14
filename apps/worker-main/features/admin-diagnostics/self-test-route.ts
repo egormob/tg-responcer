@@ -156,6 +156,8 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
     let openAiReason: string | undefined;
     let openAiSample: string | undefined;
     let openAiResponseId: string | undefined;
+    let openAiEndpointId: string | undefined;
+    let openAiBaseUrl: string | undefined;
 
     const stripMarker = (text: string | undefined): string | undefined => {
       if (typeof text !== 'string') {
@@ -187,12 +189,18 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       const usedOutputTextRaw = metadata?.usedOutputText;
       openAiUsedOutputText = usedOutputTextRaw === true;
 
-      if (typeof metadata?.responseId === 'string') {
-        const trimmed = metadata.responseId.trim();
-        if (trimmed.length > 0) {
-          openAiResponseId = trimmed;
+      const normalizeMetadataString = (value: unknown): string | undefined => {
+        if (typeof value !== 'string') {
+          return undefined;
         }
-      }
+
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : undefined;
+      };
+
+      openAiResponseId = normalizeMetadataString(metadata?.responseId);
+      openAiEndpointId = normalizeMetadataString(metadata?.endpointId);
+      openAiBaseUrl = normalizeMetadataString(metadata?.baseUrl);
 
       if (typeof reply.text === 'string') {
         openAiMarkerDetected = reply.text.includes(OPENAI_SELF_TEST_MARKER);
@@ -392,6 +400,14 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
       responseBody.openAiResponseId = openAiResponseId;
     }
 
+    if (openAiEndpointId !== undefined) {
+      responseBody.openAiEndpointId = openAiEndpointId;
+    }
+
+    if (openAiBaseUrl !== undefined) {
+      responseBody.openAiBaseUrl = openAiBaseUrl;
+    }
+
     if (telegramReason && !telegramOk) {
       responseBody.telegramReason = telegramReason;
     }
@@ -412,6 +428,14 @@ export const createSelfTestRoute = (options: CreateSelfTestRouteOptions) => {
 
     if (openAiResponseId) {
       openAiLog.responseId = openAiResponseId;
+    }
+
+    if (openAiEndpointId) {
+      openAiLog.endpointId = openAiEndpointId;
+    }
+
+    if (openAiBaseUrl) {
+      openAiLog.baseUrl = openAiBaseUrl;
     }
 
     if (!openAiOk && openAiSample) {

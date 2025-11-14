@@ -29,7 +29,11 @@ describe('createSelfTestRoute', () => {
   it('returns success report when OpenAI and Telegram checks pass', async () => {
     const reply = {
       text: `pong ${OPENAI_SELF_TEST_MARKER}`,
-      metadata: { usedOutputText: true },
+      metadata: {
+        usedOutputText: true,
+        endpointId: ' endpoint_1 ',
+        baseUrl: ' https://api.openai.com/v1/responses ',
+      },
     };
     const ai: AiPort = {
       reply: vi.fn().mockResolvedValue(reply),
@@ -52,6 +56,8 @@ describe('createSelfTestRoute', () => {
       telegramOk: true,
       openAiUsedOutputText: true,
       errors: [],
+      openAiEndpointId: 'endpoint_1',
+      openAiBaseUrl: 'https://api.openai.com/v1/responses',
       telegramMessageId: '42',
       telegramStatus: 200,
       telegramDescription: 'OK',
