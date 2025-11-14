@@ -168,6 +168,14 @@ describe('createTelegramWebhookHandler', () => {
     });
 
     await handler(createStartUpdate('src_DEMO'));
+    expect(storage.saveUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '55',
+        utmSource: 'src_DEMO',
+        updatedAt: new Date('2024-02-01T00:00:00.000Z'),
+      }),
+    );
+    expect(handler.knownUsers.get('55')).toEqual({ utmSource: 'src_DEMO' });
 
     const followUp: TelegramUpdate = {
       ...baseUpdate,

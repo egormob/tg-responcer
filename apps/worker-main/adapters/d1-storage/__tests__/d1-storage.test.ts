@@ -457,6 +457,8 @@ describe('createD1StorageAdapter', () => {
 
     const queries = db.getExecutedUserQueries();
     expect(queries.at(-1)).toContain('utm_source');
+    const stored = db.getUser('user-self-heal');
+    expect(stored?.utmSource).toBe('restored');
 
     expect(
       warn.mock.calls.some(
