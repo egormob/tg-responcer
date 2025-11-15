@@ -32,6 +32,11 @@ HTTP-маршрут диагностики whitelisting доступен по а
     { "userId": "456", "status": 403, "lastError": "blocked" }
   ],
   "kvRaw": "{\"whitelist\":[\"123\",\"456\"]}",
+  "cacheControl": {
+    "invalidateRequested": true,
+    "invalidateApplied": true,
+    "targetUserId": null
+  },
   "adminMessagingErrors": {
     "source": "primary",
     "total": 1,
@@ -52,10 +57,14 @@ HTTP-маршрут диагностики whitelisting доступен по а
 
 - `whitelist` — нормализованный список ID из `ADMIN_TG_IDS`.
 - `kvRaw` — исходное значение ключа `whitelist` в KV.
+- `cacheControl` — статус операций с кэшем `AdminAccess`. Появляется при вызове с параметром `invalidate`. `targetUserId:null` означает полный сброс, строковое значение фиксирует ID, для которого вызвана выборочная инвалидция. При недоступном `adminAccess` поле содержит `reason: 'admin_access_unavailable'`.
 - `health` — попытка отправить безопасное сообщение каждому whitelisted ID. `status` равен `"ok"` при успехе, HTTP-статусу `TelegramApiError` при сбое или `"skipped"`, если порт сообщений недоступен. `lastError` содержит текст последней ошибки.
 - `adminMessagingErrors` — последние диагностические записи отправки `/admin`-команд. Каждое событие хранится отдельным ключом `admin-error:<userId>:<yyyymmddHHmmss>` с TTL 10 дней и включает поля `command`, `code`, `desc` и `when`. Поле `source` показывает, из какого KV читались данные (`primary` — `ADMIN_TG_IDS`, `fallback` — запасной биндинг, если whitelist недоступен). `topByCode` агрегирует счётчики по статусам.
 
-Маршрут помогает проверять whitelisting и доступность Telegram-адаптера без реальных рассылок.
+Маршрут помогает проверять whitelisting и доступность Telegram-адаптера без реальных рассылок. Дополнительно можно передать `?invalidate=`:
+
+- `?invalidate=all`, `?invalidate=*` или пустое значение (`?invalidate=`) сбрасывают кеш whitelist-а целиком.
+- `?invalidate=<userId>` принудительно перезагружает кеш только для указанного пользователя. Это полезно, если после обновления KV наблюдаются `system_command_role_mismatch`.
 
 ## `/export`
 
