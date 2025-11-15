@@ -486,7 +486,11 @@ export interface TelegramAdminCommandContext {
 export interface TelegramWebhookFeatures {
   handleAdminCommand?: (
     context: TelegramAdminCommandContext,
-  ) => Promise<Response | void> | Response | void;
+  ) =>
+    | Promise<Response | TelegramAdminCommandHandlerResult | void>
+    | Response
+    | TelegramAdminCommandHandlerResult
+    | void;
   handleMessage?: (
     message: IncomingMessage,
     context?: TransformPayloadContext,
@@ -498,6 +502,18 @@ export interface TelegramWebhookOptions {
   features?: TelegramWebhookFeatures;
   onSystemCommand?: (command: string) => void;
 }
+
+export interface TelegramAdminCommandHandlerResult {
+  response?: Response;
+  confirmSystemCommand?: boolean;
+}
+
+const isAdminCommandHandlerResult = (
+  value: unknown,
+): value is TelegramAdminCommandHandlerResult =>
+  typeof value === 'object' &&
+  value !== null &&
+  ('response' in value || 'confirmSystemCommand' in value);
 
 const toHandledResult = (response?: Response): HandledWebhookResult => ({
   kind: 'handled',
@@ -552,13 +568,27 @@ const handleAdminCommand = async (
     return undefined;
   }
 
-  options.onSystemCommand?.(context.command);
   const response = await handler(context);
-  if (!response) {
+
+  if (response instanceof Response) {
+    options.onSystemCommand?.(context.command);
+    return toHandledResult(response);
+  }
+
+  if (!isAdminCommandHandlerResult(response)) {
     return undefined;
   }
 
-  return toHandledResult(response);
+  const confirmCommand = response.confirmSystemCommand === true || Boolean(response.response);
+  if (confirmCommand) {
+    options.onSystemCommand?.(context.command);
+  }
+
+  if (response.response instanceof Response) {
+    return toHandledResult(response.response);
+  }
+
+  return undefined;
 };
 
 export const transformTelegramUpdate = async (

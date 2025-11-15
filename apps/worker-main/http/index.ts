@@ -23,6 +23,7 @@ export {
   type TelegramMessage,
   type TelegramMessageEntity,
   type TelegramUpdate,
+  type TelegramAdminCommandHandlerResult,
   type TelegramWebhookFeatures,
   type TelegramWebhookOptions,
 } from './telegram-webhook';
