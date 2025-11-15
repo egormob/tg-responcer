@@ -324,3 +324,9 @@ Self-test пишет два читаемых сообщения:
 
 ### 4. Резюме
 Whitelisting и кэш `AdminAccess` работают штатно (кеш инвалидируется по запросу, диагностические пинги доходят до обоих ID), однако дальнейшие `/admin`-команды немедленно получают `HTTP 429` из-за активного лимитера `admin_export`, поэтому разблокировка экспорта остаётся единственным блокером перед следующей задачей.【F:memory-bank/logs/admin-access-2025-11-25.json†L1-L52】【F:memory-bank/logs/telegram-access-diagnostics-2025-11-25.md†L1-L11】【F:memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log†L1-L2】
+
+### 5. Статус 26.11.2025 — лимит снят
+- Снимки `RATE_LIMIT_KV` до и после очистки ключа `rate_limit:scope:admin_export:chat:136236606:user:136236606:bucket:20407` подтверждают удаление кулдауна (исходное значение 50 зафиксировано, повторный список не содержит ключа).【F:memory-bank/logs/rate-limit-kv-2025-11-26.md†L1-L45】
+- `wrangler tail` по `/admin`, `/admin status` и safe-пингу показывает три последовательных `HTTP 200` с логами `admin help sent`, `system_admin_status`, `[safe] done`, то есть команды снова отвечают штатно без 429.【F:memory-bank/logs/wrangler-tail-admin-2025-11-26.md†L1-L24】
+- Лог переписки демонстрирует нормальный ответ `/admin` после разблокировки и служит сравнением с предыдущими сообщениями «Access diagnostics ping».【F:memory-bank/logs/telegram-admin-recovery-2025-11-26.md†L1-L17】
+- **Итог:** лимит снят, команды отвечают штатно, переходим к проверке регистрации системных команд.
