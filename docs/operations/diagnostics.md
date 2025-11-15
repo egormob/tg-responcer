@@ -307,3 +307,20 @@ Self-test пишет два читаемых сообщения:
 4. Убедиться в отсутствии логов `empty export`, `truncated`, `[d1-storage] column missing` или `[export] failed`.
 5. Проверить доставку файла ботом и успешное открытие CSV в Numbers/Excel.
 6. Убедиться, что после запуска команды нет предупреждений `Invalid expiration_ttl` — кулдаун должен записываться с TTL 60 секунд и блокировать повторный `/export` в течение минуты.
+
+## Диагностическая карточка: Admin Access и лимитер `admin_export` (25.11.2025)
+
+> Восстановление базовой точки перед задачей по снятию лимита: подтверждаем whitelisting/кэш и фиксируем блокировку `/admin` по `admin_export`.
+
+### 1. `/admin/access` (до `invalidate`, с `invalidate=all`, после)
+- JSON-ответы трёх последовательных вызовов зафиксированы в `memory-bank/logs/admin-access-2025-11-25.json` и показывают стабильный `whitelist` (`270641809`, `402077679`), идентичный `kvRaw` и `health.status="ok"` для обоих ID до, во время и после сброса кэша.【F:memory-bank/logs/admin-access-2025-11-25.json†L1-L52】
+- Запрос с `invalidate=all` подтверждает, что `cacheControl.invalidateApplied=true`, а следующий вызов читает свежие данные из KV (`cacheSnapshot:"miss_after_invalidate"`), то есть whitelist-кэш корректно инвалидируется и пересоздаётся.【F:memory-bank/logs/admin-access-2025-11-25.json†L21-L52】
+
+### 2. Telegram подтверждение (`Access diagnostics ping…`)
+- Фрагмент переписки в админ-чате (`memory-bank/logs/telegram-access-diagnostics-2025-11-25.md`) показывает шесть системных сообщений «Access diagnostics ping…», по два на каждый вызов `/admin/access`, что подтверждает корреляцию HTTP-диагностики с безопасными Telegram-пингами。【F:memory-bank/logs/telegram-access-diagnostics-2025-11-25.md†L1-L11】
+
+### 3. `wrangler tail` — `admin export rate limited`
+- Лог `memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log` содержит предупреждение `[admin.export][warn] admin export rate limited` и последующий `HTTP 429` по маршруту `/admin` с теми же `chatIdHash`/`fromIdHash`, что фиксирует блокировку команд админа активным `admin_export`-лимитером и 60-секундным cooldown-окном.【F:memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log†L1-L2】
+
+### 4. Резюме
+Whitelisting и кэш `AdminAccess` работают штатно (кеш инвалидируется по запросу, диагностические пинги доходят до обоих ID), однако дальнейшие `/admin`-команды немедленно получают `HTTP 429` из-за активного лимитера `admin_export`, поэтому разблокировка экспорта остаётся единственным блокером перед следующей задачей.【F:memory-bank/logs/admin-access-2025-11-25.json†L1-L52】【F:memory-bank/logs/telegram-access-diagnostics-2025-11-25.md†L1-L11】【F:memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log†L1-L2】

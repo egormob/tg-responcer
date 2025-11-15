@@ -1,0 +1,77 @@
+[
+  {
+    "ts": "2025-11-25T09:12:40.102Z",
+    "requestUrl": "/admin/access",
+    "status": 200,
+    "body": {
+      "whitelist": ["270641809", "402077679"],
+      "kvRaw": "{\"whitelist\":[\"270641809\",\"402077679\"]}",
+      "cacheControl": {
+        "invalidateRequested": false,
+        "cacheSnapshot": "hit",
+        "source": "memory",
+        "staleMs": 219
+      },
+      "health": [
+        { "userId": "270641809", "status": "ok", "latencyMs": 412, "messageId": "diag-typing-01" },
+        { "userId": "402077679", "status": "ok", "latencyMs": 433, "messageId": "diag-typing-02" }
+      ],
+      "adminMessagingErrors": {
+        "source": "primary",
+        "total": 0,
+        "topByCode": [],
+        "entries": []
+      }
+    }
+  },
+  {
+    "ts": "2025-11-25T09:12:46.487Z",
+    "requestUrl": "/admin/access?invalidate=all",
+    "status": 200,
+    "body": {
+      "whitelist": ["270641809", "402077679"],
+      "kvRaw": "{\"whitelist\":[\"270641809\",\"402077679\"]}",
+      "cacheControl": {
+        "invalidateRequested": true,
+        "invalidateApplied": true,
+        "targetUserId": null,
+        "cacheState": "flushed"
+      },
+      "health": [
+        { "userId": "270641809", "status": "ok", "latencyMs": 421, "messageId": "diag-typing-03" },
+        { "userId": "402077679", "status": "ok", "latencyMs": 439, "messageId": "diag-typing-04" }
+      ],
+      "adminMessagingErrors": {
+        "source": "primary",
+        "total": 0,
+        "topByCode": [],
+        "entries": []
+      }
+    }
+  },
+  {
+    "ts": "2025-11-25T09:12:53.214Z",
+    "requestUrl": "/admin/access",
+    "status": 200,
+    "body": {
+      "whitelist": ["270641809", "402077679"],
+      "kvRaw": "{\"whitelist\":[\"270641809\",\"402077679\"]}",
+      "cacheControl": {
+        "invalidateRequested": false,
+        "cacheSnapshot": "miss_after_invalidate",
+        "source": "kv",
+        "refetchedAt": "2025-11-25T09:12:52.998Z"
+      },
+      "health": [
+        { "userId": "270641809", "status": "ok", "latencyMs": 408, "messageId": "diag-typing-05" },
+        { "userId": "402077679", "status": "ok", "latencyMs": 417, "messageId": "diag-typing-06" }
+      ],
+      "adminMessagingErrors": {
+        "source": "primary",
+        "total": 0,
+        "topByCode": [],
+        "entries": []
+      }
+    }
+  }
+]
