@@ -280,6 +280,102 @@ describe('http router', () => {
     expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/fff unknown');
   });
 
+  it('routes неадмин /admin команды в диалог', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok', messageId: 'adm-1' },
+    });
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const messaging = createMessagingMock();
+    const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
+    const transformPayload = createTelegramWebhookHandler({
+      storage: createStorageMock(),
+      features: { handleAdminCommand },
+    });
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const update = {
+      update_id: 3001,
+      message: {
+        message_id: '801',
+        date: '1705000000',
+        chat: { id: 'chat-5', type: 'private' },
+        from: { id: 'user-5' },
+        text: '/admin status',
+        entities: [{ type: 'bot_command', offset: 0, length: '/admin'.length }],
+      },
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(update),
+      }),
+    );
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/admin status');
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'adm-1' });
+  });
+
+  it('routes неподдерживаемые команды в диалог', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok', messageId: 'cmd-2' },
+    });
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const messaging = createMessagingMock();
+    const handleAdminCommand = vi
+      .fn()
+      .mockImplementation(async (context) => (context.argument === 'supported' ? new Response('ok') : undefined));
+    const transformPayload = createTelegramWebhookHandler({
+      storage: createStorageMock(),
+      features: { handleAdminCommand },
+    });
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+    });
+
+    const update = {
+      update_id: 3002,
+      message: {
+        message_id: '802',
+        date: '1705000100',
+        chat: { id: 'chat-6', type: 'private' },
+        from: { id: 'user-6' },
+        text: '/admin unsupported',
+        entities: [{ type: 'bot_command', offset: 0, length: '/admin'.length }],
+      },
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(update),
+      }),
+    );
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/admin unsupported');
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'cmd-2' });
+  });
+
   it('sends fallback message when dialog engine signals rate limit without notifier', async () => {
     const handleMessage = vi.fn().mockResolvedValue({ status: 'rate_limited' });
     const messaging = createMessagingMock();

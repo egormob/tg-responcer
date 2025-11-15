@@ -374,7 +374,23 @@ describe('createTelegramWebhookHandler', () => {
     await expect(savePromise).resolves.toBeUndefined();
   });
 
-  it('tracks admin commands in system command matcher even when handler declines', async () => {
+  it('registers admin command as system command only after handler responds', async () => {
+    const storage = createStorageMock();
+    const handleAdminCommand = vi
+      .fn()
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: { handleAdminCommand },
+    });
+
+    await handler(createCommandUpdate('/admin', 'status'));
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handler.isSystemCommand('/admin status')).toBe(true);
+  });
+
+  it('не добавляет /admin в systemCommands для неадминов', async () => {
     const storage = createStorageMock();
     const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
     const handler = createTelegramWebhookHandler({
@@ -382,16 +398,43 @@ describe('createTelegramWebhookHandler', () => {
       features: { handleAdminCommand },
     });
 
-    await handler(createCommandUpdate('/admin', 'export now'));
+    await handler(createCommandUpdate('/admin', 'status'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handler.isSystemCommand('/admin export now')).toBe(true);
-    expect(handler.isSystemCommand('/export')).toBe(false);
+    expect(handler.isSystemCommand('/admin status')).toBe(false);
   });
 
-  it('registers broadcast command as system command when handler ignores it', async () => {
+  it('не регистрирует неподдерживаемые админ-команды', async () => {
     const storage = createStorageMock();
-    const handleAdminCommand = vi.fn().mockResolvedValue(undefined);
+    const handleAdminCommand = vi
+      .fn()
+      .mockImplementation(async (context) => {
+        if (context.argument === 'supported') {
+          return new Response('ok');
+        }
+        return undefined;
+      });
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: { handleAdminCommand },
+    });
+
+    await handler(createCommandUpdate('/admin', 'unsupported'));
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+    expect(handler.isSystemCommand('/admin unsupported')).toBe(false);
+
+    await handler(createCommandUpdate('/admin', 'supported'));
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(2);
+    expect(handler.isSystemCommand('/admin supported')).toBe(true);
+  });
+
+  it('разрешает обработчику явно помечать команду без ответа', async () => {
+    const storage = createStorageMock();
+    const handleAdminCommand = vi
+      .fn()
+      .mockResolvedValue({ confirmSystemCommand: true });
     const handler = createTelegramWebhookHandler({
       storage,
       features: { handleAdminCommand },
