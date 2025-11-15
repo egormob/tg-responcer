@@ -629,34 +629,42 @@ export const createRouter = (options: RouterOptions) => {
         return handleImmediateRoleMismatch('system_command_role_mismatch', matchResult.command);
       }
 
-      const matchedCommand =
-        matchResult.kind === 'match'
-          ? matchResult.match
-          : { command: matchResult.command, descriptor: matchResult.descriptor };
-
-      const resolveCommandRole = async (): Promise<SystemCommandRole | undefined> => {
-        if (isCommandAllowedForRole(matchedCommand.descriptor, 'global')) {
+      const resolveCommandRole = async (
+        match: SystemCommandMatch,
+      ): Promise<SystemCommandRole | undefined> => {
+        if (isCommandAllowedForRole(match.descriptor, 'global')) {
           return 'global';
         }
 
         if (typeof options.determineCommandRole === 'function') {
-          return options.determineCommandRole({ match: matchedCommand, message });
+          return options.determineCommandRole({ match, message });
         }
 
         return undefined;
       };
 
-      const role = await resolveCommandRole();
-      if (!role || !isCommandAllowedForRole(matchedCommand.descriptor, role)) {
-        if (isCommandAllowedForRole(matchedCommand.descriptor, 'scoped')) {
-          return handleImmediateRoleMismatch('system_command_unauthorized', matchedCommand.command);
+      let matchedCommand: SystemCommandMatch;
+      if (matchResult.kind === 'match') {
+        matchedCommand = matchResult.match;
+      } else {
+        matchedCommand = { command: matchResult.command, descriptor: matchResult.descriptor };
+
+        const role = await resolveCommandRole(matchedCommand);
+        if (!role || !isCommandAllowedForRole(matchedCommand.descriptor, role)) {
+          if (isCommandAllowedForRole(matchedCommand.descriptor, 'scoped')) {
+            return handleImmediateRoleMismatch('system_command_unauthorized', matchedCommand.command);
+          }
+
+          return undefined;
         }
 
-        return undefined;
-      }
-
-      if (role === 'scoped' && typeof message.user.userId === 'string' && message.user.userId.length > 0) {
-        systemCommands.register(matchedCommand.command, message.user.userId);
+        if (
+          role === 'scoped' &&
+          typeof message.user.userId === 'string' &&
+          message.user.userId.length > 0
+        ) {
+          systemCommands.register(matchedCommand.command, message.user.userId);
+        }
       }
 
       const handler = systemCommandHandlers.get(matchedCommand.command);
