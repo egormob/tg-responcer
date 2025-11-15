@@ -109,19 +109,22 @@ export const createTelegramWebhookHandler = (
   // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
   // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
   const knownUsersCache = createKnownUsersCache();
-  const systemCommands = new Set<string>(['/start']);
+  const globalSystemCommands = new Set<string>(['/start']);
+  const scopedSystemCommands = new Map<string, Set<string>>();
 
-  const registerSystemCommand = (command: string | undefined) => {
-    if (typeof command !== 'string') {
-      return;
-    }
-
+  const registerSystemCommand = (command: string, userId: string) => {
     const normalized = command.startsWith('/') ? command : undefined;
     if (!normalized) {
       return;
     }
 
-    systemCommands.add(normalized);
+    const existing = scopedSystemCommands.get(normalized);
+    if (existing) {
+      existing.add(userId);
+      return;
+    }
+
+    scopedSystemCommands.set(normalized, new Set([userId]));
   };
 
   const normalizeCommandFromText = (text: string): string | undefined => {
@@ -140,9 +143,23 @@ export const createTelegramWebhookHandler = (
     return normalized && normalized.length > 0 ? normalized : undefined;
   };
 
-  const isSystemCommand: SystemCommandMatcher = (text) => {
+  const isSystemCommand: SystemCommandMatcher = (text, message) => {
     const normalized = normalizeCommandFromText(text);
-    return normalized ? systemCommands.has(normalized) : false;
+    if (!normalized) {
+      return false;
+    }
+
+    if (globalSystemCommands.has(normalized)) {
+      return true;
+    }
+
+    const userId = message.user.userId;
+    if (typeof userId !== 'string') {
+      return false;
+    }
+
+    const allowedUsers = scopedSystemCommands.get(normalized);
+    return allowedUsers?.has(userId) ?? false;
   };
 
   const forgetUser = (userId: unknown) => {

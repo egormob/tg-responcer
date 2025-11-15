@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTelegramWebhookHandler } from '../create-telegram-webhook-handler';
 import type { StoragePort } from '../../../ports';
 import type { TelegramUpdate } from '../../../http/telegram-webhook';
+import type { IncomingMessage } from '../../../core';
 import { describeTelegramIdForLogs } from '../../../http/telegram-ids';
 import { createKnownUsersClearRoute } from '../../admin-diagnostics/known-users-route';
 
@@ -59,6 +60,14 @@ const createCommandUpdate = (command: string, argument?: string): TelegramUpdate
     },
   };
 };
+
+const createIncomingMessage = (userId = '55'): IncomingMessage => ({
+  user: { userId, firstName: 'Test' },
+  chat: { id: '66' },
+  text: '/admin status',
+  messageId: 'm-1',
+  receivedAt: new Date('2024-02-01T00:00:00.000Z'),
+});
 
 describe('createTelegramWebhookHandler', () => {
   it('stores utmSource on first /start payload', async () => {
@@ -387,7 +396,41 @@ describe('createTelegramWebhookHandler', () => {
     await handler(createCommandUpdate('/admin', 'status'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handler.isSystemCommand('/admin status')).toBe(true);
+    expect(handler.isSystemCommand('/admin status', createIncomingMessage())).toBe(true);
+  });
+
+  it('scopes confirmed admin commands to a specific user', async () => {
+    const storage = createStorageMock();
+    const handleAdminCommand = vi.fn(async (context) =>
+      context.from.userId === '55' ? new Response('ok') : undefined,
+    );
+    const handler = createTelegramWebhookHandler({
+      storage,
+      features: { handleAdminCommand },
+    });
+
+    const adminResult = await handler(createCommandUpdate('/admin', 'status'));
+    expect(adminResult.kind).toBe('handled');
+
+    const adminMessage = createIncomingMessage('55');
+    const outsiderMessage = createIncomingMessage('77');
+    expect(handler.isSystemCommand('/admin status', adminMessage)).toBe(true);
+    expect(handler.isSystemCommand('/admin status', outsiderMessage)).toBe(false);
+
+    const outsiderUpdate: TelegramUpdate = {
+      ...baseUpdate,
+      message: {
+        ...baseUpdate.message!,
+        text: '/admin status',
+        entities: [{ type: 'bot_command', offset: 0, length: '/admin'.length }],
+        from: { id: '77', first_name: 'Outsider' },
+      },
+    };
+
+    const outsiderResult = await handler(outsiderUpdate);
+
+    expect(handleAdminCommand).toHaveBeenCalledTimes(2);
+    expect(outsiderResult.kind).toBe('message');
   });
 
   it('не добавляет /admin в systemCommands для неадминов', async () => {
@@ -401,7 +444,7 @@ describe('createTelegramWebhookHandler', () => {
     await handler(createCommandUpdate('/admin', 'status'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handler.isSystemCommand('/admin status')).toBe(false);
+    expect(handler.isSystemCommand('/admin status', createIncomingMessage())).toBe(false);
   });
 
   it('не регистрирует неподдерживаемые админ-команды', async () => {
@@ -422,12 +465,12 @@ describe('createTelegramWebhookHandler', () => {
     await handler(createCommandUpdate('/admin', 'unsupported'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handler.isSystemCommand('/admin unsupported')).toBe(false);
+    expect(handler.isSystemCommand('/admin unsupported', createIncomingMessage())).toBe(false);
 
     await handler(createCommandUpdate('/admin', 'supported'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(2);
-    expect(handler.isSystemCommand('/admin supported')).toBe(true);
+    expect(handler.isSystemCommand('/admin supported', createIncomingMessage())).toBe(true);
   });
 
   it('разрешает обработчику явно помечать команду без ответа', async () => {
@@ -443,16 +486,16 @@ describe('createTelegramWebhookHandler', () => {
     await handler(createCommandUpdate('/broadcast'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handler.isSystemCommand('/broadcast')).toBe(true);
+    expect(handler.isSystemCommand('/broadcast', createIncomingMessage())).toBe(true);
   });
 
   it('does not treat unknown commands as system ones', async () => {
     const storage = createStorageMock();
     const handler = createTelegramWebhookHandler({ storage });
 
-    expect(handler.isSystemCommand('/fff')).toBe(false);
+    expect(handler.isSystemCommand('/fff', createIncomingMessage())).toBe(false);
     await handler(createCommandUpdate('/fff'));
-    expect(handler.isSystemCommand('/fff')).toBe(false);
+    expect(handler.isSystemCommand('/fff', createIncomingMessage())).toBe(false);
   });
 });
 
