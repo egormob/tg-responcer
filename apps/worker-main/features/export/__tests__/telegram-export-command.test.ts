@@ -504,7 +504,7 @@ describe('createTelegramExportCommandHandler', () => {
     sendTextMock.mockClear();
 
     const secondResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
-    expect(secondResponse?.status).toBe(429);
+    expect(secondResponse?.status).toBe(200);
     await expect(secondResponse?.json()).resolves.toEqual({
       error: 'Экспорт формируется, подождите 60 секунд',
     });
@@ -564,7 +564,7 @@ describe('createTelegramExportCommandHandler', () => {
     });
 
     const secondResponse = await handler(createContext({ command: '/export' }));
-    expect(secondResponse?.status).toBe(429);
+    expect(secondResponse?.status).toBe(200);
     expect(logger.info).toHaveBeenCalledWith(
       'admin export cooldown resolved via fallback kv',
       expect.objectContaining({

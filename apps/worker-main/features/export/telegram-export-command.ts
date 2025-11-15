@@ -630,7 +630,11 @@ export const createTelegramExportCommandHandler = (
             'export_cooldown_notice',
           );
         }
-        return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
+        // Telegram повторяет вебхук, если воркер вернул не-200. Чтобы избежать
+        // дублирующих уведомлений «Экспорт формируется…» при повторной отправке
+        // одного и того же update, отвечаем 200 и обрабатываем кулдаун только
+        // через текстовое сообщение.
+        return json(EXPORT_COOLDOWN_RESPONSE, { status: 200 });
       }
 
       await cooldownStore.put(cooldownKey, EXPORT_COOLDOWN_VALUE, EXPORT_COOLDOWN_TTL_SECONDS, cooldownContext);
