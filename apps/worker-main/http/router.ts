@@ -26,7 +26,7 @@ import {
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
 
 const USER_ERROR_TEXT = 'Ой… 🧐 …';
-const ADMIN_UNAUTHORIZED_TEXT = `${USER_ERROR_TEXT}\nКоманда доступна только администраторам.`;
+const ADMIN_ROLE_MISMATCH_TEXT = 'Эта команда доступна только администратору';
 const ADMIN_COMMAND_EXAMPLES: readonly string[] = [
   '/admin status — проверить доступ администратора',
   '/admin export 2024-05-01 2024-05-07 — выгрузить историю диалогов',
@@ -561,10 +561,68 @@ export const createRouter = (options: RouterOptions) => {
     }
 
     const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
-      const matchedCommand = matchSystemCommand(message.text, message, systemCommands);
-      if (!matchedCommand) {
+      const matchResult = matchSystemCommand(message.text, message, systemCommands);
+      if (!matchResult) {
         return undefined;
       }
+
+      if (matchResult.kind === 'role_mismatch') {
+        const logPayload: Record<string, unknown> = {
+          command: matchResult.command,
+        };
+        if (updateId !== undefined) {
+          logPayload.updateId = updateId;
+        }
+        applyTelegramIdLogFields(logPayload, 'chatId', message.chat.id, { includeValue: false });
+        applyTelegramIdLogFields(logPayload, 'fromId', message.user.userId, { includeValue: false });
+
+        // eslint-disable-next-line no-console
+        console.info('[router] system command role mismatch', logPayload);
+
+        try {
+          await logMessagingCall(
+            {
+              action: 'sendTyping',
+              route: 'system_command_role_mismatch',
+              updateId,
+              chatIdNormalized: message.chat.id,
+              fromId: message.user.userId,
+              messageId: message.messageId,
+            },
+            () =>
+              options.messaging.sendTyping({
+                chatId: message.chat.id,
+                threadId: message.chat.threadId,
+              }),
+          );
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn('[router] failed to send role mismatch typing indicator', error);
+        }
+
+        const unauthorizedLog = messageLogDetails
+          ? { ...messageLogDetails, route: 'system_command_role_mismatch' }
+          : {
+              action: 'sendText' as const,
+              route: 'system_command_role_mismatch',
+              updateId,
+              chatIdNormalized: message.chat.id,
+              fromId: message.user.userId,
+              messageId: message.messageId,
+            };
+
+        await logMessagingCall(unauthorizedLog, () =>
+          options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: ADMIN_ROLE_MISMATCH_TEXT,
+          }),
+        );
+
+        return jsonResponse({ status: 'ok', messageId: null });
+      }
+
+      const matchedCommand = matchResult.match;
 
       const resolveCommandRole = async (): Promise<SystemCommandRole | undefined> => {
         if (isCommandAllowedForRole(matchedCommand.descriptor, 'global')) {
@@ -596,7 +654,7 @@ export const createRouter = (options: RouterOptions) => {
             options.messaging.sendText({
               chatId: message.chat.id,
               threadId: message.chat.threadId,
-              text: ADMIN_UNAUTHORIZED_TEXT,
+              text: ADMIN_ROLE_MISMATCH_TEXT,
             }),
           );
 

@@ -133,7 +133,7 @@ export const createTelegramWebhookHandler = (
   };
 
   const isSystemCommand = (text: string, message: IncomingMessage) =>
-    Boolean(matchSystemCommand(text, message, systemCommands));
+    matchSystemCommand(text, message, systemCommands)?.kind === 'match';
 
   const forgetUser = (userId: unknown) => {
     if (typeof userId === 'string') {

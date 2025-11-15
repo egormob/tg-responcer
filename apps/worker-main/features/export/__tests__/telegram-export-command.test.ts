@@ -424,7 +424,7 @@ describe('createTelegramExportCommandHandler', () => {
     expect(handleExport).not.toHaveBeenCalled();
   });
 
-  it('returns 403 for non-admin users', async () => {
+  it('skips export for non-admin users', async () => {
     const { handleExport, rateLimit } = createHandler();
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(false) };
     const handler = createTelegramExportCommandHandler({
@@ -439,8 +439,9 @@ describe('createTelegramExportCommandHandler', () => {
 
     const response = await handler(createContext({ command: '/export' }));
 
-    expect(response?.status).toBe(403);
+    expect(response).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(handleExport).not.toHaveBeenCalled();
   });
 
   it('returns 429 when rate limit exceeded', async () => {

@@ -587,7 +587,7 @@ export const createTelegramExportCommandHandler = (
     const isAdmin = await options.adminAccess.isAdmin(userId);
     if (!isAdmin) {
       logger.warn('admin export denied', { userId, chatId: context.chat.id });
-      return json({ error: 'Admin access required' }, { status: 403 });
+      return undefined;
     }
 
     const rateLimitResult = await options.rateLimit.checkAndIncrement({
