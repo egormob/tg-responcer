@@ -148,6 +148,19 @@ export class DialogEngine {
           error instanceof Error
           && (error.message === 'AI_QUEUE_TIMEOUT' || error.message === 'AI_QUEUE_DROPPED')
         ) {
+          const fallbackLog: Record<string, unknown> = {
+            reason: error.message,
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            messageId: message.messageId ?? null,
+          };
+          const queueDetails = (error as { queueDetails?: unknown }).queueDetails;
+          if (queueDetails) {
+            fallbackLog.queueDetails = queueDetails;
+          }
+          // eslint-disable-next-line no-console
+          console.warn('[dialog-engine][ai_fallback]', fallbackLog);
+
           aiReply = {
             text: getFriendlyOverloadMessage(message.user.languageCode),
             metadata: {

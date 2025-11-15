@@ -289,7 +289,6 @@ describe('http router', () => {
     const messaging = createMessagingMock({ sendText });
     const dialogEngine = createDialogEngineMock();
     const systemCommands = createSystemCommandRegistry();
-    systemCommands.register('/admin status', 'admin-1');
     const transformPayload = Object.assign(
       vi.fn().mockResolvedValue({
         kind: 'message',
@@ -329,6 +328,53 @@ describe('http router', () => {
     expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'admin-ok-1' });
+    expect(systemCommands.isAllowed('/admin status', 'admin-1')).toBe(true);
+  });
+
+  it('rescues scoped commands via determineCommandRole when registry has no entry', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'admin-ok-2' });
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const systemCommands = createSystemCommandRegistry();
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-auto', firstName: 'AutoAdmin' },
+          chat: { id: 'chat-auto' },
+          text: '/admin status',
+          messageId: 'm-150',
+          receivedAt: new Date('2024-05-01T01:00:00.000Z'),
+        },
+      }),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'admin-ok-2' });
+    expect(sendText).toHaveBeenCalledWith({
+      chatId: 'chat-auto',
+      threadId: undefined,
+      text: 'admin-ok',
+    });
+    expect(systemCommands.isAllowed('/admin status', 'admin-auto')).toBe(true);
   });
 
   it('sends unauthorized hint when scoped command loses role', async () => {

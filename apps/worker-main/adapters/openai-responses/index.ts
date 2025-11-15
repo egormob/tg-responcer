@@ -136,6 +136,45 @@ const createQueueLogPayload = (
   ...extra,
 });
 
+interface AiQueueTimeoutDetails {
+  phase: string;
+  attempt: number;
+  queueWaitMs: number;
+  userIdHash: string;
+  requestId: string | null;
+  endpointId: string | null;
+  baseUrl: string | null;
+  stats: AiQueueStats;
+}
+
+interface AiQueueTimeoutError extends Error {
+  queueDetails?: AiQueueTimeoutDetails;
+}
+
+const createQueueTimeoutError = (
+  stats: AiLimiterStats,
+  runtime: OpenAIResponsesAdapterOptions['runtime'],
+  endpoints: AiQueueStats['endpoints'],
+  details: Omit<AiQueueTimeoutDetails, 'stats' | 'requestId' | 'endpointId' | 'baseUrl'> & {
+    requestId?: string | null;
+    endpointId?: string | null;
+    baseUrl?: string | null;
+  },
+): AiQueueTimeoutError => {
+  const error = new Error('AI_QUEUE_TIMEOUT') as AiQueueTimeoutError;
+  error.queueDetails = {
+    phase: details.phase,
+    attempt: details.attempt,
+    queueWaitMs: details.queueWaitMs,
+    userIdHash: details.userIdHash,
+    requestId: details.requestId ?? null,
+    endpointId: details.endpointId ?? null,
+    baseUrl: details.baseUrl ?? null,
+    stats: mapLimiterStatsToQueueStats(stats, runtime, endpoints),
+  };
+  return error;
+};
+
 const extractTextFromPayload = (
   payload: ResponsesApiSuccessPayload,
 ): { text: string; usedOutputText: boolean } => {
@@ -598,10 +637,11 @@ export const createOpenAIResponsesAdapter = (
       for (let attempt = 0; attempt < maxRetries; attempt += 1) {
         const remainingBeforeAcquire = deadline - Date.now();
         if (remainingBeforeAcquire <= 0) {
+          const limiterStats = limiter.getStats();
           // eslint-disable-next-line no-console
           console.error(
             '[ai][timeout]',
-            createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
+            createQueueLogPayload(limiterStats, runtime, getEndpointDiagnostics(), {
               phase: 'budget_exhausted',
               attempt: attempt + 1,
               userIdHash,
@@ -609,7 +649,12 @@ export const createOpenAIResponsesAdapter = (
               queueWaitMs: 0,
             }),
           );
-          throw new Error('AI_QUEUE_TIMEOUT');
+          throw createQueueTimeoutError(limiterStats, runtime, getEndpointDiagnostics(), {
+            phase: 'budget_exhausted',
+            attempt: attempt + 1,
+            queueWaitMs: 0,
+            userIdHash,
+          });
         }
 
         let release: (() => void) | undefined;
@@ -682,10 +727,12 @@ export const createOpenAIResponsesAdapter = (
         try {
           const now = Date.now();
           if (now > deadline) {
+            const limiterStats = limiter.getStats();
+            const activeEndpoint = getEndpointByIndex(activeEndpointIndex);
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
+              createQueueLogPayload(limiterStats, runtime, getEndpointDiagnostics(), {
                 phase: 'queue_wait',
                 attempt: attempt + 1,
                 queueWaitMs,
@@ -693,7 +740,14 @@ export const createOpenAIResponsesAdapter = (
                 requestId: null,
               }),
             );
-            throw new Error('AI_QUEUE_TIMEOUT');
+            throw createQueueTimeoutError(limiterStats, runtime, getEndpointDiagnostics(), {
+              phase: 'queue_wait',
+              attempt: attempt + 1,
+              queueWaitMs,
+              userIdHash,
+              endpointId: activeEndpoint.id,
+              baseUrl: activeEndpoint.url,
+            });
           }
 
           const remainingTime = deadline - now;
@@ -798,10 +852,12 @@ export const createOpenAIResponsesAdapter = (
         if (shouldRetry) {
           const remainingBeforeSleep = deadline - Date.now();
           if (remainingBeforeSleep <= 0) {
+            const limiterStats = limiter.getStats();
+            const activeEndpoint = getEndpointByIndex(activeEndpointIndex);
             // eslint-disable-next-line no-console
             console.error(
               '[ai][timeout]',
-              createQueueLogPayload(limiter.getStats(), runtime, getEndpointDiagnostics(), {
+              createQueueLogPayload(limiterStats, runtime, getEndpointDiagnostics(), {
                 phase: 'before_retry_sleep',
                 attempt: attempt + 1,
                 userIdHash,
@@ -811,7 +867,14 @@ export const createOpenAIResponsesAdapter = (
                 baseUrl: retryBaseUrl ?? null,
               }),
             );
-            throw new Error('AI_QUEUE_TIMEOUT');
+            throw createQueueTimeoutError(limiterStats, runtime, getEndpointDiagnostics(), {
+              phase: 'before_retry_sleep',
+              attempt: attempt + 1,
+              queueWaitMs,
+              userIdHash,
+              endpointId: retryEndpointId ?? activeEndpoint.id,
+              baseUrl: retryBaseUrl ?? activeEndpoint.url,
+            });
           }
 
           const delayMs = Math.min(Math.max(0, retryDelayMs), Math.max(0, remainingBeforeSleep));
