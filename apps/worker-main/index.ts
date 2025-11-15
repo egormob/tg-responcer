@@ -16,6 +16,8 @@ import {
   createAdminExportRoute,
   createAdminCommandErrorRecorder,
   createCsvExportHandler,
+  createExportRateDiagRoute,
+  createExportRateTelemetry,
   createEnvzRoute,
   createBindingsDiagnosticsRoute,
   createAiQueueDiagRoute,
@@ -30,6 +32,7 @@ import {
   createTelegramWebhookHandler,
   type TelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
+  type ExportRateTelemetry,
   type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
   type SendBroadcast,
@@ -94,6 +97,11 @@ interface WorkerExecutionContext {
 
 const DEFAULT_RATE_LIMIT = 50;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+interface RateLimitConfig {
+  limit: number;
+  windowMs: number;
+}
 
 const DEFAULT_AI_MAX_CONCURRENCY = 4;
 const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
@@ -253,6 +261,11 @@ const getTrimmedString = (value: unknown): string | undefined => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 };
+
+const readRateLimitConfig = (env: WorkerEnv): RateLimitConfig => ({
+  limit: toPositiveInteger(env.RATE_LIMIT_DAILY_LIMIT) ?? DEFAULT_RATE_LIMIT,
+  windowMs: toPositiveDurationMs(env.RATE_LIMIT_WINDOW_MS) ?? DEFAULT_RATE_LIMIT_WINDOW_MS,
+});
 
 const isEnabledFlag = (value: unknown): boolean => {
   const trimmed = getTrimmedString(value);
@@ -606,6 +619,7 @@ const createPortOverrides = (
   env: WorkerEnv,
   runtime: RuntimeConfig,
   aiRuntime: AiConcurrencyConfig,
+  rateLimitConfig: RateLimitConfig,
 ): Partial<PortOverrides> => {
   const overrides: Partial<PortOverrides> = {
     messaging: createTelegramMessagingAdapter({
@@ -629,13 +643,10 @@ const createPortOverrides = (
   }
 
   if (env.RATE_LIMIT_KV) {
-    const limit = toPositiveInteger(env.RATE_LIMIT_DAILY_LIMIT) ?? DEFAULT_RATE_LIMIT;
-    const windowMs = toPositiveDurationMs(env.RATE_LIMIT_WINDOW_MS) ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
-
     overrides.rateLimit = createKvRateLimitAdapter({
       kv: env.RATE_LIMIT_KV,
-      limit,
-      windowMs,
+      limit: rateLimitConfig.limit,
+      windowMs: rateLimitConfig.windowMs,
     });
   }
 
@@ -689,6 +700,7 @@ const createAdminRoutes = (
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
   knownUsers: TelegramWebhookHandler['knownUsers'],
+  exportRateTelemetry?: ExportRateTelemetry,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -700,6 +712,7 @@ const createAdminRoutes = (
     env,
   });
   const aiQueueDiagRoute = createAiQueueDiagRoute({ ai: composition.ports.ai });
+  const exportRateDiagRoute = createExportRateDiagRoute({ telemetry: exportRateTelemetry });
 
   const routes: RouterOptions['admin'] = {
     token: adminToken,
@@ -724,9 +737,12 @@ const createAdminRoutes = (
     }),
     diag: async (request) => {
       const url = new URL(request.url);
-      const query = url.searchParams.get('q');
-      if ((query ?? '').toLowerCase() === 'ai-queue') {
+      const query = (url.searchParams.get('q') ?? '').toLowerCase();
+      if (query === 'ai-queue') {
         return aiQueueDiagRoute(request);
+      }
+      if (query === 'export-rate') {
+        return exportRateDiagRoute(request);
       }
       return bindingsDiagRoute(request);
     },
@@ -763,6 +779,7 @@ const createTransformPayload = (
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
+  exportRateTelemetry?: ExportRateTelemetry,
 ): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
@@ -788,6 +805,7 @@ const createTransformPayload = (
         logger: console,
         now: () => new Date(),
         adminErrorRecorder,
+        telemetry: exportRateTelemetry,
       })
     : undefined;
 
@@ -890,9 +908,14 @@ const createTransformPayload = (
 };
 
 const createRequestHandler = async (env: WorkerEnv) => {
+  const rateLimitConfig = readRateLimitConfig(env);
+  const exportRateTelemetry = createExportRateTelemetry({
+    limit: rateLimitConfig.limit,
+    windowMs: rateLimitConfig.windowMs,
+  });
   const runtime = validateRuntimeConfig(env);
   const aiRuntime = await readAiConcurrencyConfig(env);
-  const adapters = createPortOverrides(env, runtime, aiRuntime);
+  const adapters = createPortOverrides(env, runtime, aiRuntime, rateLimitConfig);
 
   const composition = composeWorker({
     env: {
@@ -926,6 +949,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     composition,
     adminAccess,
     adminErrorRecorder,
+    exportRateTelemetry,
   );
   const adminRoutes = createAdminRoutes(
     env,
@@ -933,6 +957,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     adminAccess,
     adminErrorRecorder,
     transformPayload.knownUsers,
+    exportRateTelemetry,
   );
 
   const router = createRouter({

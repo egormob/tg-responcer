@@ -322,10 +322,19 @@ Self-test пишет два читаемых сообщения:
 ### 3. `wrangler tail` — `admin export rate limited`
 - Лог `memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log` содержит предупреждение `[admin.export][warn] admin export rate limited` и последующий `HTTP 429` по маршруту `/admin` с теми же `chatIdHash`/`fromIdHash`, что фиксирует блокировку команд админа активным `admin_export`-лимитером и 60-секундным cooldown-окном.【F:memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log†L1-L2】
 
-### 4. Резюме
+### 4. `/admin/diag?q=export-rate`
+- Диагностика возвращает срез `status/feature/limit/windowMs/totals/buckets/lastLimit`, позволяющий увидеть, сколько `/export`
+  запросов прошло за последние окна и какой userIdHash последним поймал `429`. `totals.ok` растёт только при успешных экспортных
+  запросах, `totals.limit` — при срабатывании лимитера, а каждый bucket фиксирует `ok/limit`, `firstSeenAt/lastSeenAt` и
+  `lastUserIdHash`.【F:apps/worker-main/features/export/export-rate-diag-route.ts†L1-L19】【F:apps/worker-main/features/export/export-rate-telemetry.ts†L1-L154】
+- При срабатывании лимита `/admin export` воркер теперь логирует хэш userId, bucket, лимит и рассчитанный остаток (`remaining`)
+  в сообщении `[admin export rate limited …]`. Эти же значения сохраняются в телеметрии, так что проще сопоставлять `wrangler`
+  tail с `/admin/diag?q=export-rate` и понимать, в каком окне закончились запросы и сколько попыток уже было сделано.【F:apps/worker-main/features/export/telegram-export-command.ts†L651-L689】
+
+### 5. Резюме
 Whitelisting и кэш `AdminAccess` работают штатно (кеш инвалидируется по запросу, диагностические пинги доходят до обоих ID), однако дальнейшие `/admin`-команды немедленно получают `HTTP 429` из-за активного лимитера `admin_export`, поэтому разблокировка экспорта остаётся единственным блокером перед следующей задачей.【F:memory-bank/logs/admin-access-2025-11-25.json†L1-L52】【F:memory-bank/logs/telegram-access-diagnostics-2025-11-25.md†L1-L11】【F:memory-bank/logs/wrangler-admin-export-rate-limit-2025-11-25.log†L1-L2】
 
-### 5. Статус 26.11.2025 — лимит снят
+### 6. Статус 26.11.2025 — лимит снят
 - Снимки `RATE_LIMIT_KV` до и после очистки ключа `rate_limit:scope:admin_export:chat:136236606:user:136236606:bucket:20407` подтверждают удаление кулдауна (исходное значение 50 зафиксировано, повторный список не содержит ключа).【F:memory-bank/logs/rate-limit-kv-2025-11-26.md†L1-L45】
 - `wrangler tail` по `/admin`, `/admin status` и safe-пингу показывает три последовательных `HTTP 200` с логами `admin help sent`, `system_admin_status`, `[safe] done`, то есть команды снова отвечают штатно без 429.【F:memory-bank/logs/wrangler-tail-admin-2025-11-26.md†L1-L24】
 - Лог переписки демонстрирует нормальный ответ `/admin` после разблокировки и служит сравнением с предыдущими сообщениями «Access diagnostics ping».【F:memory-bank/logs/telegram-admin-recovery-2025-11-26.md†L1-L17】
