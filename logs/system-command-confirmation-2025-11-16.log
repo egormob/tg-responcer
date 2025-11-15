@@ -1,0 +1,20 @@
+# Верификация confirmSystemCommand после снятия лимитов — 2025-11-16
+
+**Цель.** Подтвердить, что после выключения лимитов (`LIMITS_ENABLED=0`) обработчик чат-команды `/admin` → `/export` возвращает `Response` (или `{ confirmSystemCommand: true }`), благодаря чему `options.onSystemCommand` успевает записать пользователя в `systemCommands.register`, `determineCommandRole` видит роль `scoped`, а повторная команда не проваливается с `system_command_role_mismatch`.
+
+**Команда запуска.**
+```
+wrangler tail tg-responcer --format=json | tee ~/logs/tg-responcer-router-$(date +%Y%m%d-%H%M%S).log
+```
+
+**Наблюдения.**
+1. Первый апдейт (`updateId=889767599`) пришёл в приватный чат `136236606`; лог `[telegram-webhook] incoming update` сопровождался сообщением `admin help sent { userId: "136236606", chatId: "136236606" }`, что подтверждает успешное выполнение обработчика `/admin` и возврат `Response` (первый шаг регистрации команды).
+2. Второй апдейт (`updateId=889767600`) от того же пользователя сразу прошёл маршрут `system_admin_status`: в логах зафиксированы `route": "system_admin_status"` и успешный `sendText status=200`. Это означает, что `determineCommandRole` уже видел роль `scoped`, иначе Telegram-хендлер вернул бы `ADMIN_ROLE_MISMATCH_TEXT`.
+3. Контрольный `grep "system_command_role_mismatch" ~/logs/tg-responcer-router-*.log | tail -n 40` не обнаружил записей, подтверждая отсутствие роли-миcматча в период проверки.
+4. `grep "system_admin" ~/logs/tg-responcer-router-*.log | tail -n 40` показал именно `route": "system_admin_status"`, что совпадает с ожидаемым завершением команды `/admin status`.
+5. Параллельная HTTP-проверка экспорта (см. `logs/limits-6-1-tail.json`) показала, что `/admin/export` возвращает `status: 200` с последовательными событиями `collecting page` → `sending export to telegram`. Это подтверждает, что экспортный обработчик также отдаёт валидный `Response`, поэтому `createTelegramWebhookHandler` воспринимает команду как подтверждённую.
+
+**Выводы.**
+- `createTelegramWebhookHandler` подтвердил системную команду, потому что обработчик вернул `Response`. В противном случае `systemCommands.register` не получил бы `userId`, и повторный `/admin` закончился бы `role_mismatch`.
+- Связка `index.ts` → `determineCommandRole` получила положительный ответ от `adminAccess.isAdmin`, а `systemCommands.register` успел записать `userId=136236606`. Это объясняет, почему повторный `/admin` моментально исполнил `system_admin_status`.
+- Цель проверки достигнута: после снятия лимитов цепочка подтверждения системной команды работает, и ID администратора фиксируется в реестре до вызова `determineCommandRole`.
