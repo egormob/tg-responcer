@@ -36,9 +36,9 @@ const normalizeCommandFromText = (text: string): string | undefined => {
   return normalized && normalized.length > 0 ? normalized : undefined;
 };
 
-export type SystemCommandMatcher = (text: string) => boolean;
+export type SystemCommandMatcher = (text: string, message: IncomingMessage) => boolean;
 
-const defaultSystemCommandMatcher: SystemCommandMatcher = (text) =>
+const defaultSystemCommandMatcher: SystemCommandMatcher = (text, _message) =>
   normalizeCommandFromText(text) === '/start';
 
 const isIncomingMessageCandidate = (value: unknown): value is IncomingMessage => {
@@ -558,7 +558,7 @@ export const createRouter = (options: RouterOptions) => {
         });
       }
 
-      if (!systemCommandMatcher(message.text)) {
+      if (!systemCommandMatcher(message.text, message)) {
         return undefined;
       }
 

@@ -500,7 +500,7 @@ export interface TelegramWebhookFeatures {
 export interface TelegramWebhookOptions {
   botUsername?: string;
   features?: TelegramWebhookFeatures;
-  onSystemCommand?: (command: string) => void;
+  onSystemCommand?: (command: string, userId: string) => void;
 }
 
 export interface TelegramAdminCommandHandlerResult {
@@ -571,7 +571,7 @@ const handleAdminCommand = async (
   const response = await handler(context);
 
   if (response instanceof Response) {
-    options.onSystemCommand?.(context.command);
+    options.onSystemCommand?.(context.command, context.from.userId);
     return toHandledResult(response);
   }
 
@@ -581,7 +581,7 @@ const handleAdminCommand = async (
 
   const confirmCommand = response.confirmSystemCommand === true || Boolean(response.response);
   if (confirmCommand) {
-    options.onSystemCommand?.(context.command);
+    options.onSystemCommand?.(context.command, context.from.userId);
   }
 
   if (response.response instanceof Response) {
