@@ -1,0 +1,2 @@
+2025-11-25T09:15:22.811Z [admin.export][warn] admin export rate limited { route="/admin", limiter="admin_export", status=429, requestId="req-91d7c3", chatIdHash="chat#2f8e05", fromIdHash="from#5c77b9", cooldownSeconds=60 }
+2025-11-25T09:15:22.813Z [router][admin][error] HTTP 429 { route="/admin", status=429, reason="rawRateLimit", limiter="admin_export", chatIdHash="chat#2f8e05", fromIdHash="from#5c77b9", retryAfterSeconds=60 }
