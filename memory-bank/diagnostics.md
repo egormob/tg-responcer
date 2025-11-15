@@ -1,5 +1,20 @@
 # Diagnostics Snapshot — 2025-11-16
 
+## Журнал диагностик
+
+| Дата | Шаг / майлстоун | max_retries_exceeded | ai_queue_source | ai_queue_active | ai_queue_queued | ai_queue_dropped | utm_rows | utm_sources | selftest.openAiOk | selftest.telegramOk | selftest.softMode | Ключевые наблюдения | Ссылки |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| <a id="diag-20251111"></a>2025-11-11 | М9.Ш10 soft self-test | 0 | n/a | 0 | 0 | 0 | — | — | false | true | enabled | HTTP 200 с soft-режимом self-test, OpenAI ругается на `missing_diagnostic_marker`, Telegram отвечает 200. | [лог](logs/selftest-soft-2025-11-11.md); [external check](external-checks/2025-11-11-soft-selftest.md) |
+| <a id="diag-20251116"></a>2025-11-16 | М9.Ш4.5 AI queue smoke | 0 | kv | ≤4 | ≤7 | 0 | — | — | — | — | — | Smoke Variant C: очередь берёт лимиты из KV (`maxConcurrency=4`, `maxQueue=64`), `droppedSinceBoot=0`. | [лог](logs/ai-queue-smoke-2025-11-16.md); [отчёт](../reports/REPORT-ai-throughput-20251116.md) |
+| <a id="diag-20251117"></a>2025-11-17 | М5.Ш4.4 stress-run | >0 | env-default | 0 | 0 | 0 | — | — | — | — | — | `STRESS_TEST_ENABLED=1` упирается в `max_retries_exceeded`, очередь читает дефолты, KV проигнорирован. | [лог](logs/stress-test-2025-11-17-ai-queue.md) |
+| <a id="diag-20251118"></a>2025-11-18 | М5.Ш4.4 retest | 0 | env-default | ≤1 | 0 | 0 | — | — | — | — | — | Повторный smoke: очередь стабильна (`kvConfig:null`), таймауты OpenAI дают `⚠️ → 🔁💬`, KV всё ещё не читается. | [лог](logs/stress-test-2025-11-17-ai-queue.md); [отчёт](../reports/REPORT-ai-queue-20251118.md) |
+| <a id="diag-20251119"></a>2025-11-19 | М9.Ш4.4 Variant C | 0 | kv | 0 | 0 | 0 | — | — | — | — | — | Variant C добавляет `sources.*`, повышает `requestTimeoutMs=18000`, `retryMax=3`, `getQueueStats` отдаёт происхождение параметров. | [отчёт](../reports/REPORT-ai-throughput-20251116.md) |
+| <a id="diag-20251120"></a>2025-11-20 | М5.Ш5.1 UTM запись | 0 | kv | 0 | 0 | 0 | 1 | src_TEST-CAMPAIGN | — | — | — | `/start src_TEST-CAMPAIGN` фиксирует UTM без деградации, `knownUsersCache` блокирует повторные `saveUser`. | [отчёт](../reports/REPORT-utm-tracking-20251120.md) |
+| <a id="diag-20251121"></a>2025-11-21 | М5.Ш5.2 локальный `/start` | 0 | n/a | 0 | 0 | 0 | 1 | src_TEST-CAMPAIGN | — | — | — | Приветствие выполняется локально: OpenAI не вызывается, `utm_source` не перезаписывается, fallback отсутствует. | [лог](logs/start-command-2025-11-21.md) |
+| <a id="diag-20251122"></a>2025-11-22 | М5.Ш5.3 экспорт с пагинацией | 0 | kv | ≤1 | 0 | 0 | 1849 | src_DIAG, src_TEST-GREETING, stress_test | — | — | — | `/admin/export` склеивает страницы (2 курсора), `utm_rows=1849`, лимит 5 000 контролируется уведомлением. | [лог](logs/export-pagination-2025-11-22.md); [отчёт](../reports/REPORT-limits-export-cooldown-20251123.md) |
+
+> **Как пользоваться таблицей:** каждая строка фиксирует дату, шаг/майлстоун, измеренные метрики и ссылки на артефакты. Новый диагностический отчёт сначала попадает сюда, после чего RoadMap ссылается на соответствующую запись (`memory-bank/diagnostics.md#diag-YYYYMMDD`).
+
 ## Critical system problems
 
 1. **Typing indicator delayed by storage I/O**  
