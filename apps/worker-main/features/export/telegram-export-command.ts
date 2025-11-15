@@ -105,6 +105,53 @@ interface CooldownContextDetails {
   chatId: string;
 }
 
+interface ExportCooldownEntry {
+  expiresAt: number;
+  noticeSentAt?: number;
+}
+
+const toFiniteNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const parseCooldownEntry = (value: string | null): ExportCooldownEntry | undefined => {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as { expiresAt?: unknown; noticeSentAt?: unknown };
+    const expiresAt = toFiniteNumber(parsed.expiresAt);
+    if (typeof expiresAt !== 'number') {
+      return undefined;
+    }
+
+    const entry: ExportCooldownEntry = { expiresAt };
+    const noticeSentAt = toFiniteNumber(parsed.noticeSentAt);
+    if (typeof noticeSentAt === 'number') {
+      entry.noticeSentAt = noticeSentAt;
+    }
+
+    return entry;
+  } catch (error) {
+    void error;
+    return undefined;
+  }
+};
+
+const serializeCooldownEntry = (entry: ExportCooldownEntry): string => JSON.stringify(entry);
+
+const calculateRemainingTtlSeconds = (
+  entry: ExportCooldownEntry,
+  nowMs: number,
+): number | undefined => {
+  const remainingMs = entry.expiresAt - nowMs;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return undefined;
+  }
+
+  return Math.max(1, Math.ceil(remainingMs / 1000));
+};
+
 const createCooldownStore = (options: CooldownStoreOptions) => {
   const { primary, fallback, logger } = options;
 
@@ -246,7 +293,6 @@ const buildTelegramFormData = (
 
 const EXPORT_COOLDOWN_KEY_PREFIX = 'rate-limit:';
 const EXPORT_COOLDOWN_TTL_SECONDS = 60; // Cloudflare KV требует минимум 60 секунд TTL
-const EXPORT_COOLDOWN_VALUE = '1';
 const EXPORT_COOLDOWN_NOTICE = 'Экспорт формируется, подождите 60 секунд';
 const EXPORT_COOLDOWN_RESPONSE = {
   error: EXPORT_COOLDOWN_NOTICE,
@@ -608,32 +654,66 @@ export const createTelegramExportCommandHandler = (
       const cooldownKey = `${EXPORT_COOLDOWN_KEY_PREFIX}${userId}`;
       const cooldownContext = { userId, chatId: context.chat.id };
 
-      const existing = await cooldownStore.get(cooldownKey, cooldownContext);
+      const existingValue = await cooldownStore.get(cooldownKey, cooldownContext);
 
-      if (existing !== null) {
+      if (existingValue !== null) {
         logger.warn('admin export cooldown active', {
           userId,
           chatId: context.chat.id,
         });
 
-        try {
-          await options.messaging.sendText({
-            chatId: context.chat.id,
-            threadId: context.chat.threadId,
-            text: EXPORT_COOLDOWN_NOTICE,
-          });
-        } catch (error) {
-          await logAdminMessagingError(
-            'failed to send export cooldown notice',
-            { userId, chatId: context.chat.id, threadId: context.chat.threadId },
-            error,
-            'export_cooldown_notice',
-          );
+        const cooldownEntry = parseCooldownEntry(existingValue);
+        const shouldSendNotice = !cooldownEntry || cooldownEntry.noticeSentAt === undefined;
+
+        if (shouldSendNotice) {
+          try {
+            await options.messaging.sendText({
+              chatId: context.chat.id,
+              threadId: context.chat.threadId,
+              text: EXPORT_COOLDOWN_NOTICE,
+            });
+
+            if (cooldownEntry) {
+              const noticeTimestamp = now().getTime();
+              const remainingTtlSeconds = calculateRemainingTtlSeconds(cooldownEntry, noticeTimestamp);
+              if (typeof remainingTtlSeconds === 'number') {
+                const cooldownTtlSeconds = Math.max(remainingTtlSeconds, EXPORT_COOLDOWN_TTL_SECONDS);
+                const updatedExpiresAt =
+                  cooldownTtlSeconds === remainingTtlSeconds
+                    ? cooldownEntry.expiresAt
+                    : noticeTimestamp + cooldownTtlSeconds * 1000;
+
+                await cooldownStore.put(
+                  cooldownKey,
+                  serializeCooldownEntry({
+                    ...cooldownEntry,
+                    expiresAt: updatedExpiresAt,
+                    noticeSentAt: noticeTimestamp,
+                  }),
+                  cooldownTtlSeconds,
+                  cooldownContext,
+                );
+              }
+            }
+          } catch (error) {
+            await logAdminMessagingError(
+              'failed to send export cooldown notice',
+              { userId, chatId: context.chat.id, threadId: context.chat.threadId },
+              error,
+              'export_cooldown_notice',
+            );
+          }
         }
         return json(EXPORT_COOLDOWN_RESPONSE, { status: 429 });
       }
 
-      await cooldownStore.put(cooldownKey, EXPORT_COOLDOWN_VALUE, EXPORT_COOLDOWN_TTL_SECONDS, cooldownContext);
+      const cooldownExpiresAt = now().getTime() + EXPORT_COOLDOWN_TTL_SECONDS * 1000;
+      await cooldownStore.put(
+        cooldownKey,
+        serializeCooldownEntry({ expiresAt: cooldownExpiresAt }),
+        EXPORT_COOLDOWN_TTL_SECONDS,
+        cooldownContext,
+      );
     }
 
     const abortController = new AbortController();
