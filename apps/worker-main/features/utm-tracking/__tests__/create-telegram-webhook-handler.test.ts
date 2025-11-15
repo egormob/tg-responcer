@@ -452,7 +452,7 @@ describe('createTelegramWebhookHandler', () => {
     const handleAdminCommand = vi
       .fn()
       .mockImplementation(async (context) => {
-        if (context.argument === 'supported') {
+        if (context.argument === 'status') {
           return new Response('ok');
         }
         return undefined;
@@ -467,10 +467,10 @@ describe('createTelegramWebhookHandler', () => {
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
     expect(handler.isSystemCommand('/admin unsupported', createIncomingMessage())).toBe(false);
 
-    await handler(createCommandUpdate('/admin', 'supported'));
+    await handler(createCommandUpdate('/admin', 'status'));
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(2);
-    expect(handler.isSystemCommand('/admin supported', createIncomingMessage())).toBe(true);
+    expect(handler.isSystemCommand('/admin status', createIncomingMessage())).toBe(true);
   });
 
   it('разрешает обработчику явно помечать команду без ответа', async () => {

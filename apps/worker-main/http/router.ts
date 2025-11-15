@@ -8,6 +8,12 @@ import {
 } from './telegram-webhook';
 import { applyTelegramIdLogFields } from './telegram-ids';
 import { parseTelegramUpdateBody } from './telegram-payload';
+import {
+  createSystemCommandRegistry,
+  matchSystemCommand,
+  normalizeCommand,
+  type SystemCommandRegistry,
+} from './system-commands';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
 
@@ -19,27 +25,6 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
-
-const normalizeCommandFromText = (text: string): string | undefined => {
-  if (typeof text !== 'string') {
-    return undefined;
-  }
-
-  const trimmed = text.trimStart();
-  if (!trimmed.startsWith('/')) {
-    return undefined;
-  }
-
-  const whitespaceIndex = trimmed.search(/\s/u);
-  const commandToken = whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex);
-  const normalized = commandToken.split('@')[0]?.toLowerCase();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-};
-
-export type SystemCommandMatcher = (text: string, message: IncomingMessage) => boolean;
-
-const defaultSystemCommandMatcher: SystemCommandMatcher = (text, _message) =>
-  normalizeCommandFromText(text) === '/start';
 
 const isIncomingMessageCandidate = (value: unknown): value is IncomingMessage => {
   if (!isRecord(value)) {
@@ -99,7 +84,9 @@ export type TransformPayload = (
   context?: TransformPayloadContext,
 ) => TransformPayloadResult | Promise<TransformPayloadResult>;
 
-type TransformPayloadWithCommands = TransformPayload & { isSystemCommand?: SystemCommandMatcher };
+type TransformPayloadWithCommands = TransformPayload & {
+  systemCommands?: SystemCommandRegistry;
+};
 
 const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =>
   isRecord(value) && value.kind === 'handled';
@@ -367,13 +354,14 @@ export interface RouterHandleContext {
 }
 
 export const createRouter = (options: RouterOptions) => {
+  const defaultSystemCommands = createSystemCommandRegistry();
   const defaultTransformPayload: TransformPayloadWithCommands = Object.assign(
     async (payload: unknown) => parseIncomingMessage(payload),
-    { isSystemCommand: defaultSystemCommandMatcher },
+    { systemCommands: defaultSystemCommands },
   );
 
   const transformPayload = (options.transformPayload ?? defaultTransformPayload) as TransformPayloadWithCommands;
-  const systemCommandMatcher = transformPayload.isSystemCommand ?? defaultSystemCommandMatcher;
+  const systemCommands = transformPayload.systemCommands ?? defaultSystemCommands;
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
   const handleNotFound = () => new Response('Not Found', { status: 404 });
@@ -524,7 +512,7 @@ export const createRouter = (options: RouterOptions) => {
     }
 
     const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
-      const normalizedCommand = normalizeCommandFromText(message.text);
+      const normalizedCommand = normalizeCommand(message.text);
       if (!normalizedCommand) {
         return undefined;
       }
@@ -558,7 +546,8 @@ export const createRouter = (options: RouterOptions) => {
         });
       }
 
-      if (!systemCommandMatcher(message.text, message)) {
+      const matchedCommand = matchSystemCommand(message.text, message, systemCommands);
+      if (!matchedCommand) {
         return undefined;
       }
 

@@ -11,6 +11,7 @@ import {
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
 import { createSelfTestRoute } from '../../features/admin-diagnostics/self-test-route';
 import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
+import { createSystemCommandRegistry } from '../system-commands';
 import * as telegramPayload from '../telegram-payload';
 import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
 
@@ -213,11 +214,11 @@ describe('http router', () => {
       messageId: 'm-3',
       receivedAt: new Date('2024-03-02T00:00:00.000Z'),
     };
+    const systemCommands = createSystemCommandRegistry();
+    systemCommands.register('/export', 'user-3');
     const transformPayload = Object.assign(
       vi.fn().mockResolvedValue({ kind: 'message', message: systemMessage }),
-      {
-        isSystemCommand: (text: string, _message) => text.trimStart().startsWith('/export'),
-      },
+      { systemCommands },
     );
 
     const router = createRouter({
@@ -247,6 +248,7 @@ describe('http router', () => {
     });
     const dialogEngine = { handleMessage } as unknown as DialogEngine;
     const messaging = createMessagingMock();
+    const systemCommands = createSystemCommandRegistry();
     const transformPayload = Object.assign(
       vi.fn().mockResolvedValue({
         kind: 'message',
@@ -258,9 +260,7 @@ describe('http router', () => {
           receivedAt: new Date('2024-03-02T01:00:00.000Z'),
         },
       }),
-      {
-        isSystemCommand: (text: string, _message) => text.trimStart().startsWith('/export'),
-      },
+      { systemCommands },
     );
 
     const router = createRouter({

@@ -37,6 +37,7 @@ import {
 } from './features';
 import {
   createRouter,
+  createSystemCommandRegistry,
   createTypingIndicator,
   type RouterOptions,
   type TypingIndicator,
@@ -763,6 +764,7 @@ const createTransformPayload = (
 ): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
+  const systemCommands = createSystemCommandRegistry();
 
   const csvExportHandler = env.DB
     ? createCsvExportHandler({
@@ -879,6 +881,7 @@ const createTransformPayload = (
     storage: composition.ports.storage,
     botUsername: env.TELEGRAM_BOT_USERNAME,
     features: webhookFeatures,
+    systemCommands,
   });
 
   return telegramWebhookHandler;

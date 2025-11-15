@@ -12,6 +12,7 @@ import {
   describeTelegramIdForLogs,
   toTelegramIdString,
 } from './telegram-ids';
+import { normalizeCommand } from './system-commands';
 
 export type TelegramSnapshotRoute = 'user' | 'admin' | 'safe';
 
@@ -401,7 +402,7 @@ const isCommandForThisBot = (command: string, botUsername?: string) => {
   return mention.toLowerCase() === botUsername.toLowerCase();
 };
 
-const normalizeCommand = (command: string): string => stripCommandMention(command.toLowerCase());
+const normalizeCommandToken = (command: string): string => stripCommandMention(command.toLowerCase());
 
 export interface TelegramMessageEntity {
   type: string;
@@ -858,10 +859,11 @@ export const transformTelegramUpdate = async (
     const rawCommand = incoming.text.slice(commandOffset, commandOffset + commandLength);
 
     if (rawCommand.length > 0 && isCommandForThisBot(rawCommand, options.botUsername)) {
-      const normalizedCommand = normalizeCommand(rawCommand);
+      const normalizedCommandToken = normalizeCommandToken(rawCommand);
 
       const argumentSlice = incoming.text.slice(commandOffset + commandLength);
       const argumentText = argumentSlice.trim();
+      const normalizedCommand = normalizeCommand(incoming.text) ?? normalizedCommandToken;
 
       if (normalizedCommand === '/start') {
         startPayload = parseStartPayload(argumentSlice) ?? startPayload;
