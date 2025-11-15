@@ -6,12 +6,13 @@ import {
   recordTelegramSnapshotAction,
   type TelegramSnapshotRoute,
 } from './telegram-webhook';
-import { applyTelegramIdLogFields } from './telegram-ids';
+import { applyTelegramIdLogFields, describeTelegramIdForLogs } from './telegram-ids';
 import { parseTelegramUpdateBody } from './telegram-payload';
 import {
   createSystemCommandRegistry,
   isCommandAllowedForRole,
   matchSystemCommand,
+  type SystemCommandDescriptor,
   type SystemCommandMatch,
   type SystemCommandRegistry,
   type SystemCommandRole,
@@ -566,6 +567,32 @@ export const createRouter = (options: RouterOptions) => {
         return undefined;
       }
 
+      const describedUser = describeTelegramIdForLogs(message.user.userId);
+
+      const logRoleDiagnostics = (
+        route: 'system_command_role_mismatch' | 'system_command_unauthorized',
+        commandName: string,
+        descriptor: SystemCommandDescriptor,
+        determineResult: SystemCommandRole | 'not_configured' | undefined,
+      ) => {
+        const logPayload: Record<string, unknown> = {
+          command: commandName,
+          expectedRoles: descriptor.roles,
+          determineCommandRole: determineResult ?? 'undefined',
+          systemCommandRegistered: systemCommands.isAllowed(commandName, message.user.userId),
+        };
+        if (updateId !== undefined) {
+          logPayload.updateId = updateId;
+        }
+        if (describedUser) {
+          logPayload.userIdHash = describedUser.hash;
+          logPayload.userIdLength = describedUser.length;
+        }
+
+        // eslint-disable-next-line no-console
+        console.info('[router] system command role diagnostics', { ...logPayload, route });
+      };
+
       const handleImmediateRoleMismatch = async (
         route: 'system_command_role_mismatch' | 'system_command_unauthorized',
         commandName: string,
@@ -626,6 +653,12 @@ export const createRouter = (options: RouterOptions) => {
       };
 
       if (matchResult.kind === 'role_mismatch' && typeof options.determineCommandRole !== 'function') {
+        logRoleDiagnostics(
+          'system_command_role_mismatch',
+          matchResult.command,
+          matchResult.descriptor,
+          'not_configured',
+        );
         return handleImmediateRoleMismatch('system_command_role_mismatch', matchResult.command);
       }
 
@@ -652,6 +685,12 @@ export const createRouter = (options: RouterOptions) => {
         const role = await resolveCommandRole(matchedCommand);
         if (!role || !isCommandAllowedForRole(matchedCommand.descriptor, role)) {
           if (isCommandAllowedForRole(matchedCommand.descriptor, 'scoped')) {
+            logRoleDiagnostics(
+              'system_command_unauthorized',
+              matchedCommand.command,
+              matchedCommand.descriptor,
+              role,
+            );
             return handleImmediateRoleMismatch('system_command_unauthorized', matchedCommand.command);
           }
 

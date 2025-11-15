@@ -5,10 +5,12 @@ import type {
   AdminExportLogKvNamespace,
   AdminExportRateLimitKvNamespace,
 } from '../telegram-export-command';
+import type { ExportRateTelemetry } from '../export-rate-telemetry';
 import { createAdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
 import type { AdminCommandErrorRecorder } from '../../admin-access/admin-messaging-errors';
 import type { MessagingPort } from '../../../ports';
 import type { TelegramAdminCommandContext } from '../../../http';
+import { describeTelegramIdForLogs } from '../../../http/telegram-ids';
 
 const createContext = ({
   command = '/admin',
@@ -109,6 +111,7 @@ describe('createTelegramExportCommandHandler', () => {
       sendTextMock?: ReturnType<typeof vi.fn>;
       logger?: { info?: ReturnType<typeof vi.fn>; warn?: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> };
       adminErrorRecorder?: AdminCommandErrorRecorder;
+      telemetry?: ExportRateTelemetry;
     },
   ) => {
     const now = options?.now ?? (() => new Date('2024-02-01T00:00:00Z'));
@@ -154,6 +157,7 @@ describe('createTelegramExportCommandHandler', () => {
       exportLogKv: options?.exportLogKv,
       logger: options?.logger,
       adminErrorRecorder,
+      telemetry: options?.telemetry,
     });
 
     return { handler, handleExport, adminAccess, rateLimit, sendTextMock, logger: options?.logger };
@@ -467,6 +471,44 @@ describe('createTelegramExportCommandHandler', () => {
     expect(response?.status).toBe(429);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(handleExport).not.toHaveBeenCalled();
+  });
+
+  it('records telemetry when rate limit fires', async () => {
+    const telemetryRecordResult = {
+      decision: 'limit' as const,
+      bucket: 42,
+      limit: 5,
+      remaining: 0,
+      windowMs: 60_000,
+      timestamp: new Date('2024-01-01T00:00:30Z'),
+      userIdHash: 'hash-42',
+    };
+    const telemetry: ExportRateTelemetry = {
+      record: vi.fn().mockReturnValue(telemetryRecordResult),
+      snapshot: vi.fn(),
+    };
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const { handler, rateLimit } = createHandler({ telemetry, logger });
+    rateLimit.checkAndIncrement.mockResolvedValue<'ok' | 'limit'>('limit');
+
+    const response = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
+
+    expect(response?.status).toBe(429);
+    expect(telemetry.record).toHaveBeenCalledWith({
+      decision: 'limit',
+      userIdHash: describeTelegramIdForLogs('42')?.hash,
+      timestamp: expect.any(Date),
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'admin export rate limited',
+      expect.objectContaining({
+        userIdHash: describeTelegramIdForLogs('42')?.hash,
+        bucket: telemetryRecordResult.bucket,
+        limit: telemetryRecordResult.limit,
+        remaining: telemetryRecordResult.remaining,
+        windowMs: telemetryRecordResult.windowMs,
+      }),
+    );
   });
 
   it('propagates errors from export handler', async () => {

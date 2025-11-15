@@ -1,5 +1,6 @@
 import { json } from '../../shared';
 import type { TelegramAdminCommandContext } from '../../http';
+import { describeTelegramIdForLogs } from '../../http/telegram-ids';
 import type { MessagingPort, RateLimitPort } from '../../ports';
 import type { AdminAccess, AdminAccessKvNamespace } from '../admin-access';
 import {
@@ -8,6 +9,7 @@ import {
   shouldInvalidateAdminAccess,
 } from '../admin-access/admin-messaging-errors';
 import type { AdminExportRequest } from './admin-export-route';
+import type { ExportRateTelemetry } from './export-rate-telemetry';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -34,6 +36,7 @@ export interface CreateTelegramExportCommandHandlerOptions {
   logger?: Logger;
   now?: () => Date;
   adminErrorRecorder?: AdminCommandErrorRecorder;
+  telemetry?: ExportRateTelemetry;
 }
 
 interface ExportArguments {
@@ -648,6 +651,7 @@ export const createTelegramExportCommandHandler = (
 
     const { from, to } = args;
     const userId = context.from.userId;
+    const userIdDescription = describeTelegramIdForLogs(userId);
 
     const isAdmin = await options.adminAccess.isAdmin(userId);
     if (!isAdmin) {
@@ -664,8 +668,22 @@ export const createTelegramExportCommandHandler = (
       },
     });
 
+    const rateLimitTelemetry = options.telemetry?.record({
+      decision: rateLimitResult,
+      userIdHash: userIdDescription?.hash,
+      timestamp: now(),
+    });
+
     if (rateLimitResult === 'limit') {
-      logger.warn('admin export rate limited', { userId, chatId: context.chat.id });
+      logger.warn('admin export rate limited', {
+        userId,
+        chatId: context.chat.id,
+        userIdHash: userIdDescription?.hash,
+        bucket: rateLimitTelemetry?.bucket,
+        limit: rateLimitTelemetry?.limit,
+        remaining: rateLimitTelemetry?.remaining,
+        windowMs: rateLimitTelemetry?.windowMs,
+      });
       return json({ error: 'Too many export requests' }, { status: 429 });
     }
 

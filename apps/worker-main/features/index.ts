@@ -33,6 +33,8 @@ export {
   createAdminExportRoute,
   createCsvExportHandler,
   createTelegramExportCommandHandler,
+  createExportRateDiagRoute,
+  createExportRateTelemetry,
 } from './export';
 export type {
   CreateAdminExportRouteOptions,
@@ -40,6 +42,8 @@ export type {
   CsvExportHandlerOptions,
   AdminExportRateLimitKvNamespace,
   CreateTelegramExportCommandHandlerOptions,
+  CreateExportRateDiagRouteOptions,
+  ExportRateTelemetry,
 } from './export';
 export {
   createAdminBroadcastRoute,

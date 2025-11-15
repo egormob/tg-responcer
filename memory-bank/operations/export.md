@@ -48,6 +48,10 @@
 
 > **Важно:** флаг `LIMITS_ENABLED` не влияет на `rawRateLimit`. Всегда проверяйте, что TTL в `AI_CONTROL_KV` и `RATE_LIMIT_KV` ≥ 60 секунд, чтобы избежать регрессии к историческому значению 30 секунд.
 
+## Диагностика лимитера `/export`
+- Tail лог `[admin export rate limited]` теперь содержит `userIdHash`, `bucket`, `limit`, `remaining` и `windowMs`, поэтому по одному сообщению видно, сколько попыток сделал администратор в текущем окне и насколько оно близко к лимиту.【F:apps/worker-main/features/export/telegram-export-command.ts†L651-L689】
+- Диагностический снимок `/admin/diag?q=export-rate` возвращает `limit/windowMs`, накопленные `totals` и массив `buckets[]` с `ok/limit`, временем первого/последнего запроса и `lastUserIdHash`. Блок `lastLimit` дублирует последний `429` с ISO-временем и расчётом `remaining`, поэтому можно сопоставить tail и HTTP-диагностику без ручного подсчёта ключей в KV.【F:apps/worker-main/features/export/export-rate-diag-route.ts†L1-L19】【F:apps/worker-main/features/export/export-rate-telemetry.ts†L1-L154】
+
 ## Проверка записи UTM при регистрации
 1. Отправь из тестового аккаунта `/start src_TEST-CAMPAIGN` и зафиксируй `chat_id` из ответа Telegram. После обработки воркер должен залогировать `[utm-tracking] saveUser result` с `utmSource:"src_TEST-CAMPAIGN"` без ошибок `utmDegraded`.
 2. Убедись, что значение попало в D1: `wrangler d1 execute $DB --command "SELECT utm_source FROM users WHERE user_id='<chat_id>'"` должно вернуть `src_TEST-CAMPAIGN`.
