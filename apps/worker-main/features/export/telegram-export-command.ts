@@ -461,6 +461,20 @@ const parseUtmSourcesHeader = (value: string | null): string[] | undefined => {
   }
 };
 
+const normalizeCommandToken = (command?: string): string | undefined => {
+  if (typeof command !== 'string') {
+    return undefined;
+  }
+
+  const whitespaceIndex = command.search(/\s/u);
+  const token = whitespaceIndex === -1 ? command : command.slice(0, whitespaceIndex);
+  const mentionIndex = token.indexOf('@');
+  const bareCommand = mentionIndex === -1 ? token : token.slice(0, mentionIndex);
+  const normalized = bareCommand.trim().toLowerCase();
+
+  return normalized.length > 0 ? normalized : undefined;
+};
+
 export const createTelegramExportCommandHandler = (
   options: CreateTelegramExportCommandHandlerOptions,
 ) => {
@@ -511,10 +525,15 @@ export const createTelegramExportCommandHandler = (
   };
 
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
-    const command = context.command.toLowerCase();
+    const commandToken =
+      normalizeCommandToken(context.rawCommand) ?? normalizeCommandToken(context.command);
     const trimmedArgument = context.argument?.trim();
 
-    if (command === '/admin' && (!trimmedArgument || trimmedArgument.length === 0)) {
+    if (!commandToken) {
+      return undefined;
+    }
+
+    if (commandToken === '/admin' && (!trimmedArgument || trimmedArgument.length === 0)) {
       const userId = context.from.userId;
       const isAdmin = await options.adminAccess.isAdmin(userId);
 
@@ -552,7 +571,7 @@ export const createTelegramExportCommandHandler = (
       return json({ help: 'sent' }, { status: 200 });
     }
 
-    if (command === '/admin' && trimmedArgument?.toLowerCase() === 'status') {
+    if (commandToken === '/admin' && trimmedArgument?.toLowerCase() === 'status') {
       const userId = context.from.userId;
       const isAdmin = await options.adminAccess.isAdmin(userId);
       const statusText = isAdmin ? 'admin-ok' : 'forbidden';
@@ -597,9 +616,9 @@ export const createTelegramExportCommandHandler = (
 
     let rangeArgument: string | undefined;
 
-    if (command === '/export') {
+    if (commandToken === '/export') {
       rangeArgument = trimmedArgument;
-    } else if (command === '/admin') {
+    } else if (commandToken === '/admin') {
       if (!trimmedArgument) {
         return undefined;
       }

@@ -13,19 +13,24 @@ import type { TelegramAdminCommandContext } from '../../../http';
 const createContext = ({
   command = '/admin',
   argument,
+  rawCommand,
+  text,
 }: {
-  command?: '/admin' | '/export';
+  command?: '/admin' | '/export' | '/admin status';
   argument?: string;
+  rawCommand?: string;
+  text?: string;
 } = {}): TelegramAdminCommandContext => {
   const trimmedArgument = argument?.trim();
   const contextArgument = trimmedArgument && trimmedArgument.length > 0 ? trimmedArgument : undefined;
-  const text = [command, contextArgument].filter(Boolean).join(' ').trim();
+  const messageText =
+    text ?? [rawCommand ?? command, contextArgument].filter(Boolean).join(' ').trim();
 
   return {
     command,
-    rawCommand: command,
+    rawCommand: rawCommand ?? command,
     argument: contextArgument,
-    text,
+    text: messageText,
     chat: { id: '123', threadId: '456', type: 'supergroup' },
     from: { userId: '42' },
     messageId: '789',
@@ -627,6 +632,30 @@ describe('createTelegramExportCommandHandler', () => {
     adminAccess.isAdmin.mockResolvedValueOnce(true);
 
     const response = await handler(createContext({ command: '/admin', argument: 'status' }));
+
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ status: 'admin-ok' });
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: '123',
+      threadId: '456',
+      text: 'admin-ok',
+    });
+  });
+
+  it('handles normalized admin status command emitted as /admin status', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, adminAccess } = createHandler({ sendTextMock });
+
+    adminAccess.isAdmin.mockResolvedValueOnce(true);
+
+    const response = await handler(
+      createContext({
+        command: '/admin status',
+        rawCommand: '/admin',
+        argument: 'status',
+        text: '/admin status',
+      }),
+    );
 
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'admin-ok' });
