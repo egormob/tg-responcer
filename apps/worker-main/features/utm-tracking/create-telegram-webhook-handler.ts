@@ -1,5 +1,12 @@
 import { transformTelegramUpdate, type TelegramWebhookOptions } from '../../http/telegram-webhook';
 import { applyTelegramIdLogFields } from '../../http/telegram-ids';
+import type { IncomingMessage } from '../../core';
+import {
+  createSystemCommandRegistry,
+  matchSystemCommand,
+  normalizeCommand,
+  type SystemCommandRegistry,
+} from '../../http/system-commands';
 import type {
   HandledWebhookResult,
   MessageWebhookResult,
@@ -7,7 +14,6 @@ import type {
   TransformPayloadContext,
   TransformPayloadResult,
 } from '../../http/router';
-import type { SystemCommandMatcher } from '../../http/router';
 import type { StoragePort } from '../../ports';
 import {
   createKnownUsersCache,
@@ -82,6 +88,7 @@ const safePayloadSnapshot = (payload: unknown) => {
 export interface CreateTelegramWebhookHandlerOptions extends TelegramWebhookOptions {
   storage: StoragePort;
   now?: () => Date;
+  systemCommands?: SystemCommandRegistry;
 }
 
 const isMessageResult = (value: TransformPayloadResult): value is MessageWebhookResult =>
@@ -99,68 +106,34 @@ const handledResult = (response?: Response): HandledWebhookResult => ({
 
 export type TelegramWebhookHandler = TransformPayload & {
   knownUsers: KnownUsersCache;
-  isSystemCommand: SystemCommandMatcher;
+  isSystemCommand: (text: string, message: IncomingMessage) => boolean;
+  systemCommands: SystemCommandRegistry;
 };
 
 export const createTelegramWebhookHandler = (
   options: CreateTelegramWebhookHandlerOptions,
 ): TelegramWebhookHandler => {
-  const { storage, now = () => new Date(), ...transformOptions } = options;
+  const {
+    storage,
+    now = () => new Date(),
+    systemCommands = createSystemCommandRegistry(),
+    ...transformOptions
+  } = options;
   // Кэш хранит только канонические строковые идентификаторы Telegram — никаких
   // принудительных преобразований типов, чтобы не потерять leading zeros и т.п.
   const knownUsersCache = createKnownUsersCache();
-  const globalSystemCommands = new Set<string>(['/start']);
-  const scopedSystemCommands = new Map<string, Set<string>>();
 
   const registerSystemCommand = (command: string, userId: string) => {
-    const normalized = command.startsWith('/') ? command : undefined;
+    const normalized = normalizeCommand(command);
     if (!normalized) {
       return;
     }
 
-    const existing = scopedSystemCommands.get(normalized);
-    if (existing) {
-      existing.add(userId);
-      return;
-    }
-
-    scopedSystemCommands.set(normalized, new Set([userId]));
+    systemCommands.register(normalized, userId);
   };
 
-  const normalizeCommandFromText = (text: string): string | undefined => {
-    if (typeof text !== 'string') {
-      return undefined;
-    }
-
-    const trimmed = text.trimStart();
-    if (!trimmed.startsWith('/')) {
-      return undefined;
-    }
-
-    const whitespaceIndex = trimmed.search(/\s/u);
-    const token = whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex);
-    const normalized = token.split('@')[0]?.toLowerCase();
-    return normalized && normalized.length > 0 ? normalized : undefined;
-  };
-
-  const isSystemCommand: SystemCommandMatcher = (text, message) => {
-    const normalized = normalizeCommandFromText(text);
-    if (!normalized) {
-      return false;
-    }
-
-    if (globalSystemCommands.has(normalized)) {
-      return true;
-    }
-
-    const userId = message.user.userId;
-    if (typeof userId !== 'string') {
-      return false;
-    }
-
-    const allowedUsers = scopedSystemCommands.get(normalized);
-    return allowedUsers?.has(userId) ?? false;
-  };
+  const isSystemCommand = (text: string, message: IncomingMessage) =>
+    Boolean(matchSystemCommand(text, message, systemCommands));
 
   const forgetUser = (userId: unknown) => {
     if (typeof userId === 'string') {
@@ -278,5 +251,9 @@ export const createTelegramWebhookHandler = (
     return result;
   };
 
-  return Object.assign(handler, { knownUsers: knownUsersCache, isSystemCommand });
+  return Object.assign(handler, {
+    knownUsers: knownUsersCache,
+    isSystemCommand,
+    systemCommands,
+  });
 };

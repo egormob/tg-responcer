@@ -17,6 +17,18 @@ export {
   type TypingIndicatorRun,
 } from './typing-indicator';
 export {
+  createSystemCommandRegistry,
+  matchSystemCommand,
+  normalizeCommand,
+  isCommandAllowedForRole,
+  type SystemCommandDescriptor,
+  type SystemCommandHandler,
+  type SystemCommandHandlerContext,
+  type SystemCommandMatch,
+  type SystemCommandRegistry,
+  type SystemCommandRole,
+} from './system-commands';
+export {
   transformTelegramUpdate,
   type TelegramAdminCommandContext,
   type TelegramCommandUser,
