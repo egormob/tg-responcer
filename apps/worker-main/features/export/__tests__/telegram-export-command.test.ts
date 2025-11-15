@@ -495,10 +495,12 @@ describe('createTelegramExportCommandHandler', () => {
 
     const firstResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
     expect(firstResponse?.status).toBe(200);
-    expect(cooldownKv.store.get('rate-limit:42')).toEqual({
-      value: '1',
-      expirationTtl: 60,
-    });
+    const initialCooldownEntry = cooldownKv.store.get('rate-limit:42');
+    expect(initialCooldownEntry?.expirationTtl).toBe(60);
+    expect(initialCooldownEntry).not.toBeUndefined();
+    const parsedInitialEntry = initialCooldownEntry ? JSON.parse(initialCooldownEntry.value) : null;
+    expect(parsedInitialEntry).toMatchObject({ expiresAt: expect.any(Number) });
+    expect(parsedInitialEntry?.noticeSentAt).toBeUndefined();
 
     fetchMock.mockClear();
     handleExport.mockClear();
@@ -517,6 +519,16 @@ describe('createTelegramExportCommandHandler', () => {
     });
     expect(handleExport).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+
+    const updatedCooldownEntry = cooldownKv.store.get('rate-limit:42');
+    expect(updatedCooldownEntry?.expirationTtl).toBe(60);
+    const parsedUpdatedEntry = updatedCooldownEntry ? JSON.parse(updatedCooldownEntry.value) : null;
+    expect(parsedUpdatedEntry?.noticeSentAt).toBeDefined();
+
+    sendTextMock.mockClear();
+    const thirdResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
+    expect(thirdResponse?.status).toBe(429);
+    expect(sendTextMock).not.toHaveBeenCalled();
   });
 
   it('stores cooldown in fallback namespace when primary kv fails', async () => {
@@ -559,10 +571,10 @@ describe('createTelegramExportCommandHandler', () => {
     expect(
       logger.warn.mock.calls.filter(([message]) => message === 'failed to update admin export cooldown kv'),
     ).toHaveLength(0);
-    expect(fallbackKv.store.get('rate-limit:42')).toEqual({
-      value: '1',
-      expirationTtl: 60,
-    });
+    const fallbackEntry = fallbackKv.store.get('rate-limit:42');
+    expect(fallbackEntry?.expirationTtl).toBe(60);
+    const parsedFallbackEntry = fallbackEntry ? JSON.parse(fallbackEntry.value) : null;
+    expect(parsedFallbackEntry).toMatchObject({ expiresAt: expect.any(Number) });
 
     const secondResponse = await handler(createContext({ command: '/export' }));
     expect(secondResponse?.status).toBe(429);

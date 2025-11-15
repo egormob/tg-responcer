@@ -62,6 +62,12 @@
     *Impact:* Администраторы могут «повесить» прод, не имея диагностики (нет `queueWaitMs`, `requestId`, `endpointId` в логах `ai_fallback`).
     *Status:* Mitigated — 2025-11-25 ошибки `AI_QUEUE_TIMEOUT` теперь несут `queueDetails` (attempt, phase, queueWaitMs, endpoint, snapshot лимитера), а ядро логирует `[dialog-engine][ai_fallback]` с этой структурой. Следующий шаг — зафиксировать сценарий «двойной /export + пользователь» с новыми логами.
 
+11. **Повторные уведомления кулдауна `/export` глушат ответы админам**
+    *Scope:* `apps/worker-main/features/export/telegram-export-command.ts` (кулдаун и рассылка уведомлений).
+    *Symptoms:* После серии повторных `/export` (<60 с) администратор получал 6–7 сообщений «Экспорт формируется…», после чего Telegram начинал отвечать 429 и чат полностью «немел» (нет typing, AI-ответов и системных сообщений), хотя пользовательский чат работал.
+    *Impact:* Любой администратор мог локально заблокировать канал поддержки, а диагностика tail-файла не фиксировала причину, потому что sendText падал уже на стороне Telegram.
+    *Status:* Resolved — 2025-11-26 кулдаун хранит `expiresAt/noticeSentAt` и отправляет предупреждение только при первой повторной попытке (без продления TTL). Тест `createTelegramExportCommandHandler › prevents repeated export requests within cooldown window` проверяет, что третья попытка в кулдауне возвращает 429 без дополнительного sendText.
+
 ## Observed signals & references
 
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
