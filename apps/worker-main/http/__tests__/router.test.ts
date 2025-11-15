@@ -377,12 +377,59 @@ describe('http router', () => {
     expect(systemCommands.isAllowed('/admin status', 'admin-auto')).toBe(true);
   });
 
-  it('sends unauthorized hint when scoped command loses role', async () => {
+  it('registers scoped system commands once and skips redundant role checks', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'admin-ok-5' });
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const systemCommands = createSystemCommandRegistry();
+    const determineCommandRole = vi.fn().mockResolvedValue('scoped' as const);
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-once' },
+          chat: { id: 'chat-once' },
+          text: '/admin status',
+          messageId: 'm-250',
+          receivedAt: new Date('2024-05-04T00:00:00.000Z'),
+        },
+      }),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole,
+    });
+
+    const request = () =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+    const firstResponse = await router.handle(request());
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toEqual({ status: 'ok', messageId: 'admin-ok-5' });
+    expect(determineCommandRole).toHaveBeenCalledTimes(1);
+    expect(systemCommands.isAllowed('/admin status', 'admin-once')).toBe(true);
+
+    const secondResponse = await router.handle(request());
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toEqual({ status: 'ok', messageId: 'admin-ok-5' });
+    expect(determineCommandRole).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends unauthorized hint when scoped command lacks role access', async () => {
     const sendText = vi.fn().mockResolvedValue({ messageId: 'denied-1' });
     const messaging = createMessagingMock({ sendText });
     const dialogEngine = createDialogEngineMock();
     const systemCommands = createSystemCommandRegistry();
-    systemCommands.register('/admin status', 'admin-2');
     const transformPayload = Object.assign(
       vi.fn().mockResolvedValue({
         kind: 'message',
