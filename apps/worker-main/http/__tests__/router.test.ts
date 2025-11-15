@@ -370,8 +370,7 @@ describe('http router', () => {
 
     expect(sendText).toHaveBeenCalledTimes(1);
     const unauthorizedText = sendText.mock.calls[0]?.[0]?.text;
-    expect(unauthorizedText).toContain('Ой… 🧐 …');
-    expect(unauthorizedText).toContain('администратор');
+    expect(unauthorizedText).toBe('Эта команда доступна только администратору');
     expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
@@ -424,7 +423,7 @@ describe('http router', () => {
     await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
   });
 
-  it('routes неадмин /admin команды в диалог', async () => {
+  it('sends short denial for non-admin /admin commands', async () => {
     const handleMessage = vi.fn().mockResolvedValue({
       status: 'replied',
       response: { text: 'ok', messageId: 'adm-1' },
@@ -465,10 +464,53 @@ describe('http router', () => {
     );
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/admin status');
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId: 'chat-5', threadId: undefined });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-5',
+      threadId: undefined,
+      text: 'Эта команда доступна только администратору',
+    });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'adm-1' });
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
+  });
+
+  it('sends typing and denial for /export when user is not admin', async () => {
+    const handleMessage = vi.fn();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const messaging = createMessagingMock();
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+    });
+
+    const payload = {
+      user: { userId: 'user-10' },
+      chat: { id: 'chat-export' },
+      text: '/export 2024-01-01',
+      messageId: 'exp-1',
+      receivedAt: '2024-05-01T00:00:00.000Z',
+    };
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+    );
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId: 'chat-export', threadId: undefined });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-export',
+      threadId: undefined,
+      text: 'Эта команда доступна только администратору',
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
   });
 
   it('routes неподдерживаемые команды в диалог', async () => {
@@ -514,10 +556,15 @@ describe('http router', () => {
     );
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/admin unsupported');
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId: 'chat-6', threadId: undefined });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-6',
+      threadId: undefined,
+      text: 'Эта команда доступна только администратору',
+    });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'cmd-2' });
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
   });
 
   it('sends unconfirmed admin commands from other users into dialog after admin success', async () => {
@@ -586,10 +633,15 @@ describe('http router', () => {
     );
 
     expect(outsiderResponse.status).toBe(200);
-    await expect(outsiderResponse.json()).resolves.toEqual({ status: 'ok', messageId: 'cmd-3' });
+    await expect(outsiderResponse.json()).resolves.toEqual({ status: 'ok', messageId: null });
     expect(handleAdminCommand).toHaveBeenCalledTimes(2);
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(handleMessage.mock.calls[0]?.[0]?.user.userId).toBe('user-7');
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendTyping).toHaveBeenCalledWith({ chatId: 'chat-7', threadId: undefined });
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-7',
+      threadId: undefined,
+      text: 'Эта команда доступна только администратору',
+    });
   });
 
   it('sends fallback message when dialog engine signals rate limit without notifier', async () => {

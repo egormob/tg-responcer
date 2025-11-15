@@ -568,7 +568,7 @@ describe('transformTelegramUpdate', () => {
     );
   });
 
-  it('returns forbidden for /export when user is not admin', async () => {
+  it('falls back to dialog message for /export when user is not admin', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
       throw new Error('message is required for test');
@@ -603,10 +603,15 @@ describe('transformTelegramUpdate', () => {
       },
     });
 
-    expect(result.kind).toBe('handled');
-    expect(result.response?.status).toBe(403);
+    expect(result.kind).toBe('message');
+    if (result.kind !== 'message') {
+      throw new Error('Expected message result');
+    }
+
+    expect(result.message.text).toBe('/export 2024-01-01');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(handleExport).not.toHaveBeenCalled();
+    expect(messaging.sendText).not.toHaveBeenCalled();
   });
 
   it('throws when incoming identifiers are unsafe integers', async () => {

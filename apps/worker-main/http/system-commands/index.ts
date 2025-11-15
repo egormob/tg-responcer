@@ -31,6 +31,19 @@ export interface SystemCommandMatch {
   descriptor: SystemCommandDescriptor;
 }
 
+export interface SystemCommandRoleMismatch {
+  kind: 'role_mismatch';
+  command: string;
+  descriptor: SystemCommandDescriptor;
+}
+
+export interface SystemCommandMatchSuccess {
+  kind: 'match';
+  match: SystemCommandMatch;
+}
+
+export type SystemCommandMatchResult = SystemCommandMatchSuccess | SystemCommandRoleMismatch;
+
 const stripCommandMention = (command: string): string => {
   const atIndex = command.indexOf('@');
   return atIndex === -1 ? command : command.slice(0, atIndex);
@@ -223,7 +236,7 @@ export const matchSystemCommand = (
   text: string,
   message: IncomingMessage,
   registry: SystemCommandRegistry,
-): SystemCommandMatch | undefined => {
+): SystemCommandMatchResult | undefined => {
   const normalized = normalizeCommand(text);
   if (!normalized) {
     return undefined;
@@ -236,8 +249,12 @@ export const matchSystemCommand = (
 
   const userId = typeof message.user.userId === 'string' ? message.user.userId : undefined;
   if (!registry.isAllowed(normalized, userId)) {
+    if (isCommandAllowedForRole(descriptor, 'scoped')) {
+      return { kind: 'role_mismatch', command: normalized, descriptor };
+    }
+
     return undefined;
   }
 
-  return { command: normalized, descriptor };
+  return { kind: 'match', match: { command: normalized, descriptor } };
 };

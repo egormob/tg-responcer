@@ -58,7 +58,17 @@ describe('system-commands matchSystemCommand', () => {
       user: { userId: '7' },
     };
 
-    expect(matchSystemCommand('/admin status', incoming, registry)?.command).toBe('/admin status');
-    expect(matchSystemCommand('/admin status', outsider, registry)).toBeUndefined();
+    const allowed = matchSystemCommand('/admin status', incoming, registry);
+    expect(allowed?.kind).toBe('match');
+    expect(allowed && allowed.kind === 'match' ? allowed.match.command : undefined).toBe(
+      '/admin status',
+    );
+
+    const mismatch = matchSystemCommand('/admin status', outsider, registry);
+    expect(mismatch).toEqual({
+      kind: 'role_mismatch',
+      command: '/admin status',
+      descriptor: findDescriptor('/admin status'),
+    });
   });
 });

@@ -26,6 +26,8 @@ export {
   type SystemCommandHandler,
   type SystemCommandHandlerContext,
   type SystemCommandMatch,
+  type SystemCommandMatchResult,
+  type SystemCommandRoleMismatch,
   type SystemCommandRegistry,
   type SystemCommandRole,
 } from './system-commands';
