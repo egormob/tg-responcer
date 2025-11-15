@@ -284,6 +284,146 @@ describe('http router', () => {
     expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('/fff unknown');
   });
 
+  it('handles /admin status locally when scoped role is confirmed', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'admin-ok-1' });
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const systemCommands = createSystemCommandRegistry();
+    systemCommands.register('/admin status', 'admin-1');
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-1', firstName: 'Ирина' },
+          chat: { id: 'chat-admin' },
+          text: '/admin status',
+          messageId: 'm-100',
+          receivedAt: new Date('2024-05-01T00:00:00.000Z'),
+        },
+      }),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(sendText).toHaveBeenCalledWith({
+      chatId: 'chat-admin',
+      threadId: undefined,
+      text: 'admin-ok',
+    });
+    expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'admin-ok-1' });
+  });
+
+  it('sends unauthorized hint when scoped command loses role', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'denied-1' });
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const systemCommands = createSystemCommandRegistry();
+    systemCommands.register('/admin status', 'admin-2');
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-2' },
+          chat: { id: 'chat-denied' },
+          text: '/admin status',
+          messageId: 'm-200',
+          receivedAt: new Date('2024-05-02T00:00:00.000Z'),
+        },
+      }),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => undefined,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    const unauthorizedText = sendText.mock.calls[0]?.[0]?.text;
+    expect(unauthorizedText).toContain('Ой… 🧐 …');
+    expect(unauthorizedText).toContain('администратор');
+    expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
+  });
+
+  it('returns admin usage hints for bare /admin command', async () => {
+    const sendText = vi.fn().mockResolvedValue({});
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const systemCommands = createSystemCommandRegistry();
+    systemCommands.register('/admin', 'admin-3');
+    const transformPayload = Object.assign(
+      vi.fn().mockResolvedValue({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-3' },
+          chat: { id: 'chat-admin-3' },
+          text: '/admin',
+          messageId: 'm-300',
+          receivedAt: new Date('2024-05-03T00:00:00.000Z'),
+        },
+      }),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    const hintText = sendText.mock.calls[0]?.[0]?.text;
+    expect(hintText).toContain('Ой… 🧐 …');
+    expect(hintText).toContain('Примеры');
+    expect(hintText).toContain('/admin status');
+    expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
+  });
+
   it('routes неадмин /admin команды в диалог', async () => {
     const handleMessage = vi.fn().mockResolvedValue({
       status: 'replied',

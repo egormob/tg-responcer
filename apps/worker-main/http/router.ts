@@ -10,12 +10,48 @@ import { applyTelegramIdLogFields } from './telegram-ids';
 import { parseTelegramUpdateBody } from './telegram-payload';
 import {
   createSystemCommandRegistry,
+  isCommandAllowedForRole,
   matchSystemCommand,
-  normalizeCommand,
+  type SystemCommandMatch,
   type SystemCommandRegistry,
+  type SystemCommandRole,
 } from './system-commands';
+import {
+  createAdminCommandInvalidUsageHandler,
+  createAdminStatusCommandHandler,
+  createStartCommandHandler,
+  type RouterCommandHandler,
+} from './system-command-handlers';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
+
+const USER_ERROR_TEXT = 'Ой… 🧐 …';
+const ADMIN_UNAUTHORIZED_TEXT = `${USER_ERROR_TEXT}\nКоманда доступна только администраторам.`;
+const ADMIN_COMMAND_EXAMPLES: readonly string[] = [
+  '/admin status — проверить доступ администратора',
+  '/admin export 2024-05-01 2024-05-07 — выгрузить историю диалогов',
+  '/broadcast Привет — отправить мгновенную рассылку',
+];
+
+const formatAdminUsageMessage = (examples?: readonly string[]): string => {
+  if (!examples || examples.length === 0) {
+    return USER_ERROR_TEXT;
+  }
+
+  const lines = [USER_ERROR_TEXT, 'Примеры админ-команд:'];
+  for (const example of examples) {
+    lines.push(`• ${example}`);
+  }
+
+  return lines.join('\n');
+};
+
+const createDefaultSystemCommandHandlers = (): Map<string, RouterCommandHandler> =>
+  new Map([
+    ['/start', createStartCommandHandler()],
+    ['/admin status', createAdminStatusCommandHandler()],
+    ['/admin', createAdminCommandInvalidUsageHandler(ADMIN_COMMAND_EXAMPLES)],
+  ]);
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -87,6 +123,15 @@ export type TransformPayload = (
 type TransformPayloadWithCommands = TransformPayload & {
   systemCommands?: SystemCommandRegistry;
 };
+
+export interface DetermineCommandRoleContext {
+  match: SystemCommandMatch;
+  message: IncomingMessage;
+}
+
+export type DetermineSystemCommandRole = (
+  context: DetermineCommandRoleContext,
+) => Promise<SystemCommandRole | undefined> | SystemCommandRole | undefined;
 
 const isHandledWebhookResult = (value: unknown): value is HandledWebhookResult =>
   isRecord(value) && value.kind === 'handled';
@@ -312,6 +357,8 @@ export interface RouterOptions {
   messaging: MessagingPort;
   webhookSecret?: string;
   transformPayload?: TransformPayload;
+  systemCommands?: SystemCommandRegistry;
+  determineCommandRole?: DetermineSystemCommandRole;
   typingIndicator?: TypingIndicator;
   rateLimitNotifier?: {
     notify(input: {
@@ -355,13 +402,15 @@ export interface RouterHandleContext {
 
 export const createRouter = (options: RouterOptions) => {
   const defaultSystemCommands = createSystemCommandRegistry();
+  const systemCommandHandlers = createDefaultSystemCommandHandlers();
   const defaultTransformPayload: TransformPayloadWithCommands = Object.assign(
     async (payload: unknown) => parseIncomingMessage(payload),
     { systemCommands: defaultSystemCommands },
   );
 
   const transformPayload = (options.transformPayload ?? defaultTransformPayload) as TransformPayloadWithCommands;
-  const systemCommands = transformPayload.systemCommands ?? defaultSystemCommands;
+  const systemCommands =
+    options.systemCommands ?? transformPayload.systemCommands ?? defaultSystemCommands;
 
   const handleHealthz = () => jsonResponse({ status: 'ok' });
   const handleNotFound = () => new Response('Not Found', { status: 404 });
@@ -512,43 +561,99 @@ export const createRouter = (options: RouterOptions) => {
     }
 
     const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
-      const normalizedCommand = normalizeCommand(message.text);
-      if (!normalizedCommand) {
+      const matchedCommand = matchSystemCommand(message.text, message, systemCommands);
+      if (!matchedCommand) {
         return undefined;
       }
 
-      if (normalizedCommand === '/start') {
-        const firstName = message.user.firstName?.trim();
-        const greetingText = firstName && firstName.length > 0 ? `Привет, ${firstName}!` : 'Привет!';
+      const resolveCommandRole = async (): Promise<SystemCommandRole | undefined> => {
+        if (isCommandAllowedForRole(matchedCommand.descriptor, 'global')) {
+          return 'global';
+        }
 
-        const greetingLogDetails = messageLogDetails
-          ? { ...messageLogDetails, route: 'system_start' }
+        if (typeof options.determineCommandRole === 'function') {
+          return options.determineCommandRole({ match: matchedCommand, message });
+        }
+
+        return undefined;
+      };
+
+      const role = await resolveCommandRole();
+      if (!role || !isCommandAllowedForRole(matchedCommand.descriptor, role)) {
+        if (isCommandAllowedForRole(matchedCommand.descriptor, 'scoped')) {
+          const unauthorizedLog = messageLogDetails
+            ? { ...messageLogDetails, route: 'system_command_unauthorized' }
+            : {
+                action: 'sendText' as const,
+                route: 'system_command_unauthorized',
+                updateId,
+                chatIdNormalized: message.chat.id,
+                fromId: message.user.userId,
+                messageId: message.messageId,
+              };
+
+          await logMessagingCall(unauthorizedLog, () =>
+            options.messaging.sendText({
+              chatId: message.chat.id,
+              threadId: message.chat.threadId,
+              text: ADMIN_UNAUTHORIZED_TEXT,
+            }),
+          );
+
+          return jsonResponse({ status: 'ok', messageId: null });
+        }
+
+        return undefined;
+      }
+
+      const handler = systemCommandHandlers.get(matchedCommand.command);
+      if (!handler) {
+        return jsonResponse({ status: 'ok', messageId: null });
+      }
+
+      const sendSystemCommandText = async (payload: { text: string; route: string }) => {
+        const logDetails = messageLogDetails
+          ? { ...messageLogDetails, route: payload.route }
           : {
               action: 'sendText' as const,
-              route: 'system_start',
+              route: payload.route,
               updateId,
               chatIdNormalized: message.chat.id,
               fromId: message.user.userId,
               messageId: message.messageId,
             };
 
-        const sendResult = await logMessagingCall(greetingLogDetails, () =>
+        const sendResult = await logMessagingCall(logDetails, () =>
           options.messaging.sendText({
             chatId: message.chat.id,
             threadId: message.chat.threadId,
-            text: greetingText,
+            text: payload.text,
           }),
         );
 
+        return sendResult.messageId ?? null;
+      };
+
+      const handlerResult = await handler({
+        match: matchedCommand,
+        message,
+        sendText: sendSystemCommandText,
+      });
+
+      if (handlerResult.kind === 'handled') {
         return jsonResponse({
           status: 'ok',
-          messageId: sendResult.messageId ?? null,
+          messageId: handlerResult.messageId ?? null,
         });
       }
 
-      const matchedCommand = matchSystemCommand(message.text, message, systemCommands);
-      if (!matchedCommand) {
-        return undefined;
+      if (handlerResult.kind === 'invalid_usage') {
+        await sendSystemCommandText({
+          text: formatAdminUsageMessage(handlerResult.examples),
+          route: 'system_command_invalid_usage',
+        });
+
+        return jsonResponse({ status: 'ok', messageId: null });
       }
 
       return jsonResponse({ status: 'ok', messageId: null });

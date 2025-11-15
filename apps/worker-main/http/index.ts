@@ -5,6 +5,7 @@ export {
   type MessageWebhookResult,
   type RouterHandleContext,
   type RouterOptions,
+  type DetermineSystemCommandRole,
   type TransformPayload,
   type TransformPayloadContext,
   type TransformPayloadResult,
