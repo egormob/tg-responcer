@@ -39,6 +39,8 @@ import {
   createRouter,
   createSystemCommandRegistry,
   createTypingIndicator,
+  isCommandAllowedForRole,
+  type DetermineSystemCommandRole,
   type RouterOptions,
   type TypingIndicator,
   type TelegramAdminCommandContext,
@@ -903,6 +905,16 @@ const createRequestHandler = async (env: WorkerEnv) => {
   const typingIndicator = createTypingIndicatorIfAvailable(composition.ports.messaging);
 
   const adminAccess = createAdminAccessIfConfigured(env);
+  const determineCommandRole: DetermineSystemCommandRole | undefined = adminAccess
+    ? async ({ match, message }) => {
+        if (!isCommandAllowedForRole(match.descriptor, 'scoped')) {
+          return undefined;
+        }
+
+        const isAdmin = await adminAccess.isAdmin(message.user.userId);
+        return isAdmin ? 'scoped' : undefined;
+      }
+    : undefined;
   const adminErrorRecorder = createAdminCommandErrorRecorder({
     primaryKv: env.ADMIN_TG_IDS,
     fallbackKv: env.ADMIN_TG_IDS ? undefined : env.ADMIN_EXPORT_KV,
@@ -930,6 +942,8 @@ const createRequestHandler = async (env: WorkerEnv) => {
     typingIndicator,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
     transformPayload,
+    systemCommands: transformPayload.systemCommands,
+    determineCommandRole,
     admin: adminRoutes,
   });
 

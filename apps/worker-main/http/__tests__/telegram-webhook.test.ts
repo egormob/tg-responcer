@@ -288,7 +288,7 @@ describe('transformTelegramUpdate', () => {
 
     expect(handleAdminCommand).toHaveBeenCalledTimes(1);
     const context = handleAdminCommand.mock.calls[0][0];
-    expect(context.command).toBe('/admin');
+    expect(context.command).toBe('/admin status');
     expect(context.rawCommand).toBe('/admin');
     expect(context.argument).toBe('status');
     expect(context.chat.id).toBe('555');
@@ -461,7 +461,7 @@ describe('transformTelegramUpdate', () => {
       userId: '789',
       chatId: '555',
       threadId: null,
-      command: '/admin',
+      command: '/admin status',
       argument: 'status',
     });
   });
