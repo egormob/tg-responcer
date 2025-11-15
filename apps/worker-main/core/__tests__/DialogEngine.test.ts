@@ -462,6 +462,7 @@ describe('DialogEngine', () => {
     const now = vi.fn(() => new Date('2024-01-01T10:00:00Z'));
 
     const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await engine.handleMessage(createMessageOverrides());
 
@@ -486,6 +487,11 @@ describe('DialogEngine', () => {
       timestamp: new Date('2024-01-01T10:00:00Z'),
       metadata: { degraded: true, reason: 'AI_QUEUE_DROPPED', messageId: 'fallback-drop' },
     });
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[dialog-engine][ai_fallback]',
+      expect.objectContaining({ reason: 'AI_QUEUE_DROPPED' }),
+    );
+    consoleWarn.mockRestore();
   });
 
   it('возвращает безопасный fallback при истечении ожидания очереди ИИ', async () => {
@@ -513,6 +519,7 @@ describe('DialogEngine', () => {
     const now = vi.fn(() => new Date('2024-01-01T10:00:00Z'));
 
     const engine = new DialogEngine({ messaging, ai, storage, rateLimit, now });
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await engine.handleMessage(createMessageOverrides());
 
@@ -537,5 +544,10 @@ describe('DialogEngine', () => {
       timestamp: new Date('2024-01-01T10:00:00Z'),
       metadata: { degraded: true, reason: 'AI_QUEUE_TIMEOUT', messageId: 'fallback-timeout' },
     });
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[dialog-engine][ai_fallback]',
+      expect.objectContaining({ reason: 'AI_QUEUE_TIMEOUT' }),
+    );
+    consoleWarn.mockRestore();
   });
 });

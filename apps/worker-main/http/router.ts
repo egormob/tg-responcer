@@ -566,9 +566,12 @@ export const createRouter = (options: RouterOptions) => {
         return undefined;
       }
 
-      if (matchResult.kind === 'role_mismatch') {
+      const handleImmediateRoleMismatch = async (
+        route: 'system_command_role_mismatch' | 'system_command_unauthorized',
+        commandName: string,
+      ) => {
         const logPayload: Record<string, unknown> = {
-          command: matchResult.command,
+          command: commandName,
         };
         if (updateId !== undefined) {
           logPayload.updateId = updateId;
@@ -577,13 +580,13 @@ export const createRouter = (options: RouterOptions) => {
         applyTelegramIdLogFields(logPayload, 'fromId', message.user.userId, { includeValue: false });
 
         // eslint-disable-next-line no-console
-        console.info('[router] system command role mismatch', logPayload);
+        console.info('[router] system command role mismatch', { ...logPayload, route });
 
         try {
           await logMessagingCall(
             {
               action: 'sendTyping',
-              route: 'system_command_role_mismatch',
+              route,
               updateId,
               chatIdNormalized: message.chat.id,
               fromId: message.user.userId,
@@ -601,10 +604,10 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         const unauthorizedLog = messageLogDetails
-          ? { ...messageLogDetails, route: 'system_command_role_mismatch' }
+          ? { ...messageLogDetails, route }
           : {
               action: 'sendText' as const,
-              route: 'system_command_role_mismatch',
+              route,
               updateId,
               chatIdNormalized: message.chat.id,
               fromId: message.user.userId,
@@ -620,9 +623,16 @@ export const createRouter = (options: RouterOptions) => {
         );
 
         return jsonResponse({ status: 'ok', messageId: null });
+      };
+
+      if (matchResult.kind === 'role_mismatch' && typeof options.determineCommandRole !== 'function') {
+        return handleImmediateRoleMismatch('system_command_role_mismatch', matchResult.command);
       }
 
-      const matchedCommand = matchResult.match;
+      const matchedCommand =
+        matchResult.kind === 'match'
+          ? matchResult.match
+          : { command: matchResult.command, descriptor: matchResult.descriptor };
 
       const resolveCommandRole = async (): Promise<SystemCommandRole | undefined> => {
         if (isCommandAllowedForRole(matchedCommand.descriptor, 'global')) {
@@ -639,29 +649,14 @@ export const createRouter = (options: RouterOptions) => {
       const role = await resolveCommandRole();
       if (!role || !isCommandAllowedForRole(matchedCommand.descriptor, role)) {
         if (isCommandAllowedForRole(matchedCommand.descriptor, 'scoped')) {
-          const unauthorizedLog = messageLogDetails
-            ? { ...messageLogDetails, route: 'system_command_unauthorized' }
-            : {
-                action: 'sendText' as const,
-                route: 'system_command_unauthorized',
-                updateId,
-                chatIdNormalized: message.chat.id,
-                fromId: message.user.userId,
-                messageId: message.messageId,
-              };
-
-          await logMessagingCall(unauthorizedLog, () =>
-            options.messaging.sendText({
-              chatId: message.chat.id,
-              threadId: message.chat.threadId,
-              text: ADMIN_ROLE_MISMATCH_TEXT,
-            }),
-          );
-
-          return jsonResponse({ status: 'ok', messageId: null });
+          return handleImmediateRoleMismatch('system_command_unauthorized', matchedCommand.command);
         }
 
         return undefined;
+      }
+
+      if (role === 'scoped' && typeof message.user.userId === 'string' && message.user.userId.length > 0) {
+        systemCommands.register(matchedCommand.command, message.user.userId);
       }
 
       const handler = systemCommandHandlers.get(matchedCommand.command);

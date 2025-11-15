@@ -50,6 +50,18 @@
    *Impact:* Создаёт ложные тревоги и скрывает реальные сбои.
    *Status:* Resolved — 2025-11-16 self-test зафиксирован: маршрут всегда отвечает `200`, поля `openAiOk`/`telegramOk` дополняются строкой `reason` при `false`, диагностический маркер (`openAiMarkerPresent`) проверяется без перевода ответа в `500`, `lastWebhookSnapshot` включает маршрут (`route`), `chat_id`, `chatIdRaw`, `chatIdNormalized` и тип исходного ID. Cloudflare-логи содержат ключи `route=`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status` для внешней валидации.
 
+9. **`/admin status` даёт отказ даже whitelisted администратору**
+   *Scope:* `apps/worker-main/http/router.ts`, `system-commands` registry.
+   *Symptoms:* В бою `/admin status` возвращал «Эта команда доступна только администратору» для реального администратора, хотя `/admin` и `/export` работали. Cloudflare-лог показывал `kind: role_mismatch`, т.е. resolver останавливался до вызова `determineCommandRole`.
+   *Impact:* Операторы не могут подтвердить доступ, а значит не могут выполнить чек-листы перед релизом.
+   *Status:* Resolved — 2025-11-25 router теперь запрашивает `determineCommandRole` даже при `role_mismatch` и регистрирует `systemCommands` на основе подтверждённого ответа; whitelisted ID больше не теряются, а неадмины по-прежнему получают отказ.
+
+10. **Админские команды маскируют AI таймауты обычных пользователей**
+    *Scope:* `apps/worker-main/adapters/openai-responses`, `core/DialogEngine.ts`.
+    *Symptoms:* При двойном `/export` пользователь получил fallback «Не успел ответить вовремя…», хотя очередь OpenAI должна быть пустой. Сейчас невозможно связать fallback с фактическим состоянием лимитера.
+    *Impact:* Администраторы могут «повесить» прод, не имея диагностики (нет `queueWaitMs`, `requestId`, `endpointId` в логах `ai_fallback`).
+    *Status:* Mitigated — 2025-11-25 ошибки `AI_QUEUE_TIMEOUT` теперь несут `queueDetails` (attempt, phase, queueWaitMs, endpoint, snapshot лимитера), а ядро логирует `[dialog-engine][ai_fallback]` с этой структурой. Следующий шаг — зафиксировать сценарий «двойной /export + пользователь» с новыми логами.
+
 ## Observed signals & references
 
 - Cloudflare production log (2025-11-11) showing fallback messages and delayed exports; после обновления self-test лог дополнен ключами маршрута, типов `chat_id` и статусов отправки (`route=…`, `chatIdRawType`, `chatIdNormalizedHash`, `sendTyping status`, `sendText status`).
