@@ -487,11 +487,17 @@ describe('createTelegramExportCommandHandler', () => {
 
   it('prevents repeated export requests within cooldown window', async () => {
     const cooldownKv = createFakeKv();
-    const { handler, handleExport, sendTextMock } = createHandler({
-      cooldownKv,
-      now: () => new Date('2024-02-01T00:00:00Z'),
-    });
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const nowMock = vi.fn(() => new Date('2024-02-01T00:00:45Z'));
+    nowMock
+      .mockReturnValueOnce(new Date('2024-02-01T00:00:00Z'))
+      .mockReturnValueOnce(new Date('2024-02-01T00:00:00Z'));
 
+    const { handler, handleExport } = createHandler({
+      cooldownKv,
+      sendTextMock,
+      now: nowMock,
+    });
 
     const firstResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));
     expect(firstResponse?.status).toBe(200);
@@ -524,6 +530,7 @@ describe('createTelegramExportCommandHandler', () => {
     expect(updatedCooldownEntry?.expirationTtl).toBe(60);
     const parsedUpdatedEntry = updatedCooldownEntry ? JSON.parse(updatedCooldownEntry.value) : null;
     expect(parsedUpdatedEntry?.noticeSentAt).toBeDefined();
+    expect(parsedUpdatedEntry?.expiresAt).toBeGreaterThan(parsedInitialEntry?.expiresAt ?? 0);
 
     sendTextMock.mockClear();
     const thirdResponse = await handler(createContext({ command: '/export', argument: '2024-01-01' }));

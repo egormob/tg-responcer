@@ -677,10 +677,20 @@ export const createTelegramExportCommandHandler = (
               const noticeTimestamp = now().getTime();
               const remainingTtlSeconds = calculateRemainingTtlSeconds(cooldownEntry, noticeTimestamp);
               if (typeof remainingTtlSeconds === 'number') {
+                const cooldownTtlSeconds = Math.max(remainingTtlSeconds, EXPORT_COOLDOWN_TTL_SECONDS);
+                const updatedExpiresAt =
+                  cooldownTtlSeconds === remainingTtlSeconds
+                    ? cooldownEntry.expiresAt
+                    : noticeTimestamp + cooldownTtlSeconds * 1000;
+
                 await cooldownStore.put(
                   cooldownKey,
-                  serializeCooldownEntry({ ...cooldownEntry, noticeSentAt: noticeTimestamp }),
-                  remainingTtlSeconds,
+                  serializeCooldownEntry({
+                    ...cooldownEntry,
+                    expiresAt: updatedExpiresAt,
+                    noticeSentAt: noticeTimestamp,
+                  }),
+                  cooldownTtlSeconds,
                   cooldownContext,
                 );
               }
