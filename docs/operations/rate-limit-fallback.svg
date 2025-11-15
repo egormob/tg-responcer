@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400">
+  <rect width="800" height="400" fill="#1e2631"/>
+  <rect x="120" y="120" width="560" height="180" rx="32" fill="#ffffff"/>
+  <text x="400" y="200" font-family="'Arial', 'Helvetica', sans-serif" font-size="32" fill="#1a1c21" text-anchor="middle">
+    🥶⌛️ Лимит ответов исчерпан.
+  </text>
+  <text x="400" y="240" font-family="'Arial', 'Helvetica', sans-serif" font-size="32" fill="#1a1c21" text-anchor="middle">
+    Попробуйте позже.
+  </text>
+</svg>
