@@ -38,6 +38,7 @@ describe('createAccessDiagnosticsRoute', () => {
     expect(response.status).toBe(200);
     expect(payload.whitelist).toEqual(['123', '456']);
     expect(payload.kvRaw).toBe('{"whitelist":["123","456"]}');
+    expect(payload.cacheControl).toEqual({ invalidateRequested: false });
     expect(payload.health).toEqual([
       { userId: '123', status: 'ok' },
       { userId: '456', status: 'ok' },
@@ -73,6 +74,7 @@ describe('createAccessDiagnosticsRoute', () => {
 
     expect(response.status).toBe(200);
     expect(payload.whitelist).toEqual(['789']);
+    expect(payload.cacheControl).toEqual({ invalidateRequested: false });
     expect(payload.health).toEqual([
       { userId: '789', status: 403, lastError: 'blocked' },
     ]);
@@ -132,6 +134,107 @@ describe('createAccessDiagnosticsRoute', () => {
       ],
       total: 1,
       topByCode: [{ code: 403, count: 1 }],
+    });
+    expect(payload.cacheControl).toEqual({ invalidateRequested: false });
+  });
+
+  it('invalidates entire whitelist cache when requested via query param', async () => {
+    const kv = {
+      get: vi.fn().mockResolvedValue('{"whitelist":["123"]}'),
+      list: vi.fn().mockResolvedValue({ keys: [], list_complete: true }),
+    };
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const sendText = vi.fn().mockResolvedValue({ messageId: '1' });
+    const composition = createComposition({ sendTyping, sendText });
+    const invalidate = vi.fn();
+    const adminAccess = {
+      isAdmin: vi.fn().mockResolvedValue(true),
+      invalidate,
+    };
+
+    const handleRequest = createAccessDiagnosticsRoute({
+      env: { ADMIN_TG_IDS: kv },
+      composition,
+      adminAccess,
+    });
+
+    const response = await handleRequest(
+      new Request('https://example.com/admin/access?invalidate=all', { method: 'GET' }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(invalidate).toHaveBeenCalledWith();
+    expect(payload.cacheControl).toEqual({
+      invalidateRequested: true,
+      invalidateApplied: true,
+      targetUserId: null,
+    });
+  });
+
+  it('passes explicit userId when invalidate query contains numeric value', async () => {
+    const kv = {
+      get: vi.fn().mockResolvedValue('{"whitelist":["123"]}'),
+      list: vi.fn().mockResolvedValue({ keys: [], list_complete: true }),
+    };
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const sendText = vi.fn().mockResolvedValue({ messageId: '1' });
+    const composition = createComposition({ sendTyping, sendText });
+    const invalidate = vi.fn();
+    const adminAccess = {
+      isAdmin: vi.fn().mockResolvedValue(true),
+      invalidate,
+    };
+
+    const handleRequest = createAccessDiagnosticsRoute({
+      env: { ADMIN_TG_IDS: kv },
+      composition,
+      adminAccess,
+    });
+
+    const response = await handleRequest(
+      new Request('https://example.com/admin/access?invalidate=987', { method: 'GET' }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(invalidate).toHaveBeenCalledWith('987');
+    expect(payload.cacheControl).toEqual({
+      invalidateRequested: true,
+      invalidateApplied: true,
+      targetUserId: '987',
+    });
+  });
+
+  it('reports skipped invalidation when admin access instance unavailable', async () => {
+    const kv = {
+      get: vi.fn().mockResolvedValue('{"whitelist":["123"]}'),
+      list: vi.fn().mockResolvedValue({ keys: [], list_complete: true }),
+    };
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const sendText = vi.fn().mockResolvedValue({ messageId: '1' });
+    const composition = createComposition({ sendTyping, sendText });
+
+    const adminAccess = {
+      isAdmin: vi.fn().mockResolvedValue(true),
+    };
+
+    const handleRequest = createAccessDiagnosticsRoute({
+      env: { ADMIN_TG_IDS: kv },
+      composition,
+      adminAccess,
+    });
+
+    const response = await handleRequest(
+      new Request('https://example.com/admin/access?invalidate=*', { method: 'GET' }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.cacheControl).toEqual({
+      invalidateRequested: true,
+      invalidateApplied: false,
+      reason: 'admin_access_unavailable',
     });
   });
 });

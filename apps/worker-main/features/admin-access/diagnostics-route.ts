@@ -61,6 +61,30 @@ const filterWhitelistWithAccess = async (
   return checks.filter((item) => item.ok).map((item) => item.userId);
 };
 
+interface CacheControlInfo {
+  invalidateRequested: boolean;
+  invalidateApplied?: boolean;
+  targetUserId?: string | null;
+  reason?: string;
+}
+
+const normalizeInvalidateTarget = (value: string | null): string | null => {
+  if (value === null) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+
+  if (trimmed === '*' || trimmed.toLowerCase() === 'all') {
+    return '';
+  }
+
+  return trimmed;
+};
+
 export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRouteOptions) =>
   async (request: Request): Promise<Response> => {
     if (request.method !== 'GET') {
@@ -70,9 +94,32 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
       );
     }
 
+    const url = new URL(request.url);
+
     const kv = options.env.ADMIN_TG_IDS;
     const snapshot = kv ? await readAdminWhitelist(kv) : { ids: [], raw: null };
     const adminAccess = options.adminAccess ?? (kv ? createAdminAccess({ kv }) : undefined);
+
+    const invalidateParamPresent = url.searchParams.has('invalidate');
+    const invalidateTargetRaw = invalidateParamPresent ? url.searchParams.get('invalidate') : null;
+    const invalidateTarget = normalizeInvalidateTarget(invalidateTargetRaw);
+    const cacheControl: CacheControlInfo = { invalidateRequested: invalidateParamPresent };
+
+    if (invalidateParamPresent && !adminAccess?.invalidate) {
+      cacheControl.invalidateApplied = false;
+      cacheControl.reason = 'admin_access_unavailable';
+    }
+
+    if (invalidateParamPresent && adminAccess?.invalidate) {
+      if (invalidateTarget === '') {
+        adminAccess.invalidate();
+      } else {
+        adminAccess.invalidate(invalidateTarget);
+      }
+      cacheControl.invalidateApplied = true;
+      cacheControl.targetUserId = invalidateTarget && invalidateTarget.length > 0 ? invalidateTarget : null;
+    }
+
     const whitelist = await filterWhitelistWithAccess(snapshot.ids, adminAccess);
 
     const adminErrorNamespace =
@@ -119,6 +166,7 @@ export const createAccessDiagnosticsRoute = (options: CreateAccessDiagnosticsRou
       whitelist,
       health,
       kvRaw: snapshot.raw,
+      cacheControl,
       adminMessagingErrors: {
         source: adminErrorNamespace ? adminErrorSource : 'none',
         entries: adminMessagingErrors.entries,
