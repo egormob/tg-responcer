@@ -31,8 +31,7 @@ const MINIMUM_KV_TTL_SECONDS = 60;
 export const BROADCAST_PROMPT_MESSAGE =
   'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
 
-export const BROADCAST_AUDIENCE_PROMPT =
-  'Выберите аудиторию: отправьте all для всех или lang=ru (через запятую). Можно указать chat=ID.';
+export const BROADCAST_AUDIENCE_PROMPT = 'рассылка отправится всем из BROADCAST_RECIPIENTS';
 
 
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
@@ -405,7 +404,6 @@ export const createTelegramBroadcastCommandHandler = (
   const handleAudienceSelection = async (
     message: IncomingMessage,
     entry: PendingBroadcast,
-    selection: BroadcastAudienceFilter | undefined,
   ): Promise<'handled'> => {
     const text = message.text ?? '';
     const userKey = getUserKey(message.user.userId);
@@ -413,7 +411,7 @@ export const createTelegramBroadcastCommandHandler = (
     const updatedEntry: PendingBroadcast = {
       ...entry,
       stage: 'text',
-      filters: selection ?? undefined,
+      filters: undefined,
       expiresAt: now().getTime() + pendingTtlMs,
     };
 
@@ -628,12 +626,7 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     if (entry.stage === 'audience') {
-      const selection = parseAudienceSelection(trimmed);
-      if (selection !== null) {
-        return handleAudienceSelection(message, entry, selection);
-      }
-
-      entry.filters = undefined;
+      return handleAudienceSelection(message, entry);
     }
 
     if (trimmed.length === 0) {
