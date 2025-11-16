@@ -75,6 +75,23 @@
    - Проверить `GET /admin/diag?q=broadcast` — последний запуск должен отображаться с актуальными `delivered/failed/throttled429/durationMs`
      и статусом `ok` (или `aborted`, если сработала защита).
 
+## Диагностика ReferenceError (2025-11-27)
+**Симптомы**
+- Любой `POST /webhook/<secret>` завершается `500 Internal Server Error`.
+- В tail Cloudflare видно `ReferenceError: createBroadcastDiagRoute is not defined` со стеком `createBroadcastDiagRoute3` при инициализации `create-admin-router`.
+- `/admin/diag?q=broadcast` не открывается, а `scripts/diagnose-telegram-webhook.sh` выводит `referenceError=createBroadcastDiagRoute`.
+
+**Шаги проверки**
+1. Выполнить `./scripts/diagnose-telegram-webhook.sh <worker_url> <admin_token>` — скрипт проверит `/admin/selftest`, `/admin/diag` и сигнализирует о ReferenceError.
+2. Считать состояние webhook через `curl https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo` и убедиться, что `last_error_message` совпадает с `500 Internal Server Error`.
+3. Запустить `npx wrangler tail --env production --format pretty` и поймать стек `createBroadcastDiagRoute3`, чтобы подтвердить, что barrel-файл `apps/worker-main/features/index.ts` не экспортирует `createBroadcastDiagRoute`.
+4. После исправления barrel-файла повторить команды: `diagnose-telegram-webhook`, `getWebhookInfo`, tail и ручной вызов `/admin/diag?q=broadcast`.
+
+**Логи и ссылки**
+- Подробный журнал: [`memory-bank/logs/diag-2025-11-27-broadcast-admin.md`](../logs/diag-2025-11-27-broadcast-admin.md).
+- Tail-артефакт `memory-bank/logs/tail-2025-11-27-broadcast.txt` (создаётся вместе с диагностикой) и результаты `getWebhookInfo` прикладываются к журналу.
+- После фикса обязательна запись в `memory-bank/logs/` с подтверждением ретеста `/admin/diag?q=broadcast`.
+
 ## Требования к журналированию
 - Каждая рассылка фиксируется в журнале (например, `memory-bank/stable-builds.md` или отдельном operational log) с датой, администратором и кратким содержимым сообщения.
 - При сбоях сохранить фрагменты логов `wrangler tail` и описать шаги восстановления. При отладке проверять, что фоновые задачи `waitUntil` завершаются без ошибок и отдают ожидаемые метрики доставки.
