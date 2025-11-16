@@ -24,6 +24,7 @@ import {
   createKnownUsersClearRoute,
   createD1StressRoute,
   createImmediateBroadcastSender,
+  createRegistryBroadcastSender,
   parseBroadcastRecipients,
   createRateLimitNotifier,
   createSelfTestRoute,
@@ -39,6 +40,9 @@ import {
   type SendBroadcast,
   type AdminCommandErrorRecorder,
   type PendingBroadcast,
+  createBroadcastRecipientsStore,
+  createBroadcastRecipientsAdminHandlers,
+  type BroadcastRecipientsStore,
 } from './features';
 import {
   createRouter,
@@ -68,6 +72,7 @@ interface WorkerBindings {
   ADMIN_TG_IDS?: AdminAccessKvNamespace & AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_KV?: AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_LOG?: KVNamespace;
+  BROADCAST_RECIPIENTS_KV?: KVNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   BROADCAST_RECIPIENTS?: string;
@@ -634,6 +639,7 @@ const createAdminRoutes = (
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
   knownUsers: TelegramWebhookHandler['knownUsers'],
+  broadcastRecipientsStore: BroadcastRecipientsStore | undefined,
   exportRateTelemetry?: ExportRateTelemetry,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
@@ -705,6 +711,13 @@ const createAdminRoutes = (
     routes.exportToken = exportToken;
   }
 
+  if (broadcastRecipientsStore) {
+    routes.broadcastRecipients = createBroadcastRecipientsAdminHandlers({
+      store: broadcastRecipientsStore,
+      logger: console,
+    });
+  }
+
   return routes;
 };
 
@@ -713,6 +726,7 @@ const createTransformPayload = (
   composition: CompositionResult,
   adminAccess: AdminAccess | undefined,
   adminErrorRecorder: AdminCommandErrorRecorder,
+  broadcastRegistry: BroadcastRecipientsStore | undefined,
   exportRateTelemetry?: ExportRateTelemetry,
 ): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
@@ -752,16 +766,23 @@ const createTransformPayload = (
     : [];
   const broadcastPendingStore = broadcastEnabled ? getBroadcastSessionStore(env) : undefined;
 
-  if (broadcastEnabled && broadcastRecipients.length === 0) {
+  if (broadcastEnabled && !broadcastRegistry && broadcastRecipients.length === 0) {
     console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');
   }
 
   const broadcastSender: SendBroadcast | undefined = broadcastEnabled
-    ? createImmediateBroadcastSender({
-        messaging: composition.ports.messaging,
-        recipients: broadcastRecipients,
-        logger: console,
-      })
+    ? broadcastRegistry
+      ? createRegistryBroadcastSender({
+          messaging: composition.ports.messaging,
+          registry: broadcastRegistry,
+          fallbackRecipients: broadcastRecipients,
+          logger: console,
+        })
+      : createImmediateBroadcastSender({
+          messaging: composition.ports.messaging,
+          recipients: broadcastRecipients,
+          logger: console,
+        })
     : undefined;
 
   const broadcastCommandHandler = adminAccess && broadcastSender
@@ -882,11 +903,20 @@ const createRequestHandler = async (env: WorkerEnv) => {
     logger: console,
     now: () => new Date(),
   });
+  const broadcastRegistry =
+    env.DB && env.BROADCAST_RECIPIENTS_KV
+      ? createBroadcastRecipientsStore({
+          db: env.DB,
+          cache: env.BROADCAST_RECIPIENTS_KV,
+          logger: console,
+        })
+      : undefined;
   const transformPayload = createTransformPayload(
     env,
     composition,
     adminAccess,
     adminErrorRecorder,
+    broadcastRegistry,
     exportRateTelemetry,
   );
   const adminRoutes = createAdminRoutes(
@@ -895,6 +925,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     adminAccess,
     adminErrorRecorder,
     transformPayload.knownUsers,
+    broadcastRegistry,
     exportRateTelemetry,
   );
 

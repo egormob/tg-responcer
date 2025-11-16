@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../../ports';
+import type { BroadcastAudienceFilter } from './broadcast-payload';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -10,11 +11,13 @@ export interface BroadcastRecipient {
   chatId: string;
   threadId?: string;
   username?: string;
+  languageCode?: string;
 }
 
 export interface BroadcastSendInput {
   text: string;
   requestedBy: string;
+  filters?: BroadcastAudienceFilter;
 }
 
 export interface BroadcastSendResultDelivery {
@@ -58,6 +61,18 @@ export interface BroadcastPoolOptions {
 export interface CreateImmediateBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
   recipients: readonly BroadcastRecipient[];
+  logger?: Logger;
+  pool?: BroadcastPoolOptions;
+}
+
+export interface BroadcastRecipientsRegistry {
+  listActiveRecipients(filter?: BroadcastAudienceFilter): Promise<BroadcastRecipient[]>;
+}
+
+export interface CreateRegistryBroadcastSenderOptions {
+  messaging: Pick<MessagingPort, 'sendText'>;
+  registry: BroadcastRecipientsRegistry;
+  fallbackRecipients?: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
 }
@@ -134,10 +149,77 @@ const toErrorDetails = (error: unknown): { name: string; message: string } => {
   return { name: 'Error', message };
 };
 
-export const createImmediateBroadcastSender = (
-  options: CreateImmediateBroadcastSenderOptions,
-): SendBroadcast => {
-  const recipients = options.recipients.filter((recipient) => recipient.chatId.trim().length > 0);
+const deduplicateRecipients = (
+  recipients: readonly BroadcastRecipient[],
+): BroadcastRecipient[] => {
+  const seen = new Map<string, number>();
+  const unique: BroadcastRecipient[] = [];
+
+  for (const recipient of recipients) {
+    const key = `${recipient.chatId}:${recipient.threadId ?? ''}`;
+    const existingIndex = seen.get(key);
+
+    if (existingIndex !== undefined) {
+      const existing = unique[existingIndex];
+      if (!existing.username && recipient.username) {
+        unique[existingIndex] = { ...existing, username: recipient.username };
+      }
+      if (!existing.languageCode && recipient.languageCode) {
+        unique[existingIndex] = { ...existing, languageCode: recipient.languageCode };
+      }
+      continue;
+    }
+
+    seen.set(key, unique.length);
+    unique.push(recipient);
+  }
+
+  return unique;
+};
+
+const applyAudienceFilters = (
+  recipients: readonly BroadcastRecipient[],
+  filters: BroadcastAudienceFilter | undefined,
+): BroadcastRecipient[] => {
+  if (!filters) {
+    return Array.from(recipients);
+  }
+
+  let result = Array.from(recipients);
+
+  if (filters.chatIds?.length) {
+    const chatIds = new Set(filters.chatIds.map((id) => id.trim()));
+    result = result.filter((recipient) => chatIds.has(recipient.chatId));
+  }
+
+  if (filters.userIds?.length) {
+    const userIds = new Set(filters.userIds.map((id) => id.trim()));
+    result = result.filter((recipient) => userIds.has(recipient.chatId));
+  }
+
+  if (filters.languageCodes?.length) {
+    const languages = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
+    result = result.filter((recipient) => {
+      if (!recipient.languageCode) {
+        return false;
+      }
+      return languages.has(recipient.languageCode.toLowerCase());
+    });
+  }
+
+  return result;
+};
+
+interface CreateBroadcastSenderOptions {
+  messaging: Pick<MessagingPort, 'sendText'>;
+  resolveRecipients: (
+    filters?: BroadcastAudienceFilter,
+  ) => Promise<readonly BroadcastRecipient[]> | readonly BroadcastRecipient[];
+  logger?: Logger;
+  pool?: BroadcastPoolOptions;
+}
+
+const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
   const poolOptions = {
     ...DEFAULT_POOL_OPTIONS,
     ...options.pool,
@@ -147,7 +229,11 @@ export const createImmediateBroadcastSender = (
   const concurrency = Math.max(1, Math.floor(poolOptions.concurrency));
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
 
-  return async ({ text, requestedBy }) => {
+  return async ({ text, requestedBy, filters }) => {
+    const resolved = await options.resolveRecipients(filters);
+    const recipients = deduplicateRecipients(
+      applyAudienceFilters(resolved.filter((recipient) => recipient.chatId.trim().length > 0), filters),
+    );
     const startedAt = Date.now();
 
     options.logger?.info?.('broadcast pool initialized', {
@@ -280,4 +366,59 @@ export const createImmediateBroadcastSender = (
       deliveries,
     } satisfies BroadcastSendResult;
   };
+};
+
+export const createImmediateBroadcastSender = (
+  options: CreateImmediateBroadcastSenderOptions,
+): SendBroadcast =>
+  createBroadcastSender({
+    messaging: options.messaging,
+    resolveRecipients: () => options.recipients,
+    logger: options.logger,
+    pool: options.pool,
+  });
+
+export const createRegistryBroadcastSender = (
+  options: CreateRegistryBroadcastSenderOptions,
+): SendBroadcast => {
+  const fallbackRecipients = deduplicateRecipients(
+    (options.fallbackRecipients ?? []).filter((recipient) => recipient.chatId.trim().length > 0),
+  );
+
+  const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
+    try {
+      const fromRegistry = await options.registry.listActiveRecipients(filters);
+      if (fromRegistry.length > 0) {
+        return fromRegistry;
+      }
+
+      options.logger?.info?.('broadcast registry returned empty result', {
+        filters: filters ?? null,
+      });
+    } catch (error) {
+      options.logger?.warn?.('broadcast registry lookup failed', {
+        error: toErrorDetails(error),
+        filters: filters ?? null,
+      });
+    }
+
+    if (fallbackRecipients.length > 0) {
+      options.logger?.warn?.('falling back to env broadcast recipients', {
+        filters: filters ?? null,
+      });
+      return fallbackRecipients;
+    }
+
+    options.logger?.warn?.('no broadcast recipients resolved', {
+      filters: filters ?? null,
+    });
+    return [];
+  };
+
+  return createBroadcastSender({
+    messaging: options.messaging,
+    resolveRecipients,
+    logger: options.logger,
+    pool: options.pool,
+  });
 };

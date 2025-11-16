@@ -48,9 +48,12 @@ export type {
 export {
   createTelegramBroadcastCommandHandler,
   createImmediateBroadcastSender,
+  createRegistryBroadcastSender,
   buildBroadcastPayload,
   DEFAULT_MAX_TEXT_LENGTH,
   parseBroadcastRecipients,
+  createBroadcastRecipientsStore,
+  createBroadcastRecipientsAdminHandlers,
 } from './broadcast';
 export type {
   BroadcastAudienceFilter,
@@ -61,9 +64,16 @@ export type {
   PendingBroadcast,
   SendBroadcast,
   CreateImmediateBroadcastSenderOptions,
+  CreateRegistryBroadcastSenderOptions,
   BroadcastSendInput,
   BroadcastSendResult,
   BroadcastSendResultDelivery,
+  BroadcastRecipientsRegistry,
+  BroadcastRecipientRecord,
+  BroadcastRecipientUpsertInput,
+  BroadcastRecipientsStore,
+  BroadcastRecipientsAdminHandlers,
+  CreateBroadcastRecipientsAdminHandlersOptions,
 } from './broadcast';
 export {
   createD1StressRoute,
