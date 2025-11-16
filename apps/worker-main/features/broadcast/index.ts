@@ -1,8 +1,3 @@
-export { createAdminBroadcastRoute } from './admin-broadcast-route';
-export type {
-  AdminBroadcastRequest,
-  CreateAdminBroadcastRouteOptions,
-} from './admin-broadcast-route';
 export {
   buildBroadcastPayload,
   DEFAULT_MAX_TEXT_LENGTH,

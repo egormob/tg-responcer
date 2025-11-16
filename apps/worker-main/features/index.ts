@@ -46,7 +46,6 @@ export type {
   ExportRateTelemetry,
 } from './export';
 export {
-  createAdminBroadcastRoute,
   createTelegramBroadcastCommandHandler,
   createImmediateBroadcastSender,
   buildBroadcastPayload,
@@ -54,10 +53,8 @@ export {
   parseBroadcastRecipients,
 } from './broadcast';
 export type {
-  AdminBroadcastRequest,
   BroadcastAudienceFilter,
   BroadcastMessagePayload,
-  CreateAdminBroadcastRouteOptions,
   BroadcastRecipient,
   BroadcastRecipientsParserLogger,
   CreateTelegramBroadcastCommandHandlerOptions,
