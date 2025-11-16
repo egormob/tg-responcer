@@ -38,6 +38,7 @@ import {
   type LimitsFlagKvNamespace,
   type SendBroadcast,
   type AdminCommandErrorRecorder,
+  type PendingBroadcast,
 } from './features';
 import {
   createRouter,
@@ -749,6 +750,7 @@ const createTransformPayload = (
   const broadcastRecipients = broadcastEnabled
     ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS, console)
     : [];
+  const broadcastPendingStore = broadcastEnabled ? getBroadcastSessionStore(env) : undefined;
 
   if (broadcastEnabled && broadcastRecipients.length === 0) {
     console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');
@@ -770,6 +772,7 @@ const createTransformPayload = (
         logger: console,
         now: () => new Date(),
         adminErrorRecorder,
+        pendingStore: broadcastPendingStore,
       })
     : undefined;
 
@@ -950,6 +953,27 @@ const getEnvironmentVersion = (env: WorkerEnv): string | number | undefined => {
 type RouterCacheValue = { version?: string | number; promise: Promise<RouterCacheEntry> };
 
 let routerCache: WeakMap<WorkerEnv, RouterCacheValue> = new WeakMap();
+type BroadcastSessionStore = Map<string, PendingBroadcast>;
+let broadcastSessionStores: WeakMap<WorkerEnv, BroadcastSessionStore> = new WeakMap();
+
+const getBroadcastSessionStore = (env: WorkerEnv): BroadcastSessionStore => {
+  let store = broadcastSessionStores.get(env);
+  if (!store) {
+    store = new Map<string, PendingBroadcast>();
+    broadcastSessionStores.set(env, store);
+  }
+
+  return store;
+};
+
+const clearBroadcastSessionStore = (env?: WorkerEnv) => {
+  if (env) {
+    broadcastSessionStores.delete(env);
+    return;
+  }
+
+  broadcastSessionStores = new WeakMap();
+};
 
 const getCachedRequestHandler = async (env: WorkerEnv): Promise<RouterCacheEntry> => {
   const version = getEnvironmentVersion(env);
@@ -983,6 +1007,7 @@ const clearRouterCache = (env?: WorkerEnv) => {
   }
 
   routerCache = new WeakMap();
+  clearBroadcastSessionStore();
 };
 
 export default {
@@ -995,4 +1020,5 @@ export default {
 export const __internal = {
   parsePromptVariables,
   clearRouterCache,
+  clearBroadcastSessionStore,
 };

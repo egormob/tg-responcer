@@ -42,7 +42,7 @@ const BROADCAST_CANCEL_MESSAGE =
 
 export const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
 
-interface PendingBroadcast {
+export interface PendingBroadcast {
   chatId: string;
   threadId?: string;
   expiresAt: number;
@@ -72,6 +72,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   now?: () => Date;
   logger?: Logger;
   adminErrorRecorder?: AdminCommandErrorRecorder;
+  pendingStore?: Map<string, PendingBroadcast>;
 }
 
 export interface TelegramBroadcastCommandHandler {
@@ -116,7 +117,7 @@ export const createTelegramBroadcastCommandHandler = (
   const pendingTtlMs = Math.max(1, options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS);
   const now = options.now ?? (() => new Date());
 
-  const pending = new Map<string, PendingBroadcast>();
+  const pending = options.pendingStore ?? new Map<string, PendingBroadcast>();
 
   const handleMessagingFailure = async (
     userId: string | number | bigint,

@@ -19,6 +19,7 @@ export {
   BROADCAST_SUCCESS_MESSAGE,
   type CreateTelegramBroadcastCommandHandlerOptions,
   type TelegramBroadcastCommandHandler,
+  type PendingBroadcast,
 } from './telegram-broadcast-command';
 export {
   createImmediateBroadcastSender,

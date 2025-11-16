@@ -61,6 +61,7 @@ export type {
   BroadcastRecipient,
   BroadcastRecipientsParserLogger,
   CreateTelegramBroadcastCommandHandlerOptions,
+  PendingBroadcast,
   SendBroadcast,
   CreateImmediateBroadcastSenderOptions,
   BroadcastSendInput,
