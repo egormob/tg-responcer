@@ -378,6 +378,11 @@ export interface RouterOptions {
     diag?: (request: Request) => Promise<Response>;
     knownUsersClear?: (request: Request) => Promise<Response>;
     d1Stress?: (request: Request) => Promise<Response>;
+    broadcastRecipients?: {
+      list: (request: Request) => Promise<Response>;
+      upsert: (request: Request) => Promise<Response>;
+      deactivate: (request: Request, chatId: string) => Promise<Response>;
+    };
   };
 }
 
@@ -922,6 +927,46 @@ export const createRouter = (options: RouterOptions) => {
         }
 
         return options.admin.knownUsersClear(auth.request);
+      }
+
+      if (pathname === '/admin/broadcast/recipients') {
+        if (!options.admin?.broadcastRecipients) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        if (request.method === 'GET') {
+          return options.admin.broadcastRecipients.list(auth.request);
+        }
+
+        if (request.method === 'POST') {
+          return options.admin.broadcastRecipients.upsert(auth.request);
+        }
+
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      if (pathname.startsWith('/admin/broadcast/recipients/')) {
+        if (!options.admin?.broadcastRecipients) {
+          return handleNotFound();
+        }
+
+        const auth = ensureAdminAuthorization(request, url);
+        if (!auth.ok) {
+          return auth.response;
+        }
+
+        if (request.method !== 'DELETE') {
+          return new Response('Method Not Allowed', { status: 405 });
+        }
+
+        const segments = normalizePath(pathname).split('/').filter(Boolean);
+        const chatId = decodeURIComponent(segments[segments.length - 1] ?? '');
+        return options.admin.broadcastRecipients.deactivate(auth.request, chatId);
       }
 
       if (pathname === '/admin/d1-stress') {

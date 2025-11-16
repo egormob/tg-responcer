@@ -3,6 +3,7 @@ import type { IncomingMessage } from '../../core';
 import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../http';
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
+import type { BroadcastAudienceFilter } from './broadcast-payload';
 import {
   type AdminCommandErrorRecorder,
   extractTelegramErrorDetails,
@@ -26,6 +27,10 @@ const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 export const BROADCAST_PROMPT_MESSAGE =
   'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
 
+export const BROADCAST_AUDIENCE_PROMPT =
+  'Выберите аудиторию: отправьте all для всех или lang=ru (через запятую). Можно указать chat=ID.';
+
+
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
@@ -46,6 +51,8 @@ export interface PendingBroadcast {
   chatId: string;
   threadId?: string;
   expiresAt: number;
+  stage: 'audience' | 'text';
+  filters?: BroadcastAudienceFilter;
 }
 
 const toErrorDetails = (error: unknown) =>
@@ -109,6 +116,66 @@ const createBroadcastResponse = (result: BroadcastSendResult) => {
   return BROADCAST_SUCCESS_MESSAGE;
 };
 
+const parseList = (value: string): string[] =>
+  value
+    .split(/[\s,]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+const parseAudienceSelection = (value: string): BroadcastAudienceFilter | undefined | null => {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const normalized = trimmed.toLowerCase();
+
+  if (normalized === 'all' || normalized === '*' || normalized === 'everyone') {
+    return undefined;
+  }
+
+  const applyList = (list: string[]): BroadcastAudienceFilter | null => {
+    if (list.length === 0) {
+      return null;
+    }
+
+    return { chatIds: list } satisfies BroadcastAudienceFilter;
+  };
+
+  if (normalized.startsWith('chat=')) {
+    const ids = parseList(trimmed.slice(trimmed.indexOf('=') + 1));
+    const filter = applyList(ids);
+    return filter ?? null;
+  }
+
+  if (normalized.startsWith('user=')) {
+    const ids = parseList(trimmed.slice(trimmed.indexOf('=') + 1));
+    if (ids.length === 0) {
+      return null;
+    }
+    return { userIds: ids } satisfies BroadcastAudienceFilter;
+  }
+
+  if (normalized.startsWith('lang=') || normalized.startsWith('language=')) {
+    const index = trimmed.indexOf('=');
+    const codes = parseList(trimmed.slice(index + 1)).map((code) => code.toLowerCase());
+    if (codes.length === 0) {
+      return null;
+    }
+    return { languageCodes: codes } satisfies BroadcastAudienceFilter;
+  }
+
+  if (normalized.startsWith('segment:')) {
+    const code = trimmed.slice(trimmed.indexOf(':') + 1).trim().toLowerCase();
+    if (code.length === 0) {
+      return null;
+    }
+    return { languageCodes: [code] } satisfies BroadcastAudienceFilter;
+  }
+
+  return null;
+};
+
 export const createTelegramBroadcastCommandHandler = (
   options: CreateTelegramBroadcastCommandHandlerOptions,
 ): TelegramBroadcastCommandHandler => {
@@ -118,6 +185,51 @@ export const createTelegramBroadcastCommandHandler = (
   const now = options.now ?? (() => new Date());
 
   const pending = options.pendingStore ?? new Map<string, PendingBroadcast>();
+
+  const handleAudienceSelection = async (
+    message: IncomingMessage,
+    entry: PendingBroadcast,
+    selection: BroadcastAudienceFilter | undefined,
+  ): Promise<'handled'> => {
+    const text = message.text ?? '';
+
+    const updatedEntry: PendingBroadcast = {
+      ...entry,
+      stage: 'text',
+      filters: selection ?? undefined,
+      expiresAt: now().getTime() + pendingTtlMs,
+    };
+
+    pending.set(message.user.userId, updatedEntry);
+
+    try {
+      await options.messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text: BROADCAST_PROMPT_MESSAGE,
+      });
+
+      logger.info('broadcast awaiting text', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        filters: updatedEntry.filters ?? null,
+      });
+    } catch (error) {
+      pending.delete(message.user.userId);
+
+      logger.error('failed to send broadcast text prompt', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        error: toErrorDetails(error),
+      });
+
+      await handleMessagingFailure(message.user.userId, 'broadcast_text_prompt', error);
+    }
+
+    return 'handled';
+  };
 
   const handleMessagingFailure = async (
     userId: string | number | bigint,
@@ -211,16 +323,17 @@ export const createTelegramBroadcastCommandHandler = (
       chatId: context.chat.id,
       threadId: context.chat.threadId,
       expiresAt: timestamp + pendingTtlMs,
+      stage: 'audience',
     });
 
     try {
       await options.messaging.sendText({
         chatId: context.chat.id,
         threadId: context.chat.threadId,
-        text: BROADCAST_PROMPT_MESSAGE,
+        text: BROADCAST_AUDIENCE_PROMPT,
       });
 
-      logger.info('broadcast awaiting text', {
+      logger.info('broadcast awaiting audience selection', {
         userId: context.from.userId,
         chatId: context.chat.id,
         threadId: context.chat.threadId ?? null,
@@ -240,7 +353,7 @@ export const createTelegramBroadcastCommandHandler = (
       return json({ error: 'Failed to send broadcast prompt' }, { status: 502 });
     }
 
-    return json({ status: 'awaiting_text' }, { status: 200 });
+    return json({ status: 'awaiting_audience' }, { status: 200 });
   };
 
   const handleMessage = async (
@@ -297,6 +410,15 @@ export const createTelegramBroadcastCommandHandler = (
       }
 
       return 'handled';
+    }
+
+    if (entry.stage === 'audience') {
+      const selection = parseAudienceSelection(trimmed);
+      if (selection !== null) {
+        return handleAudienceSelection(message, entry, selection);
+      }
+
+      entry.filters = undefined;
     }
 
     if (trimmed.length === 0) {
@@ -364,6 +486,7 @@ export const createTelegramBroadcastCommandHandler = (
     const payload: BroadcastSendInput = {
       text,
       requestedBy,
+      filters: entry.filters,
     };
 
     const runBroadcast = async () => {

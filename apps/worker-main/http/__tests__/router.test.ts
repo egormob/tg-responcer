@@ -6,6 +6,7 @@ import { createTelegramWebhookHandler } from '../../features';
 import {
   createTelegramBroadcastCommandHandler,
   BROADCAST_PROMPT_MESSAGE,
+  BROADCAST_AUDIENCE_PROMPT,
   BROADCAST_SUCCESS_MESSAGE,
 } from '../../features/broadcast';
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
@@ -65,6 +66,45 @@ describe('http router', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: 'ok' });
+  });
+
+  it('routes broadcast recipients admin endpoints', async () => {
+    const list = vi.fn().mockResolvedValue(new Response('list-ok'));
+    const upsert = vi.fn().mockResolvedValue(new Response('upsert-ok'));
+    const deactivate = vi.fn().mockResolvedValue(new Response('delete-ok'));
+    const router = createRouter({
+      dialogEngine: createDialogEngineMock(),
+      messaging: createMessagingMock(),
+      webhookSecret: 'secret',
+      admin: {
+        token: 'admin-token',
+        broadcastRecipients: { list, upsert, deactivate },
+      },
+    });
+
+    const listResponse = await router.handle(
+      new Request('https://example.com/admin/broadcast/recipients?token=admin-token'),
+    );
+    expect(list).toHaveBeenCalled();
+    expect(listResponse.status).toBe(200);
+
+    const upsertResponse = await router.handle(
+      new Request('https://example.com/admin/broadcast/recipients', {
+        method: 'POST',
+        headers: { 'x-admin-token': 'admin-token' },
+        body: JSON.stringify({ chatId: '100' }),
+      }),
+    );
+    expect(upsert).toHaveBeenCalled();
+    expect(upsertResponse.status).toBe(200);
+
+    const deleteResponse = await router.handle(
+      new Request('https://example.com/admin/broadcast/recipients/500?token=admin-token', {
+        method: 'DELETE',
+      }),
+    );
+    expect(deactivate).toHaveBeenCalledWith(expect.any(Request), '500');
+    expect(deleteResponse.status).toBe(200);
   });
 
   it('returns 403 when webhook secret does not match', async () => {
@@ -1226,12 +1266,12 @@ describe('http router', () => {
     );
 
     expect(commandResponse.status).toBe(200);
-    await expect(commandResponse.json()).resolves.toEqual({ status: 'awaiting_text' });
+    await expect(commandResponse.json()).resolves.toEqual({ status: 'awaiting_audience' });
     expect(adminAccess.isAdmin).toHaveBeenCalledWith('1010');
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: '4242',
       threadId: undefined,
-      text: BROADCAST_PROMPT_MESSAGE,
+      text: BROADCAST_AUDIENCE_PROMPT,
     });
 
     const waitUntil = vi.fn();
@@ -1250,6 +1290,7 @@ describe('http router', () => {
     expect(sendBroadcast).toHaveBeenCalledWith({
       text: 'привет всем',
       requestedBy: '1010',
+      filters: undefined,
     });
 
     expect(waitUntil).toHaveBeenCalledTimes(1);
