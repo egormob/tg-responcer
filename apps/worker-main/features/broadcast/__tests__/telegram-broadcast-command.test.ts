@@ -421,6 +421,7 @@ describe('worker integration for broadcast command', () => {
       createOpenAIResponsesAdapter: vi.fn(() => ai),
       createD1StorageAdapter: vi.fn(() => storage),
       createKvRateLimitAdapter: vi.fn(() => rateLimit),
+      createQueuedMessagingPort: vi.fn((port) => port),
     }));
 
     const module = await import('../../../index');
@@ -517,6 +518,7 @@ describe('worker integration for broadcast command', () => {
       createOpenAIResponsesAdapter: vi.fn(() => ai),
       createD1StorageAdapter: vi.fn(() => storage),
       createKvRateLimitAdapter: vi.fn(() => rateLimit),
+      createQueuedMessagingPort: vi.fn((port) => port),
     }));
 
     const module = await import('../../../index');
@@ -676,6 +678,7 @@ describe('worker integration for broadcast command', () => {
       createOpenAIResponsesAdapter: vi.fn(() => ai),
       createD1StorageAdapter: vi.fn(() => storage),
       createKvRateLimitAdapter: vi.fn(() => rateLimit),
+      createQueuedMessagingPort: vi.fn((port) => port),
     }));
 
     const module = await import('../../../index');

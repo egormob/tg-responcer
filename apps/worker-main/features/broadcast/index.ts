@@ -21,6 +21,7 @@ export {
 export {
   createImmediateBroadcastSender,
   createRegistryBroadcastSender,
+  BroadcastAbortedError,
   type BroadcastRecipient,
   type BroadcastSendInput,
   type BroadcastSendResult,
@@ -29,6 +30,8 @@ export {
   type SendBroadcast,
   type CreateImmediateBroadcastSenderOptions,
   type CreateRegistryBroadcastSenderOptions,
+  type BroadcastEmergencyStopOptions,
+  type BroadcastAbortReason,
 } from './minimal-broadcast-service';
 export {
   createBroadcastRecipientsStore,
@@ -41,3 +44,11 @@ export {
   type BroadcastRecipientsAdminHandlers,
   type CreateBroadcastRecipientsAdminHandlersOptions,
 } from './broadcast-recipients-admin-route';
+export {
+  createBroadcastDiagRoute,
+  createBroadcastTelemetry,
+  type BroadcastTelemetry,
+  type BroadcastTelemetryRecord,
+  type BroadcastTelemetrySnapshot,
+  type BroadcastTelemetryRecordInput,
+} from './broadcast-telemetry';

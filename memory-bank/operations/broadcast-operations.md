@@ -42,6 +42,12 @@
   - `broadcast pool initialized` — фиксирует `requestedBy`, `recipients`, `poolSize`, `maxAttempts`, `baseDelayMs`, `jitterRatio`.
   - `broadcast throttled` — появляется на каждом `429`, показывает `attempt`, `delayMs`, `retryAfterMs` и `poolSize`.
   - `broadcast pool completed` — итог рассылки: `delivered`, `failed`, `throttled429`, `durationMs`.
+- Историю запусков (включая `delivered`, `failed`, `throttled429`, `durationMs`, `requestedBy`, статус `ok/aborted`) можно получить по
+  `GET /admin/diag?q=broadcast` с валидным `ADMIN_TOKEN` — эндпоинт возвращает последние N запусков и помогает сверить tail без
+  доступа к логам.
+- Аварийная остановка срабатывает, если Telegram требует `retry_after ≥5 с` (порог вычисляется исходя из `BROADCAST_MAX_RPS`) или
+  общий `sendText` падает с фатальной ошибкой (`401`, `5xx`, сетевой сбой). В этом случае пул логирует `broadcast pool aborted`,
+  оставшиеся получатели получают статус `BroadcastAborted`, а администратор — уведомление «❌ Рассылка отменена».
 - Для ПРОВЕРКИ 7.1 используем ≥10 получателей, смотрим `poolSize` и `throttled429` в хвосте `wrangler tail`, сопоставляем длительность с ожидаемым бэкоффом.
 
 ### Восстановление pending-сессий (2025-11-26)
@@ -63,8 +69,11 @@
    - Попробовать команду с не-whitelisted аккаунта и убедиться, что бот корректно отказывает без отправки.
    - Протестировать граничные значения: пустой текст, текст из 4096 символов.
 3. **Мониторинг**
-   - Смотреть `wrangler tail` во время отправки; ошибки Telegram логируются тегом `[broadcast]`.
+   - Смотреть `wrangler tail` во время отправки; ошибки Telegram логируются тегом `[broadcast]`. Если появляется `broadcast pool aborted`,
+     фиксируем `reason`, `retryAfterMs`, `status` и сверяем, что администратор получил «❌ Рассылка отменена».
    - После рассылки записать событие в оперативный журнал (дата, администратор, количество получателей).
+   - Проверить `GET /admin/diag?q=broadcast` — последний запуск должен отображаться с актуальными `delivered/failed/throttled429/durationMs`
+     и статусом `ok` (или `aborted`, если сработала защита).
 
 ## Требования к журналированию
 - Каждая рассылка фиксируется в журнале (например, `memory-bank/stable-builds.md` или отдельном operational log) с датой, администратором и кратким содержимым сообщения.

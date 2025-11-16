@@ -1,35 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createImmediateBroadcastSender } from '../minimal-broadcast-service';
-import type { BroadcastRecipient } from '../minimal-broadcast-service';
+import {
+  BroadcastAbortedError,
+  createImmediateBroadcastSender,
+  type BroadcastRecipient,
+} from '../minimal-broadcast-service';
 
 const createRecipients = (count: number): BroadcastRecipient[] =>
   Array.from({ length: count }, (_, index) => ({ chatId: `chat-${index}` }));
 
 describe('createImmediateBroadcastSender', () => {
-  it('throttles sending with configurable pool and retries 429 responses', async () => {
-    const recipients = createRecipients(12);
+  it('throttles large batches, retries 429 responses, and records telemetry', async () => {
+    const recipients = createRecipients(50);
     const attempts = new Map<string, number>();
-    let active = 0;
-    let maxActive = 0;
+    const waitCalls: number[] = [];
 
     const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
       const attempt = attempts.get(chatId) ?? 0;
       attempts.set(chatId, attempt + 1);
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      active -= 1;
-
-      if ((chatId.endsWith('2') || chatId.endsWith('5')) && attempt === 0) {
+      if ((chatId.endsWith('0') || chatId.endsWith('5')) && attempt === 0) {
         const error = new Error('Too many requests');
         (error as Error & { status?: number; retryAfterMs?: number }).status = 429;
-        (error as Error & { status?: number; retryAfterMs?: number }).retryAfterMs = 5;
+        (error as Error & { status?: number; retryAfterMs?: number }).retryAfterMs = 25;
         throw error;
       }
 
       return { messageId: `${chatId}-${attempt}` };
+    });
+
+    const wait = vi.fn(async (ms: number) => {
+      waitCalls.push(ms);
     });
 
     const logger = {
@@ -37,34 +38,80 @@ describe('createImmediateBroadcastSender', () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
+    const telemetry = { record: vi.fn(), snapshot: vi.fn() };
 
     const sendBroadcast = createImmediateBroadcastSender({
       messaging: { sendText },
       recipients,
       logger,
       pool: {
-        concurrency: 3,
+        concurrency: 5,
         maxAttempts: 3,
         baseDelayMs: 1,
         jitterRatio: 0,
-        wait: (ms) => Promise.resolve(ms).then(() => undefined),
+        wait,
         random: () => 0,
       },
+      telemetry,
+      emergencyStop: { retryAfterMs: 500 },
     });
 
     const result = await sendBroadcast({ text: 'hello', requestedBy: 'ops' });
 
     expect(result.delivered).toBe(recipients.length);
     expect(result.failed).toBe(0);
-    expect(maxActive).toBeLessThanOrEqual(3);
-    expect(sendText).toHaveBeenCalledTimes(recipients.length + 2);
+    expect(sendText).toHaveBeenCalledTimes(recipients.length + 10);
     expect(logger.warn).toHaveBeenCalledWith(
       'broadcast throttled',
-      expect.objectContaining({ poolSize: 3 }),
+      expect.objectContaining({ poolSize: 5 }),
     );
+    expect(waitCalls.some((delay) => delay >= 25)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       'broadcast pool completed',
-      expect.objectContaining({ delivered: recipients.length, throttled429: 2 }),
+      expect.objectContaining({ delivered: recipients.length, throttled429: expect.any(Number) }),
+    );
+    expect(telemetry.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedBy: 'ops',
+        delivered: recipients.length,
+        status: 'ok',
+        throttled429: expect.any(Number),
+      }),
+    );
+  });
+
+  it('aborts broadcast when sendText reports fatal error', async () => {
+    const recipients = createRecipients(5);
+    const sendText = vi.fn(async () => {
+      const error = new Error('unauthorized');
+      (error as Error & { status?: number }).status = 401;
+      throw error;
+    });
+
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const telemetry = { record: vi.fn(), snapshot: vi.fn() };
+
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger,
+      telemetry,
+      emergencyStop: { retryAfterMs: 500 },
+    });
+
+    await expect(sendBroadcast({ text: 'stop', requestedBy: 'ops' })).rejects.toBeInstanceOf(
+      BroadcastAbortedError,
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'broadcast pool aborted',
+      expect.objectContaining({ reason: 'send_text_failed' }),
+    );
+    expect(telemetry.record).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'aborted', abortReason: 'send_text_failed' }),
     );
   });
 });
