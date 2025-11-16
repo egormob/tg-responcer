@@ -92,6 +92,15 @@
 - Tail-артефакт `memory-bank/logs/tail-2025-11-27-broadcast.txt` (создаётся вместе с диагностикой) и результаты `getWebhookInfo` прикладываются к журналу.
 - После фикса обязательна запись в `memory-bank/logs/` с подтверждением ретеста `/admin/diag?q=broadcast`.
 
+## Smoke-тест восстановления webhook и `/broadcast`
+- Логи восстановления: [`memory-bank/logs/telegram-webhook-smoke-2025-11-27.md`](../logs/telegram-webhook-smoke-2025-11-27.md) фиксируют успешный `POST /webhook` без `ReferenceError`, событие `[telegram-webhook]` и отправку `sendTyping` в диалоге и при запуске `/broadcast`.
+
+### Быстрый чек-лист (повторить при любом подозрении на падение вебхука)
+1. Запустить tail: `npx wrangler tail --env production --format pretty` и наблюдать вывод в отдельном окне/сессии.
+2. Отправить боту простое сообщение (например, `ping`) и команду `/broadcast` из whitelisted аккаунта.
+3. Ожидания в хвосте: строчка `[telegram-webhook]` с `chat_id_raw`/`chat_id`, далее `[sendTyping]`, отсутствие `ReferenceError` и финальный `status=200`.
+4. Зафиксировать хвост в `memory-bank/logs/telegram-webhook-smoke-<date>.md` и добавить ссылку в этот раздел.
+
 ## Требования к журналированию
 - Каждая рассылка фиксируется в журнале (например, `memory-bank/stable-builds.md` или отдельном operational log) с датой, администратором и кратким содержимым сообщения.
 - При сбоях сохранить фрагменты логов `wrangler tail` и описать шаги восстановления. При отладке проверять, что фоновые задачи `waitUntil` завершаются без ошибок и отдают ожидаемые метрики доставки.
