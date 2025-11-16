@@ -44,8 +44,8 @@ export {
   type BroadcastRecipientsAdminHandlers,
   type CreateBroadcastRecipientsAdminHandlersOptions,
 } from './broadcast-recipients-admin-route';
+export { createBroadcastDiagRoute } from './broadcast-diag-route';
 export {
-  createBroadcastDiagRoute,
   createBroadcastTelemetry,
   type BroadcastTelemetry,
   type BroadcastTelemetryRecord,
