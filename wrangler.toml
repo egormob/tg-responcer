@@ -14,7 +14,7 @@ id = "d03442f14f7e4a64bb1d7896244a0d3f"
 [[kv_namespaces]]
 binding = "AI_CONTROL_KV"
 id = "26fef8228c074edaaf20d3b1b8d42811"
-preview_namespace = "tg-responcer-ai-control-preview"
+
 
 [[kv_namespaces]]
 binding = "ADMIN_EXPORT_LOG"
@@ -23,10 +23,6 @@ id = "3da8d75b18b548ceb528fac891f6bb24"
 [[kv_namespaces]]
 binding = "ADMIN_TG_IDS"
 id = "6e0669bae62c48d5a8d64d11602e9d6d"
-
-[[kv_namespaces]]
-binding = "BROADCAST_RECIPIENTS_KV"
-id = "7b0aa2e77f0a4c0e8d9a665ea8bf60c4"
 
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive

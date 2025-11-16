@@ -26,8 +26,9 @@
 
 #### Настройка получателей рассылки
 
-Реестр рассылок хранится в таблице `broadcast_recipients` (миграция `0003_create_broadcast_recipients.sql`) и кэшируется в
-`BROADCAST_RECIPIENTS_KV`. Каждая запись содержит `chatId`, `username`, `languageCode`, дату создания и флаг активности. Реестр
+Реестр рассылок хранится в таблице `broadcast_recipients` (миграция `0003_create_broadcast_recipients.sql`). Он может кэшироваться в
+биндинге `BROADCAST_RECIPIENTS_KV`, если namespace создан и привязан (по умолчанию воркер читает напрямую из D1). Каждая запись содержит
+`chatId`, `username`, `languageCode`, дату создания и флаг активности. Реестр
 можно обслуживать через защищённые HTTP-эндпоинты:
 
 - `GET /admin/broadcast/recipients?token=…` — возвращает активных получателей, поддерживает фильтры `chatId`, `userId`,
