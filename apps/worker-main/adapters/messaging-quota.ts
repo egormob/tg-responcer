@@ -45,6 +45,7 @@ export const createQueuedMessagingPort = (
   const queue: Array<MessagingJob<unknown>> = [];
   let active = 0;
   const recentStarts: number[] = [];
+  let observedMaxQueue = 0;
 
   const reserveRateSlot = async () => {
     while (true) {
@@ -97,6 +98,17 @@ export const createQueuedMessagingPort = (
   const schedule = <Result>(task: () => Promise<Result>): Promise<Result> =>
     new Promise<Result>((resolve, reject) => {
       queue.push({ task, resolve, reject });
+
+      if (queue.length > observedMaxQueue && queue.length >= maxParallel) {
+        observedMaxQueue = queue.length;
+        logger?.warn?.('messaging quota queue backlog', {
+          queueSize: queue.length,
+          active,
+          maxParallel,
+          maxRps,
+        });
+      }
+
       processQueue();
     });
 
