@@ -537,6 +537,7 @@ describe('worker integration with cached router', () => {
       createOpenAIResponsesAdapter: vi.fn(() => ai),
       createD1StorageAdapter: vi.fn(() => storage),
       createKvRateLimitAdapter: vi.fn(() => rateLimit),
+      createQueuedMessagingPort: vi.fn((port) => port),
     }));
 
     const module = await import('../../../index');

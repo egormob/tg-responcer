@@ -4,6 +4,7 @@ import {
   createD1StorageAdapter,
   createOpenAIResponsesAdapter,
   createTelegramMessagingAdapter,
+  createQueuedMessagingPort,
   type D1Database,
   type RateLimitKvNamespace,
 } from './adapters';
@@ -44,6 +45,9 @@ import {
   createBroadcastRecipientsStore,
   createBroadcastRecipientsAdminHandlers,
   type BroadcastRecipientsStore,
+  createBroadcastDiagRoute,
+  createBroadcastTelemetry,
+  type BroadcastTelemetry,
 } from './features';
 import {
   createRouter,
@@ -78,6 +82,8 @@ interface WorkerBindings {
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   BROADCAST_RECIPIENTS?: string;
+  BROADCAST_MAX_PARALLEL?: string | number;
+  BROADCAST_MAX_RPS?: string | number;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
   RATE_LIMIT_WINDOW_MS?: string | number;
   RATE_LIMIT_NOTIFIER_WINDOW_MS?: string | number;
@@ -112,12 +118,21 @@ interface RateLimitConfig {
   windowMs: number;
 }
 
+interface BroadcastRuntimeConfig {
+  maxParallel: number;
+  maxRps: number;
+  emergencyStopRetryAfterMs: number;
+}
+
 const DEFAULT_AI_MAX_CONCURRENCY = 4;
 const DEFAULT_AI_QUEUE_MAX_SIZE = 64;
 const DEFAULT_AI_TIMEOUT_MS = 18_000;
 const DEFAULT_AI_RETRY_MAX = 3;
 const DEFAULT_AI_BASE_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_AI_ENDPOINT_FAILOVER_THRESHOLD = 3;
+const DEFAULT_BROADCAST_MAX_PARALLEL = 4;
+const DEFAULT_BROADCAST_MAX_RPS = 28;
+const DEFAULT_BROADCAST_EMERGENCY_RETRY_AFTER_MS = 5_000;
 
 const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -275,6 +290,22 @@ const readRateLimitConfig = (env: WorkerEnv): RateLimitConfig => ({
   limit: toPositiveInteger(env.RATE_LIMIT_DAILY_LIMIT) ?? DEFAULT_RATE_LIMIT,
   windowMs: toPositiveDurationMs(env.RATE_LIMIT_WINDOW_MS) ?? DEFAULT_RATE_LIMIT_WINDOW_MS,
 });
+
+const readBroadcastRuntimeConfig = (env: WorkerEnv): BroadcastRuntimeConfig => {
+  const maxParallel = toPositiveInteger(env.BROADCAST_MAX_PARALLEL)
+    ?? DEFAULT_BROADCAST_MAX_PARALLEL;
+  const maxRps = toPositiveInteger(env.BROADCAST_MAX_RPS) ?? DEFAULT_BROADCAST_MAX_RPS;
+  const emergencyStopRetryAfterMs = Math.max(
+    DEFAULT_BROADCAST_EMERGENCY_RETRY_AFTER_MS,
+    Math.ceil((1000 / Math.max(1, maxRps)) * 5),
+  );
+
+  return {
+    maxParallel,
+    maxRps,
+    emergencyStopRetryAfterMs,
+  } satisfies BroadcastRuntimeConfig;
+};
 
 const isEnabledFlag = (value: unknown): boolean => {
   const trimmed = getTrimmedString(value);
@@ -561,11 +592,19 @@ const createPortOverrides = (
   runtime: RuntimeConfig,
   aiRuntime: AiConcurrencyConfig,
   rateLimitConfig: RateLimitConfig,
+  broadcastRuntime: BroadcastRuntimeConfig,
 ): Partial<PortOverrides> => {
   const overrides: Partial<PortOverrides> = {
-    messaging: createTelegramMessagingAdapter({
-      botToken: runtime.telegramBotToken,
-    }),
+    messaging: createQueuedMessagingPort(
+      createTelegramMessagingAdapter({
+        botToken: runtime.telegramBotToken,
+      }),
+      {
+        maxParallel: broadcastRuntime.maxParallel,
+        maxRps: broadcastRuntime.maxRps,
+        logger: console,
+      },
+    ),
     ai: createOpenAIResponsesAdapter({
       apiKey: runtime.openAi.apiKey,
       model: runtime.openAi.model,
@@ -643,6 +682,7 @@ const createAdminRoutes = (
   knownUsers: TelegramWebhookHandler['knownUsers'],
   broadcastRecipientsStore: BroadcastRecipientsStore | undefined,
   exportRateTelemetry?: ExportRateTelemetry,
+  broadcastTelemetry?: BroadcastTelemetry,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -655,6 +695,7 @@ const createAdminRoutes = (
   });
   const aiQueueDiagRoute = createAiQueueDiagRoute({ ai: composition.ports.ai });
   const exportRateDiagRoute = createExportRateDiagRoute({ telemetry: exportRateTelemetry });
+  const broadcastDiagRoute = createBroadcastDiagRoute({ telemetry: broadcastTelemetry });
 
   const routes: RouterOptions['admin'] = {
     token: adminToken,
@@ -685,6 +726,9 @@ const createAdminRoutes = (
       }
       if (query === 'export-rate') {
         return exportRateDiagRoute(request);
+      }
+      if (query === 'broadcast') {
+        return broadcastDiagRoute(request);
       }
       return bindingsDiagRoute(request);
     },
@@ -730,6 +774,8 @@ const createTransformPayload = (
   adminErrorRecorder: AdminCommandErrorRecorder,
   broadcastRegistry: BroadcastRecipientsStore | undefined,
   exportRateTelemetry?: ExportRateTelemetry,
+  broadcastRuntime?: BroadcastRuntimeConfig,
+  broadcastTelemetry?: BroadcastTelemetry,
 ): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
@@ -772,6 +818,10 @@ const createTransformPayload = (
     console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');
   }
 
+  const poolOverrides = broadcastRuntime ? { concurrency: broadcastRuntime.maxParallel } : undefined;
+  const emergencyStop = broadcastRuntime
+    ? { retryAfterMs: broadcastRuntime.emergencyStopRetryAfterMs }
+    : undefined;
   const broadcastSender: SendBroadcast | undefined = broadcastEnabled
     ? broadcastRegistry
       ? createRegistryBroadcastSender({
@@ -779,11 +829,17 @@ const createTransformPayload = (
           registry: broadcastRegistry,
           fallbackRecipients: broadcastRecipients,
           logger: console,
+          pool: poolOverrides,
+          telemetry: broadcastTelemetry,
+          emergencyStop,
         })
       : createImmediateBroadcastSender({
           messaging: composition.ports.messaging,
           recipients: broadcastRecipients,
           logger: console,
+          pool: poolOverrides,
+          telemetry: broadcastTelemetry,
+          emergencyStop,
         })
     : undefined;
 
@@ -871,13 +927,15 @@ const createTransformPayload = (
 
 const createRequestHandler = async (env: WorkerEnv) => {
   const rateLimitConfig = readRateLimitConfig(env);
+  const broadcastRuntime = readBroadcastRuntimeConfig(env);
   const exportRateTelemetry = createExportRateTelemetry({
     limit: rateLimitConfig.limit,
     windowMs: rateLimitConfig.windowMs,
   });
+  const broadcastTelemetry = createBroadcastTelemetry();
   const runtime = validateRuntimeConfig(env);
   const aiRuntime = await readAiConcurrencyConfig(env);
-  const adapters = createPortOverrides(env, runtime, aiRuntime, rateLimitConfig);
+  const adapters = createPortOverrides(env, runtime, aiRuntime, rateLimitConfig, broadcastRuntime);
 
   const composition = composeWorker({
     env: {
@@ -921,6 +979,8 @@ const createRequestHandler = async (env: WorkerEnv) => {
     adminErrorRecorder,
     broadcastRegistry,
     exportRateTelemetry,
+    broadcastRuntime,
+    broadcastTelemetry,
   );
   const adminRoutes = createAdminRoutes(
     env,
@@ -930,6 +990,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     transformPayload.knownUsers,
     broadcastRegistry,
     exportRateTelemetry,
+    broadcastTelemetry,
   );
 
   const router = createRouter({

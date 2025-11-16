@@ -54,6 +54,8 @@ export {
   parseBroadcastRecipients,
   createBroadcastRecipientsStore,
   createBroadcastRecipientsAdminHandlers,
+  createBroadcastDiagRoute,
+  createBroadcastTelemetry,
 } from './broadcast';
 export type {
   BroadcastAudienceFilter,
@@ -75,6 +77,10 @@ export type {
   BroadcastRecipientsStore,
   BroadcastRecipientsAdminHandlers,
   CreateBroadcastRecipientsAdminHandlersOptions,
+  BroadcastTelemetry,
+  BroadcastTelemetryRecord,
+  BroadcastTelemetrySnapshot,
+  BroadcastTelemetryRecordInput,
 } from './broadcast';
 export {
   createD1StressRoute,

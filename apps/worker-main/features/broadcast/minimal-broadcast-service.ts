@@ -1,10 +1,37 @@
 import type { MessagingPort } from '../../ports';
 import type { BroadcastAudienceFilter } from './broadcast-payload';
+import type { BroadcastTelemetry } from './broadcast-telemetry';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
   warn?(message: string, details?: Record<string, unknown>): void;
   error?(message: string, details?: Record<string, unknown>): void;
+}
+
+export type BroadcastAbortReason = 'telegram_limit_exceeded' | 'send_text_failed';
+
+export interface BroadcastEmergencyStopOptions {
+  retryAfterMs?: number;
+}
+
+export class BroadcastAbortedError extends Error {
+  readonly reason: BroadcastAbortReason;
+  readonly context?: Record<string, unknown>;
+
+  constructor(reason: BroadcastAbortReason, context?: Record<string, unknown>, cause?: unknown) {
+    super(`broadcast aborted: ${reason}`);
+    this.name = 'BroadcastAbortedError';
+    this.reason = reason;
+    this.context = context;
+    if (cause !== undefined) {
+      try {
+        // @ts-expect-error cause might not be supported in target runtime
+        this.cause = cause;
+      } catch (error) {
+        // ignore when cause assignment is not supported
+      }
+    }
+  }
 }
 
 export interface BroadcastRecipient {
@@ -63,6 +90,8 @@ export interface CreateImmediateBroadcastSenderOptions {
   recipients: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
+  telemetry?: BroadcastTelemetry;
+  emergencyStop?: BroadcastEmergencyStopOptions;
 }
 
 export interface BroadcastRecipientsRegistry {
@@ -75,6 +104,8 @@ export interface CreateRegistryBroadcastSenderOptions {
   fallbackRecipients?: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
+  telemetry?: BroadcastTelemetry;
+  emergencyStop?: BroadcastEmergencyStopOptions;
 }
 
 const DEFAULT_POOL_OPTIONS: Required<Omit<BroadcastPoolOptions, 'wait' | 'random'>> = {
@@ -138,6 +169,36 @@ const getRetryAfterMs = (error: unknown): number | undefined => {
   }
 
   return undefined;
+};
+
+const getErrorStatus = (error: unknown): number | undefined => {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' && Number.isFinite(status) ? status : undefined;
+};
+
+const shouldAbortOnFailure = (error: unknown): boolean => {
+  const status = getErrorStatus(error);
+  if (status === undefined) {
+    return true;
+  }
+
+  if (status >= 500 || status === 401) {
+    return true;
+  }
+
+  return false;
+};
+
+const sanitizeEmergencyStopThreshold = (value: number | undefined): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(value);
 };
 
 const toErrorDetails = (error: unknown): { name: string; message: string } => {
@@ -217,6 +278,8 @@ interface CreateBroadcastSenderOptions {
   ) => Promise<readonly BroadcastRecipient[]> | readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
+  telemetry?: BroadcastTelemetry;
+  emergencyStop?: BroadcastEmergencyStopOptions;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
@@ -228,6 +291,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const random = options.pool?.random ?? Math.random;
   const concurrency = Math.max(1, Math.floor(poolOptions.concurrency));
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
+  const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
 
   return async ({ text, requestedBy, filters }) => {
     const resolved = await options.resolveRecipients(filters);
@@ -247,10 +311,53 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
     let throttledErrors = 0;
     const deliveries: BroadcastSendResultDelivery[] = new Array(recipients.length);
+    let abortedError: BroadcastAbortedError | undefined;
+
+    const ensureNotAborted = () => {
+      if (abortedError) {
+        throw abortedError;
+      }
+    };
+
+    const abortBroadcast = (
+      reason: BroadcastAbortReason,
+      context: Record<string, unknown>,
+      cause?: unknown,
+    ): never => {
+      if (!abortedError) {
+        abortedError = new BroadcastAbortedError(reason, context, cause);
+        options.logger?.error?.('broadcast pool aborted', {
+          requestedBy,
+          reason,
+          context,
+        });
+      }
+
+      throw abortedError;
+    };
+
+    const handleEmergencyThrottle = (retryAfterMs?: number, cause?: unknown) => {
+      if (
+        typeof emergencyStopThresholdMs === 'number'
+        && typeof retryAfterMs === 'number'
+        && retryAfterMs >= emergencyStopThresholdMs
+      ) {
+        abortBroadcast(
+          'telegram_limit_exceeded',
+          {
+            retryAfterMs,
+            thresholdMs: emergencyStopThresholdMs,
+            requestedBy,
+          },
+          cause,
+        );
+      }
+    };
 
     const sendWithRetry = async (
       recipient: BroadcastRecipient,
     ): Promise<BroadcastSendResultDelivery> => {
+      ensureNotAborted();
       let attempt = 0;
 
       while (attempt < maxAttempts) {
@@ -274,15 +381,31 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
             messageId: result?.messageId,
           } satisfies BroadcastSendResultDelivery;
         } catch (error) {
+          ensureNotAborted();
           const tooManyRequests = isTooManyRequestsError(error);
           const shouldRetry = tooManyRequests && attempt < maxAttempts - 1;
+          const retryAfterMs = getRetryAfterMs(error);
 
           if (tooManyRequests) {
             throttledErrors += 1;
+            handleEmergencyThrottle(retryAfterMs, error);
           }
 
           if (!shouldRetry) {
             const details = toErrorDetails(error);
+
+            if (!tooManyRequests && shouldAbortOnFailure(error)) {
+              abortBroadcast(
+                'send_text_failed',
+                {
+                  requestedBy,
+                  chatId: recipient.chatId,
+                  threadId: recipient.threadId ?? null,
+                  status: getErrorStatus(error) ?? null,
+                },
+                error,
+              );
+            }
 
             options.logger?.error?.('broadcast delivery failed', {
               requestedBy,
@@ -299,7 +422,6 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
           }
 
           const retryIndex = attempt;
-          const retryAfterMs = getRetryAfterMs(error);
           const delayMs = computeDelay(
             retryIndex,
             poolOptions.baseDelayMs,
@@ -345,20 +467,75 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       }
     };
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    let aborted = false;
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    } catch (error) {
+      if (error instanceof BroadcastAbortedError) {
+        aborted = true;
+        for (let index = 0; index < deliveries.length; index += 1) {
+          if (!deliveries[index]) {
+            deliveries[index] = {
+              recipient: recipients[index],
+              error: {
+                name: 'BroadcastAborted',
+                message: error.message,
+              },
+            } satisfies BroadcastSendResultDelivery;
+          }
+        }
+      } else {
+        throw error;
+      }
+    }
 
     const delivered = deliveries.filter((entry) => !entry.error).length;
     const failed = deliveries.length - delivered;
+    const durationMs = Date.now() - startedAt;
 
-    options.logger?.info?.('broadcast pool completed', {
+    if (aborted && abortedError) {
+      options.logger?.error?.('broadcast pool aborted summary', {
+        requestedBy,
+        recipients: deliveries.length,
+        delivered,
+        failed,
+        poolSize: concurrency,
+        throttled429: throttledErrors,
+        durationMs,
+        reason: abortedError.reason,
+      });
+    } else {
+      options.logger?.info?.('broadcast pool completed', {
+        requestedBy,
+        recipients: deliveries.length,
+        delivered,
+        failed,
+        poolSize: concurrency,
+        throttled429: throttledErrors,
+        durationMs,
+      });
+    }
+
+    options.telemetry?.record({
       requestedBy,
       recipients: deliveries.length,
       delivered,
       failed,
-      poolSize: concurrency,
       throttled429: throttledErrors,
-      durationMs: Date.now() - startedAt,
+      durationMs,
+      startedAt: new Date(startedAt),
+      completedAt: new Date(startedAt + durationMs),
+      status: aborted && abortedError ? 'aborted' : 'ok',
+      abortReason: abortedError?.reason,
+      error: abortedError
+        ? { name: abortedError.name, message: abortedError.message }
+        : undefined,
+      filters,
     });
+
+    if (aborted && abortedError) {
+      throw abortedError;
+    }
 
     return {
       delivered,
@@ -376,6 +553,8 @@ export const createImmediateBroadcastSender = (
     resolveRecipients: () => options.recipients,
     logger: options.logger,
     pool: options.pool,
+    telemetry: options.telemetry,
+    emergencyStop: options.emergencyStop,
   });
 
 export const createRegistryBroadcastSender = (
@@ -420,5 +599,7 @@ export const createRegistryBroadcastSender = (
     resolveRecipients,
     logger: options.logger,
     pool: options.pool,
+    telemetry: options.telemetry,
+    emergencyStop: options.emergencyStop,
   });
 };
