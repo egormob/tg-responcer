@@ -62,6 +62,7 @@ export type {
   BroadcastRecipientsParserLogger,
   CreateTelegramBroadcastCommandHandlerOptions,
   PendingBroadcast,
+  BroadcastPendingKvNamespace,
   SendBroadcast,
   CreateImmediateBroadcastSenderOptions,
   CreateRegistryBroadcastSenderOptions,

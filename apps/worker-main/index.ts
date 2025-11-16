@@ -40,6 +40,7 @@ import {
   type SendBroadcast,
   type AdminCommandErrorRecorder,
   type PendingBroadcast,
+  type BroadcastPendingKvNamespace,
   createBroadcastRecipientsStore,
   createBroadcastRecipientsAdminHandlers,
   type BroadcastRecipientsStore,
@@ -73,6 +74,7 @@ interface WorkerBindings {
   ADMIN_EXPORT_KV?: AdminExportRateLimitKvNamespace;
   ADMIN_EXPORT_LOG?: KVNamespace;
   BROADCAST_RECIPIENTS_KV?: KVNamespace;
+  BROADCAST_PENDING_KV?: BroadcastPendingKvNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
   BROADCAST_RECIPIENTS?: string;
@@ -794,6 +796,7 @@ const createTransformPayload = (
         now: () => new Date(),
         adminErrorRecorder,
         pendingStore: broadcastPendingStore,
+        pendingKv: env.BROADCAST_PENDING_KV,
       })
     : undefined;
 

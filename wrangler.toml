@@ -24,6 +24,10 @@ id = "3da8d75b18b548ceb528fac891f6bb24"
 binding = "ADMIN_TG_IDS"
 id = "6e0669bae62c48d5a8d64d11602e9d6d"
 
+[[kv_namespaces]]
+binding = "BROADCAST_PENDING_KV"
+id = "ec8ca40dbcca469fa73fe6f3850ef596"
+
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
 # values are managed as secrets (see `scripts/bootstrap-cloudflare-secrets.sh`). D1 и KV

@@ -16,6 +16,7 @@ export {
   type CreateTelegramBroadcastCommandHandlerOptions,
   type TelegramBroadcastCommandHandler,
   type PendingBroadcast,
+  type BroadcastPendingKvNamespace,
 } from './telegram-broadcast-command';
 export {
   createImmediateBroadcastSender,
