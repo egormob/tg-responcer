@@ -87,6 +87,7 @@ export interface BroadcastPoolOptions {
 
 export interface CreateImmediateBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
+  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
   recipients: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
@@ -100,6 +101,7 @@ export interface BroadcastRecipientsRegistry {
 
 export interface CreateRegistryBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
+  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
   registry: BroadcastRecipientsRegistry;
   fallbackRecipients?: readonly BroadcastRecipient[];
   logger?: Logger;
@@ -285,6 +287,7 @@ type ResolveRecipients = (
 
 interface CreateBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
+  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
   resolveRecipients: ResolveRecipients;
   logger?: Logger;
   pool?: BroadcastPoolOptions;
@@ -302,6 +305,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const concurrency = Math.max(1, Math.floor(poolOptions.concurrency));
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
+  const deliveryMessaging = options.messagingBroadcast ?? options.messaging;
 
   const normalizeResolveResult = (
     result: Awaited<ReturnType<ResolveRecipients>>,
@@ -415,7 +419,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
       while (attempt < maxAttempts) {
         try {
-          const result = await options.messaging.sendText({
+          const result = await deliveryMessaging.sendText({
             chatId: recipient.chatId,
             threadId: recipient.threadId,
             text,
@@ -616,6 +620,7 @@ export const createImmediateBroadcastSender = (
 ): SendBroadcast =>
   createBroadcastSender({
     messaging: options.messaging,
+    messagingBroadcast: options.messagingBroadcast,
     resolveRecipients: (filters) => {
       options.logger?.info?.('broadcast using env recipients', {
         filters: filters ?? null,
@@ -675,6 +680,7 @@ export const createRegistryBroadcastSender = (
 
   return createBroadcastSender({
     messaging: options.messaging,
+    messagingBroadcast: options.messagingBroadcast,
     resolveRecipients,
     logger: options.logger,
     pool: options.pool,

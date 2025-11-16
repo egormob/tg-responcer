@@ -11,4 +11,8 @@ export type {
   RateLimitKvNamespace,
 } from './kv-rate-limit';
 export { createQueuedMessagingPort } from './messaging-quota';
-export type { MessagingQuotaOptions, MessagingQuotaLogger } from './messaging-quota';
+export type {
+  MessagingQuotaOptions,
+  MessagingQuotaLogger,
+  MessagingQuotaSharedState,
+} from './messaging-quota';

@@ -10,6 +10,8 @@ export interface MessagingQuotaOptions {
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
   logger?: MessagingQuotaLogger;
+  priority?: 'high' | 'normal';
+  sharedState?: MessagingQuotaSharedState;
 }
 
 interface MessagingJob<Result> {
@@ -18,11 +20,29 @@ interface MessagingJob<Result> {
   reject: (reason: unknown) => void;
 }
 
+export interface MessagingQuotaSharedState {
+  queue: {
+    high: Array<MessagingJob<unknown>>;
+    normal: Array<MessagingJob<unknown>>;
+  };
+  active: number;
+  recentStarts: number[];
+  observedMaxQueue: number;
+  limits?: { maxParallel: number; maxRps: number };
+}
+
 const DEFAULT_MAX_PARALLEL = 4;
 const DEFAULT_MAX_RPS = 28;
 
 const createWait = (wait?: (ms: number) => Promise<void>) =>
   wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+
+const createSharedState = (): MessagingQuotaSharedState => ({
+  queue: { high: [], normal: [] },
+  active: 0,
+  recentStarts: [],
+  observedMaxQueue: 0,
+});
 
 const sanitizeLimit = (value: number | undefined, fallback: number) => {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -41,45 +61,54 @@ export const createQueuedMessagingPort = (
   const now = options.now ?? (() => Date.now());
   const wait = createWait(options.wait);
   const logger = options.logger;
+  const state = options.sharedState ?? createSharedState();
+  const priority = options.priority ?? 'normal';
 
-  const queue: Array<MessagingJob<unknown>> = [];
-  let active = 0;
-  const recentStarts: number[] = [];
-  let observedMaxQueue = 0;
+  if (!state.limits) {
+    state.limits = { maxParallel, maxRps };
+  } else if (state.limits.maxParallel !== maxParallel || state.limits.maxRps !== maxRps) {
+    logger?.warn?.('messaging quota shared limits mismatch', {
+      previous: state.limits,
+      next: { maxParallel, maxRps },
+    });
+  }
+
+  const resolvedMaxParallel = state.limits.maxParallel;
+  const resolvedMaxRps = state.limits.maxRps;
 
   const reserveRateSlot = async () => {
     while (true) {
       const timestamp = now();
       const windowStart = timestamp - 1000;
-      while (recentStarts.length > 0 && recentStarts[0] <= windowStart) {
-        recentStarts.shift();
+      while (state.recentStarts.length > 0 && state.recentStarts[0] <= windowStart) {
+        state.recentStarts.shift();
       }
 
-      if (recentStarts.length < maxRps) {
-        recentStarts.push(timestamp);
+      if (state.recentStarts.length < resolvedMaxRps) {
+        state.recentStarts.push(timestamp);
         return;
       }
 
-      const nextAllowedAt = (recentStarts[0] ?? timestamp) + 1000;
+      const nextAllowedAt = (state.recentStarts[0] ?? timestamp) + 1000;
       const delayMs = Math.max(1, nextAllowedAt - timestamp);
       logger?.warn?.('messaging quota throttled sendText', {
         delayMs,
-        queueSize: queue.length,
-        maxParallel,
-        maxRps,
+        queueSize: state.queue.high.length + state.queue.normal.length,
+        maxParallel: resolvedMaxParallel,
+        maxRps: resolvedMaxRps,
       });
       await wait(delayMs);
     }
   };
 
   const processQueue = () => {
-    while (active < maxParallel && queue.length > 0) {
-      const job = queue.shift();
+    while (state.active < resolvedMaxParallel) {
+      const job = state.queue.high.shift() ?? state.queue.normal.shift();
       if (!job) {
         return;
       }
 
-      active += 1;
+      state.active += 1;
       void (async () => {
         try {
           await reserveRateSlot();
@@ -88,7 +117,7 @@ export const createQueuedMessagingPort = (
         } catch (error) {
           job.reject(error);
         } finally {
-          active -= 1;
+          state.active -= 1;
           processQueue();
         }
       })();
@@ -97,15 +126,16 @@ export const createQueuedMessagingPort = (
 
   const schedule = <Result>(task: () => Promise<Result>): Promise<Result> =>
     new Promise<Result>((resolve, reject) => {
-      queue.push({ task, resolve, reject });
+      state.queue[priority].push({ task, resolve, reject });
+      const queueSize = state.queue.high.length + state.queue.normal.length;
 
-      if (queue.length > observedMaxQueue && queue.length >= maxParallel) {
-        observedMaxQueue = queue.length;
+      if (queueSize > state.observedMaxQueue && queueSize >= resolvedMaxParallel) {
+        state.observedMaxQueue = queueSize;
         logger?.warn?.('messaging quota queue backlog', {
-          queueSize: queue.length,
-          active,
-          maxParallel,
-          maxRps,
+          queueSize,
+          active: state.active,
+          maxParallel: resolvedMaxParallel,
+          maxRps: resolvedMaxRps,
         });
       }
 

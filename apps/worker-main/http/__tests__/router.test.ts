@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DialogEngine } from '../../core/DialogEngine';
 import type { MessagingPort, StoragePort } from '../../ports';
+import { createQueuedMessagingPort, type MessagingQuotaSharedState } from '../../adapters';
 import { createTelegramWebhookHandler } from '../../features';
 import {
   createTelegramBroadcastCommandHandler,
   BROADCAST_PROMPT_MESSAGE,
   BROADCAST_AUDIENCE_PROMPT,
   BROADCAST_SUCCESS_MESSAGE,
+  createImmediateBroadcastSender,
 } from '../../features/broadcast';
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
 import { createSelfTestRoute } from '../../features/admin-diagnostics/self-test-route';
@@ -19,7 +21,7 @@ import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
 describe('http router', () => {
   beforeEach(() => {
     resetLastTelegramUpdateSnapshot();
-  });
+  }, 10000);
 
   const createDialogEngineMock = () => ({
     handleMessage: vi.fn(),
@@ -1308,6 +1310,187 @@ describe('http router', () => {
       threadId: undefined,
       text: BROADCAST_SUCCESS_MESSAGE,
     });
+  });
+
+  it('keeps dialog responses snappy while broadcast queue is busy', async () => {
+    const sharedState: MessagingQuotaSharedState = {
+      queue: { high: [], normal: [] },
+      active: 0,
+      recentStarts: [],
+      observedMaxQueue: 0,
+    };
+
+    const pendingBroadcastSends: Array<ReturnType<typeof createDeferred<{ messageId?: string }>>> = [];
+
+    const sendText = vi.fn((input: Parameters<MessagingPort['sendText']>[0]) => {
+      if (input.chatId === 'admin-chat') {
+        return Promise.resolve({ messageId: 'admin-reply' });
+      }
+
+      if (input.chatId === 'dialog-chat') {
+        return Promise.resolve({ messageId: 'dialog-reply' });
+      }
+
+      const deferred = createDeferred<{ messageId?: string }>();
+      pendingBroadcastSends.push(deferred);
+      return deferred.promise;
+    });
+
+    const messagingAdapter = {
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      sendText,
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MessagingPort;
+
+    const broadcastMessaging = createQueuedMessagingPort(messagingAdapter, {
+      maxParallel: 2,
+      maxRps: 10,
+      logger: console,
+      sharedState,
+    });
+
+    const dialogMessaging = createQueuedMessagingPort(messagingAdapter, {
+      maxParallel: 2,
+      maxRps: 10,
+      logger: console,
+      sharedState,
+      priority: 'high',
+    });
+
+    const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: dialogMessaging,
+      messagingBroadcast: broadcastMessaging,
+      recipients: [{ chatId: 'broadcast-1' }],
+      logger: console,
+      pool: { concurrency: 1 },
+    });
+
+    const handler = createTelegramBroadcastCommandHandler({
+      adminAccess,
+      messaging: dialogMessaging,
+      sendBroadcast,
+      logger: console,
+      now: () => new Date('2024-01-01T00:00:00Z'),
+    });
+
+    const transformPayload = createTelegramWebhookHandler({
+      storage: createStorageMock(),
+      features: {
+        handleAdminCommand: (context) => handler.handleCommand(context),
+        handleMessage: (message, featureContext) => handler.handleMessage(message, featureContext),
+      },
+    });
+
+    const dialogEngine = {
+      handleMessage: vi.fn(async (message: Parameters<DialogEngine['handleMessage']>[0]) => {
+        await dialogMessaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: 'dialog-ok',
+        });
+
+        return {
+          status: 'replied',
+          response: { text: 'dialog-ok', messageId: 'dialog-1' },
+        };
+      }),
+    } as unknown as DialogEngine;
+
+    const router = createRouter({
+      dialogEngine,
+      messaging: dialogMessaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands: transformPayload.systemCommands,
+      typingIndicator: createTypingIndicatorMock(dialogMessaging),
+    });
+
+    const commandUpdate = {
+      update_id: 3001,
+      message: {
+        message_id: '900',
+        date: '1704067200',
+        chat: { id: 'admin-chat', type: 'private' },
+        from: { id: '2020', first_name: 'Admin' },
+        text: '/broadcast',
+        entities: [
+          { type: 'bot_command', offset: 0, length: '/broadcast'.length },
+        ],
+      },
+    };
+
+    const textUpdate = {
+      update_id: 3002,
+      message: {
+        message_id: '901',
+        date: '1704067205',
+        chat: { id: 'admin-chat', type: 'private' },
+        from: { id: '2020', first_name: 'Admin' },
+        text: 'announcement',
+      },
+    };
+
+    const commandResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(commandUpdate),
+      }),
+    );
+
+    expect(commandResponse.status).toBe(200);
+    await expect(commandResponse.json()).resolves.toEqual({ status: 'awaiting_audience' });
+    expect(sendText).toHaveBeenCalledWith({
+      chatId: 'admin-chat',
+      threadId: undefined,
+      text: BROADCAST_AUDIENCE_PROMPT,
+    });
+
+    const waitUntil = vi.fn();
+    const textResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(textUpdate),
+      }),
+      { waitUntil },
+    );
+
+    expect(textResponse.status).toBe(200);
+    await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    const backgroundTask = waitUntil.mock.calls[0]?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
+
+    expect(pendingBroadcastSends.length).toBeGreaterThanOrEqual(1);
+
+    const userResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          update_id: 3003,
+          message: {
+            message_id: '902',
+            date: '1704067210',
+            chat: { id: 'dialog-chat', type: 'private' },
+            from: { id: '3030', first_name: 'User' },
+            text: 'ping',
+          },
+        }),
+      }),
+    );
+
+    expect(userResponse.status).toBe(200);
+    await expect(userResponse.json()).resolves.toEqual({ status: 'ok', messageId: 'dialog-1' });
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: 'dialog-chat', text: 'dialog-ok' }),
+    );
+
+    pendingBroadcastSends.forEach((deferred, index) => deferred.resolve({ messageId: `broadcast-${index}` }));
+    await backgroundTask;
   });
 
   it('exposes parseIncomingMessage for custom transformations', () => {

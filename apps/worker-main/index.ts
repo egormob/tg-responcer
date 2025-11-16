@@ -5,6 +5,7 @@ import {
   createOpenAIResponsesAdapter,
   createTelegramMessagingAdapter,
   createQueuedMessagingPort,
+  type MessagingQuotaSharedState,
   type D1Database,
   type RateLimitKvNamespace,
 } from './adapters';
@@ -593,18 +594,35 @@ const createPortOverrides = (
   aiRuntime: AiConcurrencyConfig,
   rateLimitConfig: RateLimitConfig,
   broadcastRuntime: BroadcastRuntimeConfig,
-): Partial<PortOverrides> => {
+): { overrides: Partial<PortOverrides>; broadcastMessaging: MessagingPort } => {
+  const telegramMessaging = createTelegramMessagingAdapter({
+    botToken: runtime.telegramBotToken,
+  });
+
+  const sharedQuotaState: MessagingQuotaSharedState = {
+    queue: { high: [], normal: [] },
+    active: 0,
+    recentStarts: [],
+    observedMaxQueue: 0,
+  };
+
+  const broadcastMessaging = createQueuedMessagingPort(telegramMessaging, {
+    maxParallel: broadcastRuntime.maxParallel,
+    maxRps: broadcastRuntime.maxRps,
+    logger: console,
+    sharedState: sharedQuotaState,
+  });
+
+  const dialogMessaging = createQueuedMessagingPort(telegramMessaging, {
+    maxParallel: broadcastRuntime.maxParallel,
+    maxRps: broadcastRuntime.maxRps,
+    logger: console,
+    priority: 'high',
+    sharedState: sharedQuotaState,
+  });
+
   const overrides: Partial<PortOverrides> = {
-    messaging: createQueuedMessagingPort(
-      createTelegramMessagingAdapter({
-        botToken: runtime.telegramBotToken,
-      }),
-      {
-        maxParallel: broadcastRuntime.maxParallel,
-        maxRps: broadcastRuntime.maxRps,
-        logger: console,
-      },
-    ),
+    messaging: dialogMessaging,
     ai: createOpenAIResponsesAdapter({
       apiKey: runtime.openAi.apiKey,
       model: runtime.openAi.model,
@@ -630,7 +648,7 @@ const createPortOverrides = (
     });
   }
 
-  return overrides;
+  return { overrides, broadcastMessaging };
 };
 
 const createTypingIndicatorIfAvailable = (messagingPort: MessagingPort): TypingIndicator =>
@@ -776,6 +794,7 @@ const createTransformPayload = (
   exportRateTelemetry?: ExportRateTelemetry,
   broadcastRuntime?: BroadcastRuntimeConfig,
   broadcastTelemetry?: BroadcastTelemetry,
+  messagingBroadcast?: MessagingPort,
 ): TelegramWebhookHandler => {
   const botToken = getTrimmedString(env.TELEGRAM_BOT_TOKEN);
   const adminExportKv = env.ADMIN_EXPORT_KV ?? env.ADMIN_TG_IDS;
@@ -826,6 +845,7 @@ const createTransformPayload = (
     ? broadcastRegistry
       ? createRegistryBroadcastSender({
           messaging: composition.ports.messaging,
+          messagingBroadcast,
           registry: broadcastRegistry,
           fallbackRecipients: broadcastRecipients,
           logger: console,
@@ -835,6 +855,7 @@ const createTransformPayload = (
         })
       : createImmediateBroadcastSender({
           messaging: composition.ports.messaging,
+          messagingBroadcast,
           recipients: broadcastRecipients,
           logger: console,
           pool: poolOverrides,
@@ -935,7 +956,13 @@ const createRequestHandler = async (env: WorkerEnv) => {
   const broadcastTelemetry = createBroadcastTelemetry();
   const runtime = validateRuntimeConfig(env);
   const aiRuntime = await readAiConcurrencyConfig(env);
-  const adapters = createPortOverrides(env, runtime, aiRuntime, rateLimitConfig, broadcastRuntime);
+  const { overrides: adapters, broadcastMessaging } = createPortOverrides(
+    env,
+    runtime,
+    aiRuntime,
+    rateLimitConfig,
+    broadcastRuntime,
+  );
 
   const composition = composeWorker({
     env: {
@@ -981,6 +1008,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     exportRateTelemetry,
     broadcastRuntime,
     broadcastTelemetry,
+    broadcastMessaging,
   );
   const adminRoutes = createAdminRoutes(
     env,
