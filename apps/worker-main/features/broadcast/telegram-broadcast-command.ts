@@ -23,6 +23,10 @@ interface Logger {
 
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
+const BROADCAST_PENDING_KV_VERSION = 1;
+const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';
+const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
+const MINIMUM_KV_TTL_SECONDS = 60;
 
 export const BROADCAST_PROMPT_MESSAGE =
   'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
@@ -55,6 +59,8 @@ export interface PendingBroadcast {
   filters?: BroadcastAudienceFilter;
 }
 
+export type BroadcastPendingKvNamespace = Pick<KVNamespace, 'get' | 'put' | 'delete' | 'list'>;
+
 const toErrorDetails = (error: unknown) =>
   error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) };
 
@@ -80,6 +86,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   logger?: Logger;
   adminErrorRecorder?: AdminCommandErrorRecorder;
   pendingStore?: Map<string, PendingBroadcast>;
+  pendingKv?: BroadcastPendingKvNamespace;
 }
 
 export interface TelegramBroadcastCommandHandler {
@@ -184,7 +191,216 @@ export const createTelegramBroadcastCommandHandler = (
   const pendingTtlMs = Math.max(1, options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS);
   const now = options.now ?? (() => new Date());
 
-  const pending = options.pendingStore ?? new Map<string, PendingBroadcast>();
+  const pendingCache = options.pendingStore ?? new Map<string, PendingBroadcast>();
+  const pendingKv = options.pendingKv;
+
+  const maintenanceState: { lastRunAt: number; promise?: Promise<void> } = { lastRunAt: 0 };
+
+  const getUserKey = (userId: string | number | bigint): string => String(userId);
+
+  const cleanupExpiredCache = (timestamp: number) => {
+    for (const [key, entry] of pendingCache.entries()) {
+      if (entry.expiresAt <= timestamp) {
+        pendingCache.delete(key);
+      }
+    }
+  };
+
+  const getPendingKvKey = (userId: string): string => `${BROADCAST_PENDING_KV_PREFIX}${userId}`;
+
+  const serializePendingEntry = (entry: PendingBroadcast): string =>
+    JSON.stringify({ version: BROADCAST_PENDING_KV_VERSION, entry });
+
+  const parsePendingEntry = (raw: string | null): PendingBroadcast | undefined => {
+    if (!raw) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as {
+        version?: number;
+        entry?: PendingBroadcast;
+      };
+
+      if (
+        parsed.version !== BROADCAST_PENDING_KV_VERSION ||
+        !parsed.entry ||
+        typeof parsed.entry.chatId !== 'string' ||
+        typeof parsed.entry.expiresAt !== 'number' ||
+        (parsed.entry.stage !== 'audience' && parsed.entry.stage !== 'text')
+      ) {
+        return undefined;
+      }
+
+      return {
+        chatId: parsed.entry.chatId,
+        threadId: parsed.entry.threadId ?? undefined,
+        expiresAt: parsed.entry.expiresAt,
+        stage: parsed.entry.stage,
+        filters: parsed.entry.filters,
+      } satisfies PendingBroadcast;
+    } catch (error) {
+      logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
+      return undefined;
+    }
+  };
+
+  const savePendingEntry = async (userKey: string, entry: PendingBroadcast): Promise<void> => {
+    pendingCache.set(userKey, entry);
+
+    if (!pendingKv) {
+      return;
+    }
+
+    const remainingMs = Math.max(1, entry.expiresAt - now().getTime());
+    const ttlSeconds = Math.max(MINIMUM_KV_TTL_SECONDS, Math.ceil(remainingMs / 1000));
+
+    try {
+      await pendingKv.put(getPendingKvKey(userKey), serializePendingEntry(entry), {
+        expirationTtl: ttlSeconds,
+      });
+    } catch (error) {
+      logger.error('failed to persist broadcast pending session', {
+        userId: userKey,
+        error: toErrorDetails(error),
+      });
+    }
+  };
+
+  const deletePendingEntry = async (userKey: string): Promise<void> => {
+    pendingCache.delete(userKey);
+
+    if (!pendingKv) {
+      return;
+    }
+
+    try {
+      await pendingKv.delete(getPendingKvKey(userKey));
+    } catch (error) {
+      logger.error('failed to delete broadcast pending session', {
+        userId: userKey,
+        error: toErrorDetails(error),
+      });
+    }
+  };
+
+  const loadPendingEntry = async (userKey: string, timestamp: number): Promise<PendingBroadcast | undefined> => {
+    const cached = pendingCache.get(userKey);
+    if (cached) {
+      if (cached.expiresAt > timestamp) {
+        return cached;
+      }
+
+      pendingCache.delete(userKey);
+    }
+
+    if (!pendingKv) {
+      return undefined;
+    }
+
+    try {
+      const raw = await pendingKv.get(getPendingKvKey(userKey), 'text');
+      const entry = parsePendingEntry(raw);
+
+      if (!entry) {
+        return undefined;
+      }
+
+      if (entry.expiresAt <= timestamp) {
+        await deletePendingEntry(userKey);
+        return undefined;
+      }
+
+      pendingCache.set(userKey, entry);
+      return entry;
+    } catch (error) {
+      logger.error('failed to read broadcast pending session', {
+        userId: userKey,
+        error: toErrorDetails(error),
+      });
+
+      return undefined;
+    }
+  };
+
+  type MaintenanceReason = 'command' | 'message';
+
+  const runMaintenance = async (reason: MaintenanceReason, timestamp: number): Promise<void> => {
+    cleanupExpiredCache(timestamp);
+
+    if (!pendingKv) {
+      return;
+    }
+
+    try {
+      let cursor: string | undefined;
+      let listComplete = false;
+      let activePending = 0;
+      let expiredPending = 0;
+      const expiredKeys: string[] = [];
+
+      while (!listComplete) {
+        const result = await pendingKv.list({ prefix: BROADCAST_PENDING_KV_PREFIX, cursor });
+        listComplete = result.list_complete;
+        cursor = result.cursor;
+
+        for (const key of result.keys) {
+          const expirationMs = key.expiration ? key.expiration * 1000 : undefined;
+          if (expirationMs && expirationMs > timestamp) {
+            activePending += 1;
+            continue;
+          }
+
+          expiredPending += 1;
+          expiredKeys.push(key.name);
+        }
+      }
+
+      if (expiredKeys.length > 0) {
+        await Promise.allSettled(expiredKeys.map((name) => pendingKv.delete(name)));
+      }
+
+      logger.info('broadcast pending metrics', {
+        reason,
+        activePending,
+        expiredPending,
+      });
+    } catch (error) {
+      logger.error('broadcast pending maintenance failed', {
+        reason,
+        error: toErrorDetails(error),
+      });
+    }
+  };
+
+  const scheduleMaintenance = (reason: MaintenanceReason, context?: TransformPayloadContext) => {
+    if (!pendingKv) {
+      cleanupExpiredCache(now().getTime());
+      return;
+    }
+
+    const timestamp = now().getTime();
+    if (maintenanceState.promise) {
+      return;
+    }
+
+    if (timestamp - maintenanceState.lastRunAt < PENDING_MAINTENANCE_INTERVAL_MS) {
+      return;
+    }
+
+    const maintenancePromise = runMaintenance(reason, timestamp).finally(() => {
+      maintenanceState.promise = undefined;
+      maintenanceState.lastRunAt = timestamp;
+    });
+
+    maintenanceState.promise = maintenancePromise;
+
+    if (context?.waitUntil) {
+      context.waitUntil(maintenancePromise);
+    } else {
+      void maintenancePromise;
+    }
+  };
 
   const handleAudienceSelection = async (
     message: IncomingMessage,
@@ -192,6 +408,7 @@ export const createTelegramBroadcastCommandHandler = (
     selection: BroadcastAudienceFilter | undefined,
   ): Promise<'handled'> => {
     const text = message.text ?? '';
+    const userKey = getUserKey(message.user.userId);
 
     const updatedEntry: PendingBroadcast = {
       ...entry,
@@ -200,7 +417,7 @@ export const createTelegramBroadcastCommandHandler = (
       expiresAt: now().getTime() + pendingTtlMs,
     };
 
-    pending.set(message.user.userId, updatedEntry);
+    await savePendingEntry(userKey, updatedEntry);
 
     try {
       await options.messaging.sendText({
@@ -216,7 +433,7 @@ export const createTelegramBroadcastCommandHandler = (
         filters: updatedEntry.filters ?? null,
       });
     } catch (error) {
-      pending.delete(message.user.userId);
+      await deletePendingEntry(userKey);
 
       logger.error('failed to send broadcast text prompt', {
         userId: message.user.userId,
@@ -250,25 +467,19 @@ export const createTelegramBroadcastCommandHandler = (
     });
   };
 
-  const cleanupExpired = (timestamp: number) => {
-    for (const [key, entry] of pending.entries()) {
-      if (entry.expiresAt <= timestamp) {
-        pending.delete(key);
-      }
-    }
-  };
-
   const handleCommand = async (context: TelegramAdminCommandContext): Promise<Response | void> => {
     const currentTime = now().getTime();
-    cleanupExpired(currentTime);
+    cleanupExpiredCache(currentTime);
+    scheduleMaintenance('command');
 
     const broadcastRequested = isBroadcastCommand(context);
     const unsupportedAdminBroadcast = !broadcastRequested && isUnsupportedAdminBroadcast(context);
 
     if (!broadcastRequested && !unsupportedAdminBroadcast) {
-      const entry = pending.get(context.from.userId);
+      const userKey = getUserKey(context.from.userId);
+      const entry = await loadPendingEntry(userKey, currentTime);
       if (entry) {
-        pending.delete(context.from.userId);
+        await deletePendingEntry(userKey);
 
         logger.info('broadcast pending cleared before non-broadcast command', {
           userId: context.from.userId,
@@ -317,9 +528,11 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     const timestamp = now().getTime();
-    cleanupExpired(timestamp);
+    cleanupExpiredCache(timestamp);
 
-    pending.set(context.from.userId, {
+    const userKey = getUserKey(context.from.userId);
+
+    await savePendingEntry(userKey, {
       chatId: context.chat.id,
       threadId: context.chat.threadId,
       expiresAt: timestamp + pendingTtlMs,
@@ -339,7 +552,7 @@ export const createTelegramBroadcastCommandHandler = (
         threadId: context.chat.threadId ?? null,
       });
     } catch (error) {
-      pending.delete(context.from.userId);
+      await deletePendingEntry(userKey);
 
       logger.error('failed to send broadcast prompt', {
         userId: context.from.userId,
@@ -361,14 +574,16 @@ export const createTelegramBroadcastCommandHandler = (
     context?: TransformPayloadContext,
   ): Promise<'handled' | void> => {
     const currentTime = now().getTime();
-    cleanupExpired(currentTime);
+    cleanupExpiredCache(currentTime);
+    scheduleMaintenance('message', context);
 
-    const entry = pending.get(message.user.userId);
+    const userKey = getUserKey(message.user.userId);
+    const entry = await loadPendingEntry(userKey, currentTime);
     if (!entry) {
       return undefined;
     }
 
-    pending.delete(message.user.userId);
+    await deletePendingEntry(userKey);
 
     if (entry.chatId !== message.chat.id) {
       return undefined;

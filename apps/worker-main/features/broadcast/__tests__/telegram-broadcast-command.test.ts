@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTelegramBroadcastCommandHandler } from '../telegram-broadcast-command';
+import type { BroadcastPendingKvNamespace } from '../telegram-broadcast-command';
 import type { TelegramAdminCommandContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
@@ -58,6 +59,35 @@ const createDeferred = <T>() => {
   });
 
   return { promise, resolve, reject };
+};
+
+const createPendingKv = () => {
+  const store = new Map<string, { value: string; expiration?: number }>();
+
+  const kv: BroadcastPendingKvNamespace = {
+    async get(key) {
+      return store.get(key)?.value ?? null;
+    },
+    async put(key, value, options) {
+      const expiration = Math.floor(Date.now() / 1000) + (options.expirationTtl ?? 0);
+      store.set(key, { value, expiration });
+    },
+    async delete(key) {
+      store.delete(key);
+    },
+    async list() {
+      return {
+        keys: Array.from(store.entries()).map(([name, entry]) => ({
+          name,
+          expiration: entry.expiration,
+        })),
+        list_complete: true,
+        cursor: '',
+      };
+    },
+  };
+
+  return { kv, store };
 };
 
 describe('createTelegramBroadcastCommandHandler', () => {
@@ -611,7 +641,7 @@ describe('worker integration for broadcast command', () => {
     vi.resetModules();
   });
 
-  it('keeps pending broadcast after router cache reset', async () => {
+  it('keeps pending broadcast after router cache reset and worker restart', async () => {
     vi.resetModules();
 
     const handleMessage = vi.fn();
@@ -659,6 +689,8 @@ describe('worker integration for broadcast command', () => {
       delete: vi.fn(),
     };
 
+    const pendingKv = createPendingKv();
+
     const env = {
       TELEGRAM_WEBHOOK_SECRET: 'secret',
       TELEGRAM_BOT_TOKEN: 'bot-token',
@@ -668,6 +700,7 @@ describe('worker integration for broadcast command', () => {
       BROADCAST_RECIPIENTS: JSON.stringify([{ chatId: 'subscriber-1' }]),
       ADMIN_TG_IDS: adminKv,
       ENV_VERSION: '1',
+      BROADCAST_PENDING_KV: pendingKv.kv,
     } as Record<string, unknown>;
 
     const ctx = { waitUntil: vi.fn() } as { waitUntil(promise: Promise<unknown>): void };
@@ -699,6 +732,17 @@ describe('worker integration for broadcast command', () => {
     expect(handleMessage).not.toHaveBeenCalled();
 
     module.__internal.clearRouterCache(env as never);
+    module.__internal.clearBroadcastSessionStore(env as never);
+
+    messaging.sendText.mockReset();
+    const recipientDeferred = createDeferred<{ messageId?: string }>();
+    messaging.sendText.mockImplementation(({ chatId, text }) => {
+      if (chatId === 'subscriber-1') {
+        return recipientDeferred.promise;
+      }
+
+      return Promise.resolve({ messageId: `sent-${chatId}-${text.slice(0, 4)}` });
+    });
 
     const broadcastTextUpdate = {
       update_id: 2,
@@ -724,6 +768,25 @@ describe('worker integration for broadcast command', () => {
     expect(broadcastResponse.status).toBe(200);
     await expect(broadcastResponse.json()).resolves.toEqual({ status: 'ok' });
     expect(handleMessage).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+
+    const backgroundTask = ctx.waitUntil.mock.calls[1]?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(1, {
+      chatId: 'subscriber-1',
+      threadId: undefined,
+      text: 'Всем привет',
+    });
+
+    recipientDeferred.resolve({ messageId: 'delivered-late' });
+    await backgroundTask;
+
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: '✅ Рассылка отправлена!',
+    });
 
     vi.resetModules();
   });

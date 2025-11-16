@@ -55,6 +55,7 @@
    - Убедиться, что `ADMIN_TG_IDS` содержит актуальные ID администраторов.
    - Выполнить `GET /admin/access` с валидным `x-admin-token`, проверить, что whitelisted ID перечислены в `whitelist`, а `health` показывает `status: "ok"` или объяснимые коды ошибок Telegram.
    - Проверить наличие и актуальность `TELEGRAM_BOT_TOKEN`.
+   - Проверить KV `BROADCAST_PENDING_KV`: запросом `wrangler kv:key list --namespace-id $BROADCAST_PENDING_KV --prefix broadcast:pending:` убедиться, что namespace доступен и не содержит «зависших» ключей. При обнаружении старых ключей удалить их командой `wrangler kv:key delete` перед запуском рассылки.
    - (Опционально) зафиксировать нужное состояние флагом `BROADCAST_ENABLED`: значение `1`/`true` оставляет команду включённой, `0`/`false`
      временно отключает рассылки.
 2. **Проверка сценария**
