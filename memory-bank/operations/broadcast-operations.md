@@ -95,6 +95,12 @@
 
 ## Smoke-тест восстановления webhook и `/broadcast`
 - Логи восстановления: [`memory-bank/logs/telegram-webhook-smoke-2025-11-27.md`](../logs/telegram-webhook-smoke-2025-11-27.md) фиксируют успешный `POST /webhook` без `ReferenceError`, событие `[telegram-webhook]` и отправку `sendTyping` в диалоге и при запуске `/broadcast`.
+- Новая фиксация: [`memory-bank/logs/telegram-webhook-smoke-2025-11-16.md`](../logs/telegram-webhook-smoke-2025-11-16.md) — webhook и диалог отвечают 200, команда `/broadcast` возвращает подтверждение, но доставки нет (recipients=0 из-за пустых фильтров аудитории).
+
+### Чек-лист smoke 2025-11-16
+- Tail: `npx wrangler tail --env production --format pretty` в отдельной сессии.
+- Сообщения: `ping` → `/broadcast` → `smoke broadcast` с whitelisted аккаунта.
+- Статус доставки: подтверждение получено, реальных отправок нет (`recipients=0`, фильтры аудитории пустые) — требуется повторить после пополнения списка получателей.
 
 ### Быстрый чек-лист (повторить при любом подозрении на падение вебхука)
 1. Запустить tail: `npx wrangler tail --env production --format pretty` и наблюдать вывод в отдельном окне/сессии.
