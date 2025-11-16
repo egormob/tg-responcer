@@ -9,6 +9,7 @@ interface Logger {
 export interface BroadcastRecipient {
   chatId: string;
   threadId?: string;
+  username?: string;
 }
 
 export interface BroadcastSendInput {

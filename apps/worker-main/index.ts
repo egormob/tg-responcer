@@ -24,6 +24,7 @@ import {
   createKnownUsersClearRoute,
   createD1StressRoute,
   createImmediateBroadcastSender,
+  parseBroadcastRecipients,
   createRateLimitNotifier,
   createSelfTestRoute,
   readAdminWhitelist,
@@ -287,74 +288,6 @@ const isEnabledFlag = (value: unknown): boolean => {
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const parseBroadcastRecipients = (
-  value: unknown,
-): CreateImmediateBroadcastSenderOptions['recipients'] => {
-  if (value === undefined || value === null) {
-    return [];
-  }
-
-  let source: unknown = value;
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      return [];
-    }
-
-    try {
-      source = JSON.parse(trimmed);
-    } catch (error) {
-      const details = error instanceof Error ? { name: error.name, message: error.message } : { error: String(error) };
-      console.warn('[broadcast] failed to parse BROADCAST_RECIPIENTS value', details);
-      return [];
-    }
-  }
-
-  if (!Array.isArray(source)) {
-    console.warn('[broadcast] BROADCAST_RECIPIENTS must be an array of strings or objects');
-    return [];
-  }
-
-  const recipients: CreateImmediateBroadcastSenderOptions['recipients'] = [];
-  const seen = new Set<string>();
-
-  for (const item of source) {
-    if (typeof item === 'string') {
-      const chatId = item.trim();
-      if (!chatId) {
-        continue;
-      }
-
-      const key = `${chatId}:`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      recipients.push({ chatId });
-      continue;
-    }
-
-    if (isObjectRecord(item)) {
-      const chatIdValue = typeof item.chatId === 'string' ? item.chatId.trim() : undefined;
-      if (!chatIdValue) {
-        continue;
-      }
-
-      const threadIdValue =
-        typeof item.threadId === 'string' ? item.threadId.trim() : undefined;
-      const key = `${chatIdValue}:${threadIdValue ?? ''}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      recipients.push({ chatId: chatIdValue, threadId: threadIdValue });
-    }
-  }
-
-  return recipients;
-};
 
 const readAiConcurrencyConfig = async (env: WorkerEnv): Promise<AiConcurrencyConfig> => {
   const kv = env.AI_CONTROL_KV;
@@ -813,7 +746,9 @@ const createTransformPayload = (
     typeof env.BROADCAST_ENABLED === 'undefined'
       ? true
       : isEnabledFlag(env.BROADCAST_ENABLED);
-  const broadcastRecipients = broadcastEnabled ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS) : [];
+  const broadcastRecipients = broadcastEnabled
+    ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS, console)
+    : [];
 
   if (broadcastEnabled && broadcastRecipients.length === 0) {
     console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');

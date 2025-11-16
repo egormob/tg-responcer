@@ -10,6 +10,10 @@ export {
   type BroadcastMessagePayload,
 } from './broadcast-payload';
 export {
+  parseBroadcastRecipients,
+  type BroadcastRecipientsParserLogger,
+} from './broadcast-recipients';
+export {
   createTelegramBroadcastCommandHandler,
   BROADCAST_PROMPT_MESSAGE,
   BROADCAST_SUCCESS_MESSAGE,

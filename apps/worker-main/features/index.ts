@@ -51,6 +51,7 @@ export {
   createImmediateBroadcastSender,
   buildBroadcastPayload,
   DEFAULT_MAX_TEXT_LENGTH,
+  parseBroadcastRecipients,
 } from './broadcast';
 export type {
   AdminBroadcastRequest,
@@ -58,6 +59,7 @@ export type {
   BroadcastMessagePayload,
   CreateAdminBroadcastRouteOptions,
   BroadcastRecipient,
+  BroadcastRecipientsParserLogger,
   CreateTelegramBroadcastCommandHandlerOptions,
   SendBroadcast,
   CreateImmediateBroadcastSenderOptions,
