@@ -271,11 +271,21 @@ const applyAudienceFilters = (
   return result;
 };
 
+interface ResolveRecipientsResult {
+  recipients: readonly BroadcastRecipient[];
+  source?: string;
+}
+
+type ResolveRecipients = (
+  filters?: BroadcastAudienceFilter,
+) =>
+  | Promise<readonly BroadcastRecipient[] | ResolveRecipientsResult>
+  | readonly BroadcastRecipient[]
+  | ResolveRecipientsResult;
+
 interface CreateBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
-  resolveRecipients: (
-    filters?: BroadcastAudienceFilter,
-  ) => Promise<readonly BroadcastRecipient[]> | readonly BroadcastRecipient[];
+  resolveRecipients: ResolveRecipients;
   logger?: Logger;
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
@@ -293,16 +303,59 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
 
+  const normalizeResolveResult = (
+    result: Awaited<ReturnType<ResolveRecipients>>,
+  ): ResolveRecipientsResult => {
+    if (Array.isArray(result)) {
+      return { recipients: result } satisfies ResolveRecipientsResult;
+    }
+
+    return result;
+  };
+
   return async ({ text, requestedBy, filters }) => {
-    const resolved = await options.resolveRecipients(filters);
+    const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
     const recipients = deduplicateRecipients(
-      applyAudienceFilters(resolved.filter((recipient) => recipient.chatId.trim().length > 0), filters),
+      applyAudienceFilters(
+        resolved.recipients.filter((recipient) => recipient.chatId.trim().length > 0),
+        filters,
+      ),
     );
     const startedAt = Date.now();
+    const recipientsSample = recipients.slice(0, 5).map((recipient) => ({
+      chatId: recipient.chatId,
+      threadId: recipient.threadId ?? null,
+      username: recipient.username ?? null,
+      languageCode: recipient.languageCode ?? null,
+    }));
+
+    options.logger?.info?.('broadcast recipients resolved', {
+      requestedBy,
+      filters: filters ?? null,
+      source: resolved.source ?? null,
+      recipients: recipients.length,
+      sample: recipientsSample,
+    });
+
+    if (recipients.length === 0) {
+      options.logger?.warn?.('broadcast recipients list is empty', {
+        requestedBy,
+        filters: filters ?? null,
+        source: resolved.source ?? null,
+      });
+
+      return {
+        delivered: 0,
+        failed: 0,
+        deliveries: [],
+      } satisfies BroadcastSendResult;
+    }
 
     options.logger?.info?.('broadcast pool initialized', {
       requestedBy,
       recipients: recipients.length,
+      filters: filters ?? null,
+      source: resolved.source ?? null,
       poolSize: concurrency,
       maxAttempts,
       baseDelayMs: poolOptions.baseDelayMs,
@@ -497,6 +550,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       options.logger?.error?.('broadcast pool aborted summary', {
         requestedBy,
         recipients: deliveries.length,
+        filters: filters ?? null,
+        source: resolved.source ?? null,
         delivered,
         failed,
         poolSize: concurrency,
@@ -508,6 +563,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       options.logger?.info?.('broadcast pool completed', {
         requestedBy,
         recipients: deliveries.length,
+        filters: filters ?? null,
+        source: resolved.source ?? null,
         delivered,
         failed,
         poolSize: concurrency,
@@ -515,6 +572,15 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         durationMs,
       });
     }
+
+    options.logger?.info?.('broadcast deliveries recorded', {
+      requestedBy,
+      filters: filters ?? null,
+      source: resolved.source ?? null,
+      delivered,
+      failed,
+      recipients: deliveries.length,
+    });
 
     options.telemetry?.record({
       requestedBy,
@@ -550,7 +616,14 @@ export const createImmediateBroadcastSender = (
 ): SendBroadcast =>
   createBroadcastSender({
     messaging: options.messaging,
-    resolveRecipients: () => options.recipients,
+    resolveRecipients: (filters) => {
+      options.logger?.info?.('broadcast using env recipients', {
+        filters: filters ?? null,
+        recipients: options.recipients.length,
+      });
+
+      return { recipients: options.recipients, source: 'env' } satisfies ResolveRecipientsResult;
+    },
     logger: options.logger,
     pool: options.pool,
     telemetry: options.telemetry,
@@ -568,7 +641,12 @@ export const createRegistryBroadcastSender = (
     try {
       const fromRegistry = await options.registry.listActiveRecipients(filters);
       if (fromRegistry.length > 0) {
-        return fromRegistry;
+        options.logger?.info?.('broadcast using registry recipients', {
+          filters: filters ?? null,
+          recipients: fromRegistry.length,
+        });
+
+        return { recipients: fromRegistry, source: 'registry' } satisfies ResolveRecipientsResult;
       }
 
       options.logger?.info?.('broadcast registry returned empty result', {
@@ -584,14 +662,15 @@ export const createRegistryBroadcastSender = (
     if (fallbackRecipients.length > 0) {
       options.logger?.warn?.('falling back to env broadcast recipients', {
         filters: filters ?? null,
+        recipients: fallbackRecipients.length,
       });
-      return fallbackRecipients;
+      return { recipients: fallbackRecipients, source: 'env_fallback' } satisfies ResolveRecipientsResult;
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {
       filters: filters ?? null,
     });
-    return [];
+    return { recipients: [], source: 'none' } satisfies ResolveRecipientsResult;
   };
 
   return createBroadcastSender({
