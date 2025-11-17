@@ -317,13 +317,13 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     return result;
   };
 
-  return async ({ text, requestedBy }) => {
-    const filters: BroadcastAudienceFilter | undefined = undefined;
-    const resolved = normalizeResolveResult(await options.resolveRecipients(undefined));
+  return async ({ text, requestedBy, filters }) => {
+    const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
+    const filtersToApply = resolved.source === 'registry' ? filters : undefined;
     const recipients = deduplicateRecipients(
       applyAudienceFilters(
         resolved.recipients.filter((recipient) => recipient.chatId.trim().length > 0),
-        undefined,
+        filtersToApply,
       ),
     );
     const startedAt = Date.now();
@@ -643,12 +643,12 @@ export const createRegistryBroadcastSender = (
     (options.fallbackRecipients ?? []).filter((recipient) => recipient.chatId.trim().length > 0),
   );
 
-  const resolveRecipients = async () => {
+  const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
     try {
-      const fromRegistry = await options.registry.listActiveRecipients(undefined);
+      const fromRegistry = await options.registry.listActiveRecipients(filters);
       if (fromRegistry.length > 0) {
         options.logger?.info?.('broadcast using registry recipients', {
-          filters: null,
+          filters: filters ?? null,
           recipients: fromRegistry.length,
         });
 
@@ -656,25 +656,25 @@ export const createRegistryBroadcastSender = (
       }
 
         options.logger?.info?.('broadcast registry returned empty result', {
-        filters: null,
+        filters: filters ?? null,
       });
     } catch (error) {
       options.logger?.warn?.('broadcast registry lookup failed', {
         error: toErrorDetails(error),
-        filters: null,
+        filters: filters ?? null,
       });
     }
 
     if (fallbackRecipients.length > 0) {
       options.logger?.warn?.('falling back to env broadcast recipients', {
-        filters: null,
+        filters: filters ?? null,
         recipients: fallbackRecipients.length,
       });
       return { recipients: fallbackRecipients, source: 'env_fallback' } satisfies ResolveRecipientsResult;
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {
-      filters: null,
+      filters: filters ?? null,
     });
     return { recipients: [], source: 'none' } satisfies ResolveRecipientsResult;
   };
