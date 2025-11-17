@@ -10,9 +10,9 @@ export {
 } from './broadcast-recipients';
 export {
   createTelegramBroadcastCommandHandler,
-  BROADCAST_PROMPT_MESSAGE,
   BROADCAST_AUDIENCE_PROMPT,
   BROADCAST_SUCCESS_MESSAGE,
+  buildBroadcastPromptMessage,
   type CreateTelegramBroadcastCommandHandlerOptions,
   type TelegramBroadcastCommandHandler,
   type PendingBroadcast,

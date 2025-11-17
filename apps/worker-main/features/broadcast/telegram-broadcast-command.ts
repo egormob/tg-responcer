@@ -4,6 +4,7 @@ import type { TelegramAdminCommandContext, TransformPayloadContext } from '../..
 import type { MessagingPort } from '../../ports';
 import type { AdminAccess } from '../admin-access';
 import type { BroadcastAudienceFilter } from './broadcast-payload';
+import type { BroadcastRecipientsRegistry } from './minimal-broadcast-service';
 import {
   type AdminCommandErrorRecorder,
   extractTelegramErrorDetails,
@@ -23,15 +24,22 @@ interface Logger {
 
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
-const BROADCAST_PENDING_KV_VERSION = 1;
+const BROADCAST_PENDING_KV_VERSION = 2;
 const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';
 const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const MINIMUM_KV_TTL_SECONDS = 60;
 
-export const BROADCAST_PROMPT_MESSAGE =
-  'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст';
+export const BROADCAST_AUDIENCE_PROMPT = 'Введите user_id/username или /everybody';
 
-export const BROADCAST_AUDIENCE_PROMPT = 'рассылка отправится всем из BROADCAST_RECIPIENTS';
+export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
+  const base = `Пришлите текст для ${count} получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.`;
+
+  if (notFound.length === 0) {
+    return base;
+  }
+
+  return `${base}\nНе нашли: ${notFound.join(', ')}`;
+};
 
 
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
@@ -55,13 +63,39 @@ export interface PendingBroadcast {
   threadId?: string;
   expiresAt: number;
   stage: 'audience' | 'text';
-  filters?: BroadcastAudienceFilter;
+  audience?: BroadcastAudience;
 }
+
+type BroadcastAudienceMode = 'all' | 'list';
+
+interface BroadcastListAudience {
+  mode: 'list';
+  total: number;
+  notFound: string[];
+  chatIds: string[];
+}
+
+interface BroadcastAllAudience {
+  mode: 'all';
+  total: number;
+  notFound: string[];
+}
+
+type BroadcastAudience = BroadcastListAudience | BroadcastAllAudience;
 
 export type BroadcastPendingKvNamespace = Pick<KVNamespace, 'get' | 'put' | 'delete' | 'list'>;
 
 const toErrorDetails = (error: unknown) =>
   error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) };
+
+const normalizeUsername = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim().replace(/^@+/, '').toLowerCase();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
 
 const createLogger = (logger?: Logger) => ({
   info(message: string, details?: Record<string, unknown>) {
@@ -79,6 +113,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   adminAccess: AdminAccess;
   messaging: Pick<MessagingPort, 'sendText'>;
   sendBroadcast: SendBroadcast;
+  recipientsRegistry: BroadcastRecipientsRegistry;
   maxTextLength?: number;
   pendingTtlMs?: number;
   now?: () => Date;
@@ -210,6 +245,40 @@ export const createTelegramBroadcastCommandHandler = (
   const serializePendingEntry = (entry: PendingBroadcast): string =>
     JSON.stringify({ version: BROADCAST_PENDING_KV_VERSION, entry });
 
+  const parseAudience = (value: unknown): BroadcastAudience | undefined => {
+    if (!value || typeof value !== 'object') {
+      return undefined;
+    }
+
+    const mode = (value as { mode?: unknown }).mode;
+    const total = (value as { total?: unknown }).total;
+    const notFound = (value as { notFound?: unknown }).notFound;
+
+    if (typeof total !== 'number' || !Array.isArray(notFound)) {
+      return undefined;
+    }
+
+    if (mode === 'all') {
+      return { mode: 'all', total, notFound: notFound.filter((entry) => typeof entry === 'string') };
+    }
+
+    if (mode === 'list') {
+      const chatIds = (value as { chatIds?: unknown }).chatIds;
+      if (!Array.isArray(chatIds)) {
+        return undefined;
+      }
+
+      return {
+        mode: 'list',
+        total,
+        notFound: notFound.filter((entry) => typeof entry === 'string'),
+        chatIds: chatIds.filter((entry): entry is string => typeof entry === 'string'),
+      } satisfies BroadcastListAudience;
+    }
+
+    return undefined;
+  };
+
   const parsePendingEntry = (raw: string | null): PendingBroadcast | undefined => {
     if (!raw) {
       return undefined;
@@ -231,12 +300,14 @@ export const createTelegramBroadcastCommandHandler = (
         return undefined;
       }
 
+      const audience = parseAudience(parsed.entry.audience);
+
       return {
         chatId: parsed.entry.chatId,
         threadId: parsed.entry.threadId ?? undefined,
         expiresAt: parsed.entry.expiresAt,
         stage: parsed.entry.stage,
-        filters: parsed.entry.filters,
+        audience,
       } satisfies PendingBroadcast;
     } catch (error) {
       logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
@@ -401,34 +472,99 @@ export const createTelegramBroadcastCommandHandler = (
     }
   };
 
+  const buildAudienceSelection = async (tokens: string[]): Promise<BroadcastAudience> => {
+    const recipients = await options.recipientsRegistry.listActiveRecipients();
+
+    if (tokens.length === 1 && tokens[0].toLowerCase() === '/everybody') {
+      return {
+        mode: 'all',
+        total: recipients.length,
+        notFound: [],
+      } satisfies BroadcastAllAudience;
+    }
+
+    const normalizedTokens = tokens.map((token) => token.trim()).filter((token) => token.length > 0);
+    const seenChatIds = new Set<string>();
+    const matchedChatIds: string[] = [];
+    const notFound: string[] = [];
+
+    const chatIdIndex = new Map<string, string>();
+    const usernameIndex = new Map<string, string>();
+
+    for (const recipient of recipients) {
+      const chatId = recipient.chatId.trim();
+      chatIdIndex.set(chatId, chatId);
+
+      const username = normalizeUsername(recipient.username);
+      if (username) {
+        usernameIndex.set(username, chatId);
+      }
+    }
+
+    for (const token of normalizedTokens) {
+      const usernameToken = normalizeUsername(token);
+      const chatIdToken = token;
+
+      let chatId = chatIdIndex.get(chatIdToken);
+      if (!chatId && usernameToken) {
+        chatId = usernameIndex.get(usernameToken);
+      }
+
+      if (!chatId) {
+        notFound.push(token);
+        continue;
+      }
+
+      if (seenChatIds.has(chatId)) {
+        continue;
+      }
+
+      seenChatIds.add(chatId);
+      matchedChatIds.push(chatId);
+    }
+
+    return {
+      mode: 'list',
+      total: matchedChatIds.length,
+      notFound,
+      chatIds: matchedChatIds,
+    } satisfies BroadcastListAudience;
+  };
+
   const handleAudienceSelection = async (
     message: IncomingMessage,
     entry: PendingBroadcast,
   ): Promise<'handled'> => {
-    const text = message.text ?? '';
+    const tokens = parseList(message.text ?? '');
     const userKey = getUserKey(message.user.userId);
+
+    const audience = await buildAudienceSelection(tokens);
 
     const updatedEntry: PendingBroadcast = {
       ...entry,
       stage: 'text',
-      filters: undefined,
+      audience,
       expiresAt: now().getTime() + pendingTtlMs,
     };
 
     await savePendingEntry(userKey, updatedEntry);
 
+    const promptMessage = buildBroadcastPromptMessage(audience.total, audience.notFound);
+
     try {
       await options.messaging.sendText({
         chatId: message.chat.id,
         threadId: message.chat.threadId,
-        text: BROADCAST_PROMPT_MESSAGE,
+        text: promptMessage,
       });
 
       logger.info('broadcast awaiting text', {
         userId: message.user.userId,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
-        filters: updatedEntry.filters ?? null,
+        mode: audience.mode,
+        total: audience.total,
+        notFound: audience.notFound,
       });
     } catch (error) {
       await deletePendingEntry(userKey);
@@ -683,6 +819,21 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
+    const audience = entry.audience;
+
+    if (!audience) {
+      logger.warn('broadcast audience missing in pending entry', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+
+      return 'handled';
+    }
+
+    const filters: BroadcastAudienceFilter | undefined =
+      audience.mode === 'list' ? { chatIds: audience.chatIds } : undefined;
+
     const requestedBy = message.user.userId;
 
     logger.info('broadcast dispatch scheduled via telegram command', {
@@ -694,7 +845,7 @@ export const createTelegramBroadcastCommandHandler = (
     const payload: BroadcastSendInput = {
       text,
       requestedBy,
-      filters: entry.filters,
+      filters,
     };
 
     const runBroadcast = async () => {
