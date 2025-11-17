@@ -103,7 +103,6 @@ export interface CreateRegistryBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
   messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
   registry: BroadcastRecipientsRegistry;
-  fallbackRecipients?: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
@@ -258,16 +257,6 @@ const applyAudienceFilters = (
   if (filters.userIds?.length) {
     const userIds = new Set(filters.userIds.map((id) => id.trim()));
     result = result.filter((recipient) => userIds.has(recipient.chatId));
-  }
-
-  if (filters.languageCodes?.length) {
-    const languages = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
-    result = result.filter((recipient) => {
-      if (!recipient.languageCode) {
-        return false;
-      }
-      return languages.has(recipient.languageCode.toLowerCase());
-    });
   }
 
   return result;
@@ -639,10 +628,6 @@ export const createImmediateBroadcastSender = (
 export const createRegistryBroadcastSender = (
   options: CreateRegistryBroadcastSenderOptions,
 ): SendBroadcast => {
-  const fallbackRecipients = deduplicateRecipients(
-    (options.fallbackRecipients ?? []).filter((recipient) => recipient.chatId.trim().length > 0),
-  );
-
   const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
     try {
       const fromRegistry = await options.registry.listActiveRecipients(filters);
@@ -663,14 +648,6 @@ export const createRegistryBroadcastSender = (
         error: toErrorDetails(error),
         filters: filters ?? null,
       });
-    }
-
-    if (fallbackRecipients.length > 0) {
-      options.logger?.warn?.('falling back to env broadcast recipients', {
-        filters: filters ?? null,
-        recipients: fallbackRecipients.length,
-      });
-      return { recipients: fallbackRecipients, source: 'env_fallback' } satisfies ResolveRecipientsResult;
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {
