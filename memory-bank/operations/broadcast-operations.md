@@ -214,3 +214,17 @@ tail -n +1 "$report"
 
 ## Следующие шаги
 - Оценить необходимость дополнительных защит (например, подтверждение перед отправкой) после накопления статистики использования.
+
+## Текущее состояние рассылки (MVP)
+
+### Спроектировано
+- Источник получателей: `BROADCAST_RECIPIENTS` (env) → реестр (`broadcast registry`) → fallback none.
+- Обязательные логи: `broadcast recipients resolved` (показывает `source`/`recipients`), `broadcast pool initialized`, статусы Telegram отправок.
+- Фильтры аудиторий применяются после объединения источников; сегменты отключаем только после подтверждённого покрытия «recipients>0».
+- Чекпоинты метрик: наличие списка получателей, лог `broadcast recipients resolved`, `recipients>0`, `broadcast pool initialized`, статусы Telegram (`sendText`/`sendTyping`).
+
+### Реализовано
+- Флаг `BROADCAST_ENABLED` отсутствует → команда активна, диалог `/broadcast → подсказка → текст` работает.
+- Логи `broadcast recipients resolved` и `broadcast pool initialized` пишутся, но `recipients=0` (пустой `BROADCAST_RECIPIENTS`, реестр не подключён), поэтому чекпоинт `recipients>0` не выполнен.
+- Пул sender’ов отрабатывает без ошибок и фиксирует `broadcast pool completed`/`admin broadcast delivered` с `delivered=0`; Telegram-статус подтверждает только ответ администратору.
+- См. свежий лог цепочки и tail: [`memory-bank/logs/broadcast-chain-2025-11-28.md`](../logs/broadcast-chain-2025-11-28.md) — в нём зафиксированы предупреждения о пустом источнике и фрагмент `wrangler tail` (без `ReferenceError`).
