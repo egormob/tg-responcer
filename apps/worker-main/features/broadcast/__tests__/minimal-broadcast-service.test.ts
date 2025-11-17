@@ -114,4 +114,40 @@ describe('createImmediateBroadcastSender', () => {
       expect.objectContaining({ status: 'aborted', abortReason: 'send_text_failed' }),
     );
   });
+
+  it('sends to all recipients even when filters are provided', async () => {
+    const recipients = [
+      { chatId: 'chat-1', languageCode: 'en' },
+      { chatId: 'chat-2', languageCode: 'ru' },
+    ];
+
+    const sendText = vi
+      .fn(async ({ chatId }: { chatId: string }) => ({ messageId: `sent-${chatId}` }))
+      .mockResolvedValue({ messageId: 'sent-chat-1' });
+
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+    });
+
+    const result = await sendBroadcast({
+      text: 'hello',
+      requestedBy: 'ops',
+      filters: { languageCodes: ['ru'], chatIds: ['chat-1'] },
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(sendText).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: 'hello',
+    });
+    expect(sendText).toHaveBeenNthCalledWith(2, {
+      chatId: 'chat-2',
+      threadId: undefined,
+      text: 'hello',
+    });
+    expect(result.delivered).toBe(2);
+    expect(result.failed).toBe(0);
+  });
 });

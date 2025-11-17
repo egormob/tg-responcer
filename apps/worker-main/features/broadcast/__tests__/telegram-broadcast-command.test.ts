@@ -140,7 +140,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Выберите аудиторию: отправьте all для всех или lang=ru (через запятую). Можно указать chat=ID.',
+      text: 'рассылка отправится всем из BROADCAST_RECIPIENTS',
     });
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'awaiting_audience' });
@@ -195,7 +195,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
-  it('applies audience filters from selection stage', async () => {
+  it('ignores audience filters from selection stage', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 1, failed: 0, deliveries: [] });
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
@@ -210,7 +210,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'Segmented message',
       requestedBy: 'admin-1',
-      filters: { languageCodes: ['ru', 'en'] },
+      filters: undefined,
     });
   });
 
@@ -477,7 +477,35 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: 'Выберите аудиторию: отправьте all для всех или lang=ru (через запятую). Можно указать chat=ID.',
+      text: 'рассылка отправится всем из BROADCAST_RECIPIENTS',
+    });
+
+    const audienceResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          update_id: 2,
+          message: {
+            message_id: '101',
+            date: '1710000005',
+            text: 'lang=ru',
+            from: { id: 'admin-1', first_name: 'Admin' },
+            chat: { id: 'chat-1', type: 'private' },
+            message_thread_id: '77',
+          },
+        }),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(audienceResponse.status).toBe(200);
+    await expect(audienceResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: '77',
+      text: 'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст',
     });
 
     vi.resetModules();
@@ -576,7 +604,35 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: 'Выберите аудиторию: отправьте all для всех или lang=ru (через запятую). Можно указать chat=ID.',
+      text: 'рассылка отправится всем из BROADCAST_RECIPIENTS',
+    });
+
+    const audienceResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          update_id: 2,
+          message: {
+            message_id: '101',
+            date: '1710000005',
+            text: 'lang=ru',
+            from: { id: 'admin-1', first_name: 'Admin' },
+            chat: { id: 'chat-1', type: 'private' },
+            message_thread_id: '77',
+          },
+        }),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(audienceResponse.status).toBe(200);
+    await expect(audienceResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: '77',
+      text: 'Нажмите /cancel если ❌ не хотите отправлять рассылку или пришлите текст',
     });
 
     messaging.sendText.mockClear();
@@ -593,9 +649,9 @@ describe('worker integration for broadcast command', () => {
     });
 
     const broadcastTextUpdate = {
-      update_id: 2,
+      update_id: 3,
       message: {
-        message_id: '101',
+        message_id: '102',
         date: '1710000010',
         text: 'Всем привет',
         from: { id: 'admin-1', first_name: 'Admin' },
@@ -720,6 +776,17 @@ describe('worker integration for broadcast command', () => {
       },
     };
 
+    const audienceUpdate = {
+      update_id: 2,
+      message: {
+        message_id: '101',
+        date: '1710000005',
+        text: 'chat=999',
+        from: { id: 'admin-1', first_name: 'Admin' },
+        chat: { id: 'chat-1', type: 'private' },
+      },
+    };
+
     const commandResponse = await worker.fetch(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
@@ -737,6 +804,19 @@ describe('worker integration for broadcast command', () => {
     module.__internal.clearRouterCache(env as never);
     module.__internal.clearBroadcastSessionStore(env as never);
 
+    const audienceResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(audienceUpdate),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(audienceResponse.status).toBe(200);
+    await expect(audienceResponse.json()).resolves.toEqual({ status: 'ok' });
+
     messaging.sendText.mockReset();
     const recipientDeferred = createDeferred<{ messageId?: string }>();
     messaging.sendText.mockImplementation(({ chatId, text }) => {
@@ -748,9 +828,9 @@ describe('worker integration for broadcast command', () => {
     });
 
     const broadcastTextUpdate = {
-      update_id: 2,
+      update_id: 3,
       message: {
-        message_id: '101',
+        message_id: '102',
         date: '1710000010',
         text: 'Всем привет',
         from: { id: 'admin-1', first_name: 'Admin' },

@@ -317,12 +317,13 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     return result;
   };
 
-  return async ({ text, requestedBy, filters }) => {
-    const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
+  return async ({ text, requestedBy }) => {
+    const filters: BroadcastAudienceFilter | undefined = undefined;
+    const resolved = normalizeResolveResult(await options.resolveRecipients(undefined));
     const recipients = deduplicateRecipients(
       applyAudienceFilters(
         resolved.recipients.filter((recipient) => recipient.chatId.trim().length > 0),
-        filters,
+        undefined,
       ),
     );
     const startedAt = Date.now();
@@ -621,9 +622,9 @@ export const createImmediateBroadcastSender = (
   createBroadcastSender({
     messaging: options.messaging,
     messagingBroadcast: options.messagingBroadcast,
-    resolveRecipients: (filters) => {
+    resolveRecipients: () => {
       options.logger?.info?.('broadcast using env recipients', {
-        filters: filters ?? null,
+        filters: null,
         recipients: options.recipients.length,
       });
 
@@ -642,38 +643,38 @@ export const createRegistryBroadcastSender = (
     (options.fallbackRecipients ?? []).filter((recipient) => recipient.chatId.trim().length > 0),
   );
 
-  const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
+  const resolveRecipients = async () => {
     try {
-      const fromRegistry = await options.registry.listActiveRecipients(filters);
+      const fromRegistry = await options.registry.listActiveRecipients(undefined);
       if (fromRegistry.length > 0) {
         options.logger?.info?.('broadcast using registry recipients', {
-          filters: filters ?? null,
+          filters: null,
           recipients: fromRegistry.length,
         });
 
         return { recipients: fromRegistry, source: 'registry' } satisfies ResolveRecipientsResult;
       }
 
-      options.logger?.info?.('broadcast registry returned empty result', {
-        filters: filters ?? null,
+        options.logger?.info?.('broadcast registry returned empty result', {
+        filters: null,
       });
     } catch (error) {
       options.logger?.warn?.('broadcast registry lookup failed', {
         error: toErrorDetails(error),
-        filters: filters ?? null,
+        filters: null,
       });
     }
 
     if (fallbackRecipients.length > 0) {
       options.logger?.warn?.('falling back to env broadcast recipients', {
-        filters: filters ?? null,
+        filters: null,
         recipients: fallbackRecipients.length,
       });
       return { recipients: fallbackRecipients, source: 'env_fallback' } satisfies ResolveRecipientsResult;
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {
-      filters: filters ?? null,
+      filters: null,
     });
     return { recipients: [], source: 'none' } satisfies ResolveRecipientsResult;
   };
