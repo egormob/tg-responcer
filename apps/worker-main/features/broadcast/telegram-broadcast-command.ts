@@ -28,11 +28,14 @@ const BROADCAST_PENDING_KV_VERSION = 2;
 const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';
 const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const MINIMUM_KV_TTL_SECONDS = 60;
+const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export const BROADCAST_AUDIENCE_PROMPT = 'Введите user_id/username или /everybody';
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
-  const base = `Пришлите текст для ${count} получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.`;
+  const base =
+    `Пришлите текст для ${count} получателей и подтвердите отправкой /send или сообщением. ` +
+    'Нажмите /cancel если ❌ не хотите отправлять рассылку.';
 
   if (notFound.length === 0) {
     return base;
@@ -121,6 +124,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   adminErrorRecorder?: AdminCommandErrorRecorder;
   pendingStore?: Map<string, PendingBroadcast>;
   pendingKv?: BroadcastPendingKvNamespace;
+  exportLogKv: Pick<KVNamespace, 'put'>;
 }
 
 export interface TelegramBroadcastCommandHandler {
@@ -163,6 +167,17 @@ const parseList = (value: string): string[] =>
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 
+const extractBroadcastText = (value: string): { text: string; usedSendCommand: boolean } => {
+  const trimmed = value.trim();
+  const normalized = trimmed.toLowerCase();
+
+  if (normalized.startsWith('/send')) {
+    return { text: trimmed.slice('/send'.length).trim(), usedSendCommand: true };
+  }
+
+  return { text: value, usedSendCommand: false };
+};
+
 const parseAudienceSelection = (value: string): BroadcastAudienceFilter | undefined | null => {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -195,23 +210,6 @@ const parseAudienceSelection = (value: string): BroadcastAudienceFilter | undefi
       return null;
     }
     return { userIds: ids } satisfies BroadcastAudienceFilter;
-  }
-
-  if (normalized.startsWith('lang=') || normalized.startsWith('language=')) {
-    const index = trimmed.indexOf('=');
-    const codes = parseList(trimmed.slice(index + 1)).map((code) => code.toLowerCase());
-    if (codes.length === 0) {
-      return null;
-    }
-    return { languageCodes: codes } satisfies BroadcastAudienceFilter;
-  }
-
-  if (normalized.startsWith('segment:')) {
-    const code = trimmed.slice(trimmed.indexOf(':') + 1).trim().toLowerCase();
-    if (code.length === 0) {
-      return null;
-    }
-    return { languageCodes: [code] } satisfies BroadcastAudienceFilter;
   }
 
   return null;
@@ -469,6 +467,40 @@ export const createTelegramBroadcastCommandHandler = (
       context.waitUntil(maintenancePromise);
     } else {
       void maintenancePromise;
+    }
+  };
+
+  const persistBroadcastLog = async (
+    input: {
+      audience: BroadcastAudience;
+      result?: BroadcastSendResult;
+      requestedBy: string | number | bigint;
+      startedAt: Date;
+    },
+  ) => {
+    const { audience, result, requestedBy, startedAt } = input;
+    const payload = {
+      ts: startedAt.toISOString(),
+      admin_id: String(requestedBy),
+      mode: audience.mode,
+      source: 'D1',
+      recipients: result?.recipients ?? audience.total ?? 0,
+      delivered: result?.delivered ?? 0,
+      failed: result?.failed ?? 0,
+      duration_ms: result?.durationMs ?? Math.max(0, now().getTime() - startedAt.getTime()),
+      sample: (result?.sample ?? []).slice(0, 5),
+      not_found: audience.notFound.slice(0, 10),
+    } satisfies Record<string, unknown>;
+
+    try {
+      await options.exportLogKv.put('broadcast:last', JSON.stringify(payload), {
+        expirationTtl: BROADCAST_EXPORT_LOG_TTL_SECONDS,
+      });
+    } catch (error) {
+      logger.error('failed to persist broadcast log', {
+        userId: String(requestedBy),
+        error: toErrorDetails(error),
+      });
     }
   };
 
@@ -730,9 +762,8 @@ export const createTelegramBroadcastCommandHandler = (
       return undefined;
     }
 
-    const text = message.text ?? '';
-    const trimmed = text.trim();
-    const normalized = trimmed.toLowerCase();
+    const rawText = message.text ?? '';
+    const normalized = rawText.trim().toLowerCase();
 
     if (normalized === '/cancel') {
       logger.info('broadcast cancelled via telegram command', {
@@ -765,10 +796,14 @@ export const createTelegramBroadcastCommandHandler = (
       return handleAudienceSelection(message, entry);
     }
 
+    const { text, usedSendCommand } = extractBroadcastText(rawText);
+    const trimmed = text.trim();
+
     if (trimmed.length === 0) {
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
         reason: 'empty',
+        usedSendCommand,
       });
 
       try {
@@ -848,9 +883,12 @@ export const createTelegramBroadcastCommandHandler = (
       filters,
     };
 
+    const startedAt = now();
+
     const runBroadcast = async () => {
+      let result: BroadcastSendResult | undefined;
       try {
-        const result: BroadcastSendResult = await options.sendBroadcast(payload);
+        result = await options.sendBroadcast(payload);
 
         logger.info('broadcast sent via telegram command', {
           userId: requestedBy,
@@ -899,6 +937,13 @@ export const createTelegramBroadcastCommandHandler = (
           await handleMessagingFailure(requestedBy, 'broadcast_failure_notice', sendError);
         }
       }
+
+      await persistBroadcastLog({
+        audience,
+        result,
+        requestedBy,
+        startedAt,
+      });
     };
 
     const broadcastPromise = runBroadcast();

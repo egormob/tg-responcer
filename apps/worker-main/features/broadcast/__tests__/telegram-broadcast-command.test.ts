@@ -94,7 +94,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
   const createHandler = ({
     isAdmin = true,
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
-    sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 2, failed: 0, deliveries: [] }),
+    sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 2,
+      failed: 0,
+      deliveries: [],
+      recipients: 2,
+      durationMs: 50,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    }),
     adminErrorRecorder,
     logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     recipients = [
@@ -189,7 +198,9 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст для 3 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.',
+      text:
+        'Пришлите текст для 3 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.',
     });
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'hello everyone',
@@ -201,7 +212,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
     const scheduled = waitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
 
-    deferred.resolve({ delivered: 3, failed: 0, deliveries: [] });
+    deferred.resolve({
+      delivered: 3,
+      failed: 0,
+      deliveries: [],
+      recipients: 3,
+      durationMs: 120,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
     await scheduled;
 
     expect(sendTextMock).toHaveBeenLastCalledWith({
@@ -213,7 +233,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
   it('deduplicates provided chat ids and usernames', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 1, failed: 0, deliveries: [] });
+    const sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 1,
+      failed: 0,
+      deliveries: [],
+      recipients: 1,
+      durationMs: 25,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await handler.handleCommand(createContext());
@@ -225,7 +254,9 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст для 2 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.',
+      text:
+        'Пришлите текст для 2 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.',
     });
 
     const result = await handler.handleMessage(createIncomingMessage('Segmented message'));
@@ -240,7 +271,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
   it('reports unknown audience entries and keeps them in prompt', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 1, failed: 0, deliveries: [] });
+    const sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 1,
+      failed: 0,
+      deliveries: [],
+      recipients: 1,
+      durationMs: 25,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await handler.handleCommand(createContext());
@@ -250,7 +290,9 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст для 1 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.\nНе нашли: missing-one',
+      text:
+        'Пришлите текст для 1 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.\nНе нашли: missing-one',
     });
 
     const result = await handler.handleMessage(createIncomingMessage('Check not found'));
@@ -265,7 +307,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
   it('handles empty audience selection', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 0, failed: 0, deliveries: [] });
+    const sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 0,
+      failed: 0,
+      deliveries: [],
+      recipients: 0,
+      durationMs: 10,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await handler.handleCommand(createContext());
@@ -275,13 +326,24 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст для 0 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.',
+      text:
+        'Пришлите текст для 0 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.',
     });
   });
 
   it('ignores incoming message from a different thread', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const sendBroadcastMock = vi.fn().mockResolvedValue({ delivered: 3, failed: 0, deliveries: [] });
+    const sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 3,
+      failed: 0,
+      deliveries: [],
+      recipients: 3,
+      durationMs: 30,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await startBroadcastFlow(handler);
@@ -500,13 +562,31 @@ describe('worker integration for broadcast command', () => {
       delete: vi.fn(),
     };
 
+    const db = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn().mockReturnThis(),
+        all: vi.fn().mockResolvedValue({
+          results: [
+            {
+              chatId: 'subscriber-1',
+              username: null,
+              languageCode: null,
+              createdAt: 1710000000,
+              isBot: 0,
+            },
+          ],
+        }),
+      })),
+    };
+
     const env = {
       TELEGRAM_WEBHOOK_SECRET: 'secret',
       TELEGRAM_BOT_TOKEN: 'bot-token',
       TELEGRAM_BOT_USERNAME: 'demo_bot',
       OPENAI_API_KEY: 'test-key',
       OPENAI_MODEL: 'gpt-test',
-      BROADCAST_RECIPIENTS: JSON.stringify([{ chatId: 'subscriber-1' }]),
+      DB: db,
+      ADMIN_EXPORT_LOG: { put: vi.fn() },
       ADMIN_TG_IDS: adminKv,
       ENV_VERSION: '1',
     } as Record<string, unknown>;
@@ -570,7 +650,9 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: 'Пришлите текст для 1 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.',
+      text:
+        'Пришлите текст для 1 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.',
     });
 
     vi.resetModules();
@@ -625,6 +707,23 @@ describe('worker integration for broadcast command', () => {
       delete: vi.fn(),
     };
 
+    const db = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn().mockReturnThis(),
+        all: vi.fn().mockResolvedValue({
+          results: [
+            {
+              chatId: 'subscriber-1',
+              username: null,
+              languageCode: null,
+              createdAt: 1710000000,
+              isBot: 0,
+            },
+          ],
+        }),
+      })),
+    };
+
     const env = {
       TELEGRAM_WEBHOOK_SECRET: 'secret',
       TELEGRAM_BOT_TOKEN: 'bot-token',
@@ -632,7 +731,8 @@ describe('worker integration for broadcast command', () => {
       OPENAI_API_KEY: 'test-key',
       OPENAI_MODEL: 'gpt-test',
       BROADCAST_ENABLED: 'true',
-      BROADCAST_RECIPIENTS: JSON.stringify([{ chatId: 'subscriber-1' }]),
+      DB: db,
+      ADMIN_EXPORT_LOG: { put: vi.fn() },
       ADMIN_TG_IDS: adminKv,
       ENV_VERSION: '1',
     } as Record<string, unknown>;
@@ -697,7 +797,9 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: 'Пришлите текст для 1 получателей. Нажмите /cancel если ❌ не хотите отправлять рассылку.',
+      text:
+        'Пришлите текст для 1 получателей и подтвердите отправкой /send или сообщением. ' +
+        'Нажмите /cancel если ❌ не хотите отправлять рассылку.',
     });
 
     messaging.sendText.mockClear();
@@ -815,13 +917,31 @@ describe('worker integration for broadcast command', () => {
 
     const pendingKv = createPendingKv();
 
+    const db = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn().mockReturnThis(),
+        all: vi.fn().mockResolvedValue({
+          results: [
+            {
+              chatId: 'subscriber-1',
+              username: null,
+              languageCode: null,
+              createdAt: 1710000000,
+              isBot: 0,
+            },
+          ],
+        }),
+      })),
+    };
+
     const env = {
       TELEGRAM_WEBHOOK_SECRET: 'secret',
       TELEGRAM_BOT_TOKEN: 'bot-token',
       TELEGRAM_BOT_USERNAME: 'demo_bot',
       OPENAI_API_KEY: 'test-key',
       OPENAI_MODEL: 'gpt-test',
-      BROADCAST_RECIPIENTS: JSON.stringify([{ chatId: 'subscriber-1' }]),
+      DB: db,
+      ADMIN_EXPORT_LOG: { put: vi.fn() },
       ADMIN_TG_IDS: adminKv,
       ENV_VERSION: '1',
       BROADCAST_PENDING_KV: pendingKv.kv,
