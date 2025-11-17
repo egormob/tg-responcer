@@ -67,7 +67,7 @@ describe('createImmediateBroadcastSender', () => {
     );
     expect(waitCalls.some((delay) => delay >= 25)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
-      'broadcast pool completed',
+      'broadcast_summary',
       expect.objectContaining({ delivered: recipients.length, throttled429: expect.any(Number) }),
     );
     expect(telemetry.record).toHaveBeenCalledWith(
@@ -115,7 +115,7 @@ describe('createImmediateBroadcastSender', () => {
     );
   });
 
-  it('applies language filter to recipients', async () => {
+  it('ignores segmentation filters and delivers to all recipients from D1 source', async () => {
     const recipients = [
       { chatId: 'chat-1', languageCode: 'en' },
       { chatId: 'chat-2', languageCode: 'ru' },
@@ -128,6 +128,7 @@ describe('createImmediateBroadcastSender', () => {
     const sendBroadcast = createImmediateBroadcastSender({
       messaging: { sendText },
       recipients,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
 
     const result = await sendBroadcast({
@@ -136,13 +137,8 @@ describe('createImmediateBroadcastSender', () => {
       filters: { languageCodes: ['ru'] },
     });
 
-    expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText).toHaveBeenCalledWith({
-      chatId: 'chat-2',
-      threadId: undefined,
-      text: 'hello',
-    });
-    expect(result.delivered).toBe(1);
+    expect(sendText).toHaveBeenCalledTimes(recipients.length);
+    expect(result.delivered).toBe(recipients.length);
     expect(result.failed).toBe(0);
   });
 });

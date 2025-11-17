@@ -57,6 +57,16 @@ export interface BroadcastSendResult {
   delivered: number;
   failed: number;
   deliveries: ReadonlyArray<BroadcastSendResultDelivery>;
+  recipients: number;
+  durationMs: number;
+  source?: string | null;
+  sample: ReadonlyArray<{
+    chatId: string;
+    threadId?: string | null;
+    username?: string | null;
+    languageCode?: string | null;
+  }>;
+  throttled429?: number;
 }
 
 export type SendBroadcast = (input: BroadcastSendInput) => Promise<BroadcastSendResult>;
@@ -259,17 +269,6 @@ const applyAudienceFilters = (
     result = result.filter((recipient) => userIds.has(recipient.chatId));
   }
 
-  if (filters.languageCodes?.length) {
-    const languageCodes = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
-    result = result.filter((recipient) => {
-      if (!recipient.languageCode) {
-        return false;
-      }
-
-      return languageCodes.has(recipient.languageCode.toLowerCase());
-    });
-  }
-
   return result;
 };
 
@@ -334,7 +333,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       languageCode: recipient.languageCode ?? null,
     }));
 
-    options.logger?.info?.('broadcast recipients resolved', {
+    options.logger?.info?.('broadcast_resolve', {
       requestedBy,
       filters: filters ?? null,
       source: resolved.source ?? null,
@@ -353,6 +352,11 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         delivered: 0,
         failed: 0,
         deliveries: [],
+        recipients: 0,
+        durationMs: 0,
+        source: resolved.source ?? null,
+        sample: recipientsSample,
+        throttled429: 0,
       } satisfies BroadcastSendResult;
     }
 
@@ -551,41 +555,46 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     const failed = deliveries.length - delivered;
     const durationMs = Date.now() - startedAt;
 
-    if (aborted && abortedError) {
-      options.logger?.error?.('broadcast pool aborted summary', {
-        requestedBy,
-        recipients: deliveries.length,
-        filters: filters ?? null,
-        source: resolved.source ?? null,
-        delivered,
-        failed,
-        poolSize: concurrency,
-        throttled429: throttledErrors,
-        durationMs,
-        reason: abortedError.reason,
-      });
-    } else {
-      options.logger?.info?.('broadcast pool completed', {
-        requestedBy,
-        recipients: deliveries.length,
-        filters: filters ?? null,
-        source: resolved.source ?? null,
-        delivered,
-        failed,
-        poolSize: concurrency,
-        throttled429: throttledErrors,
-        durationMs,
-      });
-    }
+    const errorCounts = deliveries.reduce((acc, entry) => {
+      if (!entry.error) {
+        return acc;
+      }
 
-    options.logger?.info?.('broadcast deliveries recorded', {
+      const key = `${entry.error.name}:${entry.error.message}`;
+      const current = acc.get(key);
+      const nextCount = (current?.count ?? 0) + 1;
+
+      acc.set(key, { name: entry.error.name, message: entry.error.message, count: nextCount });
+
+      return acc;
+    }, new Map<string, { name: string; message: string; count: number }>());
+
+    const topErrors = Array.from(errorCounts.values())
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 3);
+
+    const summaryDetails = {
       requestedBy,
+      recipients: deliveries.length,
       filters: filters ?? null,
       source: resolved.source ?? null,
       delivered,
       failed,
-      recipients: deliveries.length,
-    });
+      poolSize: concurrency,
+      throttled429: throttledErrors,
+      durationMs,
+      topErrors,
+    };
+
+    if (aborted && abortedError) {
+      options.logger?.error?.('broadcast_summary', {
+        ...summaryDetails,
+        aborted: true,
+        reason: abortedError.reason,
+      });
+    } else {
+      options.logger?.info?.('broadcast_summary', summaryDetails);
+    }
 
     options.telemetry?.record({
       requestedBy,
@@ -612,6 +621,11 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       delivered,
       failed,
       deliveries,
+      recipients: deliveries.length,
+      durationMs,
+      source: resolved.source ?? null,
+      sample: recipientsSample,
+      throttled429: throttledErrors,
     } satisfies BroadcastSendResult;
   };
 };

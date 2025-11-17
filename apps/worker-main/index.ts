@@ -46,9 +46,6 @@ import {
   createBroadcastDiagRoute,
   createBroadcastTelemetry,
   type BroadcastTelemetry,
-  parseBroadcastRecipients,
-  type BroadcastRecipient,
-  type BroadcastAudienceFilter,
 } from './features';
 import {
   createRouter,
@@ -784,74 +781,6 @@ const createAdminRoutes = (
   return routes;
 };
 
-const createStaticBroadcastRegistry = (
-  recipients: BroadcastRecipient[],
-): BroadcastRecipientsStore => {
-  const records = recipients.map((recipient) => ({
-    chatId: recipient.chatId,
-    username: recipient.username,
-    languageCode: recipient.languageCode,
-    createdAt: new Date(0),
-    activeFlag: true,
-  }));
-
-  const filterRecipients = (filter?: BroadcastAudienceFilter) => {
-    if (!filter || (!filter.chatIds && !filter.userIds)) {
-      return recipients;
-    }
-
-    const chatIds = filter.chatIds ? new Set(filter.chatIds.map((id) => id.trim())) : undefined;
-    const userIds = filter.userIds ? new Set(filter.userIds.map((id) => id.trim())) : undefined;
-
-    return recipients.filter((recipient) => {
-      if (chatIds && !chatIds.has(recipient.chatId)) {
-        return false;
-      }
-
-      if (userIds && !userIds.has(recipient.chatId)) {
-        return false;
-      }
-
-      return true;
-    });
-  };
-
-  return {
-    async listActiveRecipients(filter) {
-      return filterRecipients(filter);
-    },
-    async listActiveRecords() {
-      return records;
-    },
-    async listSample(options) {
-      const usernames = options?.usernames ? new Set(options.usernames.map((name) => name.trim())) : undefined;
-      const userIds = options?.userIds ? new Set(options.userIds.map((id) => id.trim())) : undefined;
-
-      const filtered = recipients.filter((recipient) => {
-        if (usernames && recipient.username && !usernames.has(recipient.username)) {
-          return false;
-        }
-
-        if (userIds && !userIds.has(recipient.chatId)) {
-          return false;
-        }
-
-        return true;
-      });
-
-      const limited = options?.limit ? filtered.slice(0, options.limit) : filtered;
-
-      return { items: limited, count: filtered.length };
-    },
-    async upsertRecipient(input) {
-      console.warn('[broadcast] static recipients registry cannot upsert', { chatId: input.chatId });
-    },
-    async deactivateRecipient(chatId) {
-      console.warn('[broadcast] static recipients registry cannot deactivate', { chatId });
-    },
-  } satisfies BroadcastRecipientsStore;
-};
-
 const createTransformPayload = (
   env: WorkerEnv,
   composition: CompositionResult,
@@ -893,6 +822,7 @@ const createTransformPayload = (
 
   const broadcastEnabled =
     !!broadcastRegistry
+    && !!env.ADMIN_EXPORT_LOG
     && (typeof env.BROADCAST_ENABLED === 'undefined' ? true : isEnabledFlag(env.BROADCAST_ENABLED));
   const broadcastPendingStore = broadcastEnabled ? getBroadcastSessionStore(env) : undefined;
 
@@ -923,6 +853,7 @@ const createTransformPayload = (
         adminErrorRecorder,
         pendingStore: broadcastPendingStore,
         pendingKv: env.BROADCAST_PENDING_KV,
+        exportLogKv: env.ADMIN_EXPORT_LOG,
       })
     : undefined;
 
@@ -1040,16 +971,13 @@ const createRequestHandler = async (env: WorkerEnv) => {
     logger: console,
     now: () => new Date(),
   });
-  const staticBroadcastRecipients = parseBroadcastRecipients(env.BROADCAST_RECIPIENTS, console);
   const broadcastRegistry = env.DB
     ? createBroadcastRecipientsStore({
         db: env.DB,
         cache: env.BROADCAST_RECIPIENTS_KV,
         logger: console,
       })
-    : staticBroadcastRecipients.length > 0
-      ? createStaticBroadcastRegistry(staticBroadcastRecipients)
-      : undefined;
+    : undefined;
   const transformPayload = createTransformPayload(
     env,
     composition,
