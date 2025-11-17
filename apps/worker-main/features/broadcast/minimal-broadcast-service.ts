@@ -103,7 +103,6 @@ export interface CreateRegistryBroadcastSenderOptions {
   messaging: Pick<MessagingPort, 'sendText'>;
   messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
   registry: BroadcastRecipientsRegistry;
-  fallbackRecipients?: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
@@ -261,12 +260,13 @@ const applyAudienceFilters = (
   }
 
   if (filters.languageCodes?.length) {
-    const languages = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
+    const languageCodes = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
     result = result.filter((recipient) => {
       if (!recipient.languageCode) {
         return false;
       }
-      return languages.has(recipient.languageCode.toLowerCase());
+
+      return languageCodes.has(recipient.languageCode.toLowerCase());
     });
   }
 
@@ -319,7 +319,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
   return async ({ text, requestedBy, filters }) => {
     const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
-    const filtersToApply = resolved.source === 'registry' ? filters : undefined;
+    const filtersToApply = filters;
     const recipients = deduplicateRecipients(
       applyAudienceFilters(
         resolved.recipients.filter((recipient) => recipient.chatId.trim().length > 0),
@@ -639,10 +639,6 @@ export const createImmediateBroadcastSender = (
 export const createRegistryBroadcastSender = (
   options: CreateRegistryBroadcastSenderOptions,
 ): SendBroadcast => {
-  const fallbackRecipients = deduplicateRecipients(
-    (options.fallbackRecipients ?? []).filter((recipient) => recipient.chatId.trim().length > 0),
-  );
-
   const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
     try {
       const fromRegistry = await options.registry.listActiveRecipients(filters);
@@ -663,14 +659,6 @@ export const createRegistryBroadcastSender = (
         error: toErrorDetails(error),
         filters: filters ?? null,
       });
-    }
-
-    if (fallbackRecipients.length > 0) {
-      options.logger?.warn?.('falling back to env broadcast recipients', {
-        filters: filters ?? null,
-        recipients: fallbackRecipients.length,
-      });
-      return { recipients: fallbackRecipients, source: 'env_fallback' } satisfies ResolveRecipientsResult;
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {

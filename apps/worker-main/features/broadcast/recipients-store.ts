@@ -4,16 +4,10 @@ import type { BroadcastRecipient } from './minimal-broadcast-service';
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   all<T = unknown>(): Promise<{ results: T[] }>;
-  run<T = D1Result>(): Promise<T>;
 }
 
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
-}
-
-interface D1Result {
-  success?: boolean;
-  changes?: number;
 }
 
 interface Logger {
@@ -36,9 +30,19 @@ export interface BroadcastRecipientUpsertInput {
   languageCode?: string;
 }
 
+export interface BroadcastRecipientsStoreSampleOptions {
+  usernames?: readonly string[];
+  userIds?: readonly string[];
+  limit?: number;
+}
+
 export interface BroadcastRecipientsStore {
   listActiveRecipients(filter?: BroadcastAudienceFilter): Promise<BroadcastRecipient[]>;
   listActiveRecords(): Promise<BroadcastRecipientRecord[]>;
+  listSample(options?: BroadcastRecipientsStoreSampleOptions): Promise<{
+    items: BroadcastRecipient[];
+    count: number;
+  }>;
   upsertRecipient(input: BroadcastRecipientUpsertInput): Promise<void>;
   deactivateRecipient(chatId: string): Promise<void>;
 }
@@ -57,35 +61,8 @@ interface BroadcastRecipientRow {
   username: string | null;
   languageCode: string | null;
   createdAt: number | string | null;
-  activeFlag: number | null;
+  isBot: number | null;
 }
-
-const SELECT_ACTIVE_RECIPIENTS_SQL = `
-  SELECT
-    chat_id AS chatId,
-    username,
-    language_code AS languageCode,
-    created_at AS createdAt,
-    active_flag AS activeFlag
-  FROM broadcast_recipients
-  WHERE active_flag = 1
-  ORDER BY created_at ASC;
-`;
-
-const UPSERT_RECIPIENT_SQL = `
-  INSERT INTO broadcast_recipients (chat_id, username, language_code, active_flag)
-  VALUES (?1, ?2, ?3, 1)
-  ON CONFLICT(chat_id) DO UPDATE SET
-    username = excluded.username,
-    language_code = excluded.language_code,
-    active_flag = 1;
-`;
-
-const DEACTIVATE_RECIPIENT_SQL = `
-  UPDATE broadcast_recipients
-  SET active_flag = 0
-  WHERE chat_id = ?1;
-`;
 
 const CACHE_VERSION = 1;
 const DEFAULT_CACHE_KEY = 'broadcast:recipients:active';
@@ -116,20 +93,29 @@ const normalizeLanguageCode = (value: string | undefined): string | undefined =>
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const normalizeList = (values: readonly string[] | undefined): string[] | undefined => {
+  if (!values) {
+    return undefined;
+  }
+
+  const normalized = values
+    .map((value) => value.trim())
+    .map((value) => (value.startsWith('@') ? value.slice(1) : value))
+    .map((value) => value.toLowerCase())
+    .filter((value) => value.length > 0);
+
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+};
+
 const toDate = (value: number | string | null | undefined, fallback: Date): Date => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return new Date(value * 1000);
   }
 
   if (typeof value === 'string') {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) {
-      return new Date(parsed * 1000);
-    }
-
-    const timestamp = new Date(value);
-    if (!Number.isNaN(timestamp.getTime())) {
-      return timestamp;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
     }
   }
 
@@ -141,7 +127,7 @@ const mapRowToRecord = (row: BroadcastRecipientRow, now: Date): BroadcastRecipie
   username: normalizeUsername(row.username ?? undefined),
   languageCode: normalizeLanguageCode(row.languageCode ?? undefined),
   createdAt: toDate(row.createdAt, now),
-  activeFlag: row.activeFlag === 1,
+  activeFlag: true,
 });
 
 const toRecipient = (record: BroadcastRecipientRecord): BroadcastRecipient => ({
@@ -149,40 +135,6 @@ const toRecipient = (record: BroadcastRecipientRecord): BroadcastRecipient => ({
   username: record.username,
   languageCode: record.languageCode,
 });
-
-const applyFilters = (
-  recipients: BroadcastRecipient[],
-  filters: BroadcastAudienceFilter | undefined,
-): BroadcastRecipient[] => {
-  if (!filters) {
-    return recipients;
-  }
-
-  let filtered = recipients;
-
-  if (filters.chatIds?.length) {
-    const chatIds = new Set(filters.chatIds.map((id) => id.trim()));
-    filtered = filtered.filter((recipient) => chatIds.has(recipient.chatId));
-  }
-
-  if (filters.userIds?.length) {
-    const userIds = new Set(filters.userIds.map((id) => id.trim()));
-    filtered = filtered.filter((recipient) => userIds.has(recipient.chatId));
-  }
-
-  if (filters.languageCodes?.length) {
-    const languages = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
-    filtered = filtered.filter((recipient) => {
-      if (!recipient.languageCode) {
-        return false;
-      }
-
-      return languages.has(recipient.languageCode.toLowerCase());
-    });
-  }
-
-  return filtered;
-};
 
 const serializeCachePayload = (payload: CachePayload): string => JSON.stringify(payload);
 
@@ -231,6 +183,37 @@ const deduplicateRecipients = (recipients: BroadcastRecipient[]): BroadcastRecip
   return result;
 };
 
+const buildRecipientsWhereClause = (filters?: BroadcastRecipientsStoreSampleOptions) => {
+  const usernames = normalizeList(filters?.usernames);
+  const userIds = normalizeList(filters?.userIds);
+
+  const clauses = [
+    'm.chat_id IS NOT NULL',
+    "TRIM(m.chat_id) != ''",
+    'COALESCE(json_extract(u.metadata, "$.isBot"), 0) = 0',
+  ];
+  const bindings: unknown[] = [];
+
+  if (usernames?.length) {
+    clauses.push(`LOWER(u.username) IN (${usernames.map(() => '?').join(', ')})`);
+    bindings.push(...usernames);
+  }
+
+  if (userIds?.length) {
+    clauses.push(`u.user_id IN (${userIds.map(() => '?').join(', ')})`);
+    bindings.push(...userIds);
+  }
+
+  const whereClause = clauses.map((clause, index) => `${index === 0 ? 'WHERE' : '  AND'} ${clause}`).join('\n');
+
+  return { whereClause, bindings };
+};
+
+const mapRowsToRecords = (
+  rows: BroadcastRecipientRow[],
+  now: Date,
+): BroadcastRecipientRecord[] => rows.map((row) => mapRowToRecord(row, now));
+
 export const createBroadcastRecipientsStore = (
   options: CreateBroadcastRecipientsStoreOptions,
 ): BroadcastRecipientsStore => {
@@ -238,12 +221,48 @@ export const createBroadcastRecipientsStore = (
   const cacheTtlSeconds = options.cacheTtlMs ? Math.max(1, Math.floor(options.cacheTtlMs / 1000)) : undefined;
   const now = options.now ?? (() => new Date());
 
-  const readActiveRecords = async (): Promise<BroadcastRecipientRecord[]> => {
+  const queryRecipients = async (
+    filters?: BroadcastRecipientsStoreSampleOptions,
+    limit?: number,
+  ): Promise<{ records: BroadcastRecipientRecord[]; count: number }> => {
+    const { whereClause, bindings } = buildRecipientsWhereClause(filters);
+    const limitClause = limit && Number.isFinite(limit) && limit > 0 ? 'LIMIT ?' : '';
+
+    const selectSql = `
+      SELECT
+        m.chat_id AS chatId,
+        MIN(m.timestamp) AS createdAt,
+        LOWER(NULLIF(u.username, '')) AS username,
+        LOWER(NULLIF(u.language_code, '')) AS languageCode,
+        MAX(COALESCE(json_extract(u.metadata, "$.isBot"), 0)) AS isBot
+      FROM messages m
+      LEFT JOIN users u ON u.user_id = m.user_id
+      ${whereClause}
+      GROUP BY m.chat_id
+      ORDER BY MIN(m.timestamp) ASC
+      ${limitClause};
+    `;
+
+    const countSql = `
+      SELECT COUNT(DISTINCT m.chat_id) AS total
+      FROM messages m
+      LEFT JOIN users u ON u.user_id = m.user_id
+      ${whereClause};
+    `;
+
+    const selectStatement = options.db.prepare(selectSql);
+    const countStatement = options.db.prepare(countSql);
+
+    const selectBindings = limitClause ? [...bindings, limit] : bindings;
+
     try {
-      const statement = options.db.prepare(SELECT_ACTIVE_RECIPIENTS_SQL);
-      const { results } = await statement.all<BroadcastRecipientRow>();
+      const { results } = await selectStatement.bind(...selectBindings).all<BroadcastRecipientRow>();
+      const countResult = await countStatement.bind(...bindings).all<{ total: number | string | null }>();
+      const total = countResult.results[0]?.total ?? 0;
       const currentTime = now();
-      return results.map((row) => mapRowToRecord(row, currentTime));
+
+      const records = mapRowsToRecords(results, currentTime).filter((record) => record.chatId.length > 0);
+      return { records, count: typeof total === 'string' ? Number(total) : Number(total) };
     } catch (error) {
       options.logger?.error?.('failed to read broadcast recipients from d1', {
         error: error instanceof Error ? error.message : String(error),
@@ -260,8 +279,8 @@ export const createBroadcastRecipientsStore = (
       }
     }
 
-    const records = await readActiveRecords();
-    const recipients = records.filter((record) => record.activeFlag).map(toRecipient);
+    const { records } = await queryRecipients();
+    const recipients = records.map(toRecipient);
 
     if (options.cache) {
       const payload: CachePayload = {
@@ -301,50 +320,49 @@ export const createBroadcastRecipientsStore = (
   return {
     async listActiveRecipients(filter) {
       const recipients = await readActiveRecipients();
-      return applyFilters(recipients, filter);
-    },
-    async listActiveRecords() {
-      const records = await readActiveRecords();
-      return records.filter((record) => record.activeFlag);
-    },
-    async upsertRecipient(input) {
-      const chatId = normalizeChatId(input.chatId);
-      const username = normalizeUsername(input.username);
-      const languageCode = normalizeLanguageCode(input.languageCode);
 
-      try {
-        const statement = options.db.prepare(UPSERT_RECIPIENT_SQL);
-        await statement.bind(chatId, username ?? null, languageCode ?? null).run();
-        options.logger?.info?.('broadcast recipient upserted', {
-          chatId,
-          username: username ?? null,
-          languageCode: languageCode ?? null,
-        });
-      } catch (error) {
-        options.logger?.error?.('failed to upsert broadcast recipient', {
-          chatId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
+      if (!filter || (!filter.chatIds && !filter.userIds)) {
+        return recipients;
       }
 
+      const chatIds = filter.chatIds ? new Set(filter.chatIds.map((id) => id.trim())) : undefined;
+      const userIds = filter.userIds ? new Set(filter.userIds.map((id) => id.trim())) : undefined;
+
+      return recipients.filter((recipient) => {
+        if (chatIds && !chatIds.has(recipient.chatId)) {
+          return false;
+        }
+
+        if (userIds && !userIds.has(recipient.chatId)) {
+          return false;
+        }
+
+        return true;
+      });
+    },
+    async listActiveRecords() {
+      const { records } = await queryRecipients();
+      return records;
+    },
+    async listSample(options) {
+      const { records, count } = await queryRecipients({
+        usernames: options?.usernames,
+        userIds: options?.userIds,
+        limit: options?.limit,
+      }, options?.limit);
+
+      return { items: records.map(toRecipient), count };
+    },
+    async upsertRecipient(input) {
+      options.logger?.warn?.('upsert recipient ignored for derived registry', {
+        chatId: normalizeChatId(input.chatId),
+      });
       await invalidateCache();
     },
     async deactivateRecipient(chatIdInput) {
-      const chatId = normalizeChatId(chatIdInput);
-
-      try {
-        const statement = options.db.prepare(DEACTIVATE_RECIPIENT_SQL);
-        await statement.bind(chatId).run();
-        options.logger?.info?.('broadcast recipient deactivated', { chatId });
-      } catch (error) {
-        options.logger?.error?.('failed to deactivate broadcast recipient', {
-          chatId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-
+      options.logger?.warn?.('deactivate recipient ignored for derived registry', {
+        chatId: normalizeChatId(chatIdInput),
+      });
       await invalidateCache();
     },
   } satisfies BroadcastRecipientsStore;

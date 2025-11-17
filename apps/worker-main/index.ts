@@ -25,9 +25,7 @@ import {
   createAiQueueDiagRoute,
   createKnownUsersClearRoute,
   createD1StressRoute,
-  createImmediateBroadcastSender,
   createRegistryBroadcastSender,
-  parseBroadcastRecipients,
   createRateLimitNotifier,
   createSelfTestRoute,
   readAdminWhitelist,
@@ -37,7 +35,6 @@ import {
   type TelegramWebhookHandler,
   type AdminExportRateLimitKvNamespace,
   type ExportRateTelemetry,
-  type CreateImmediateBroadcastSenderOptions,
   type LimitsFlagKvNamespace,
   type SendBroadcast,
   type AdminCommandErrorRecorder,
@@ -82,7 +79,6 @@ interface WorkerBindings {
   BROADCAST_PENDING_KV?: BroadcastPendingKvNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
   BROADCAST_ENABLED?: string;
-  BROADCAST_RECIPIENTS?: string;
   BROADCAST_MAX_PARALLEL?: string | number;
   BROADCAST_MAX_RPS?: string | number;
   RATE_LIMIT_DAILY_LIMIT?: string | number;
@@ -825,43 +821,24 @@ const createTransformPayload = (
     : undefined;
 
   const broadcastEnabled =
-    typeof env.BROADCAST_ENABLED === 'undefined'
-      ? true
-      : isEnabledFlag(env.BROADCAST_ENABLED);
-  const broadcastRecipients = broadcastEnabled
-    ? parseBroadcastRecipients(env.BROADCAST_RECIPIENTS, console)
-    : [];
+    env.DB
+    && (typeof env.BROADCAST_ENABLED === 'undefined' ? true : isEnabledFlag(env.BROADCAST_ENABLED));
   const broadcastPendingStore = broadcastEnabled ? getBroadcastSessionStore(env) : undefined;
-
-  if (broadcastEnabled && !broadcastRegistry && broadcastRecipients.length === 0) {
-    console.warn('[broadcast] BROADCAST_RECIPIENTS is empty; broadcasts will not deliver messages');
-  }
 
   const poolOverrides = broadcastRuntime ? { concurrency: broadcastRuntime.maxParallel } : undefined;
   const emergencyStop = broadcastRuntime
     ? { retryAfterMs: broadcastRuntime.emergencyStopRetryAfterMs }
     : undefined;
-  const broadcastSender: SendBroadcast | undefined = broadcastEnabled
-    ? broadcastRegistry
-      ? createRegistryBroadcastSender({
-          messaging: composition.ports.messaging,
-          messagingBroadcast,
-          registry: broadcastRegistry,
-          fallbackRecipients: broadcastRecipients,
-          logger: console,
-          pool: poolOverrides,
-          telemetry: broadcastTelemetry,
-          emergencyStop,
-        })
-      : createImmediateBroadcastSender({
-          messaging: composition.ports.messaging,
-          messagingBroadcast,
-          recipients: broadcastRecipients,
-          logger: console,
-          pool: poolOverrides,
-          telemetry: broadcastTelemetry,
-          emergencyStop,
-        })
+  const broadcastSender: SendBroadcast | undefined = broadcastEnabled && broadcastRegistry
+    ? createRegistryBroadcastSender({
+        messaging: composition.ports.messaging,
+        messagingBroadcast,
+        registry: broadcastRegistry,
+        logger: console,
+        pool: poolOverrides,
+        telemetry: broadcastTelemetry,
+        emergencyStop,
+      })
     : undefined;
 
   const broadcastCommandHandler = adminAccess && broadcastSender
@@ -991,14 +968,13 @@ const createRequestHandler = async (env: WorkerEnv) => {
     logger: console,
     now: () => new Date(),
   });
-  const broadcastRegistry =
-    env.DB && env.BROADCAST_RECIPIENTS_KV
-      ? createBroadcastRecipientsStore({
-          db: env.DB,
-          cache: env.BROADCAST_RECIPIENTS_KV,
-          logger: console,
-        })
-      : undefined;
+  const broadcastRegistry = env.DB
+    ? createBroadcastRecipientsStore({
+        db: env.DB,
+        cache: env.BROADCAST_RECIPIENTS_KV,
+        logger: console,
+      })
+    : undefined;
   const transformPayload = createTransformPayload(
     env,
     composition,

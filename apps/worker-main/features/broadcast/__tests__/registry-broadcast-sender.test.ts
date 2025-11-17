@@ -31,38 +31,30 @@ describe('createRegistryBroadcastSender', () => {
     });
 
     expect(registry.listActiveRecipients).toHaveBeenCalledWith({ languageCodes: ['ru'] });
-    expect(messaging.sendText).toHaveBeenCalledTimes(1);
+    expect(messaging.sendText).toHaveBeenCalledTimes(2);
     expect(messaging.sendText).toHaveBeenCalledWith({ chatId: '100', threadId: undefined, text: 'Segmented hello' });
-    expect(result.delivered).toBe(1);
+    expect(messaging.sendText).toHaveBeenCalledWith({ chatId: '200', threadId: undefined, text: 'Segmented hello' });
+    expect(result.delivered).toBe(2);
     expect(result.failed).toBe(0);
   });
 
-  it('falls back to environment recipients when registry fails and deduplicates', async () => {
+  it('returns empty result when registry fails', async () => {
     const messaging = createMessagingMock();
     const registry = {
       listActiveRecipients: vi.fn().mockRejectedValue(new Error('d1 unavailable')),
     };
 
-    const fallbackRecipients: BroadcastRecipient[] = [
-      { chatId: '100', username: 'alice' },
-      { chatId: '100', username: 'alice2' },
-      { chatId: '300', username: 'carol' },
-    ];
-
     const sender = createRegistryBroadcastSender({
       messaging,
       registry,
-      fallbackRecipients,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
 
     const result = await sender({ text: 'Hello fallback', requestedBy: 'admin-1' });
 
     expect(registry.listActiveRecipients).toHaveBeenCalled();
-    expect(messaging.sendText).toHaveBeenCalledTimes(2);
-    expect(messaging.sendText).toHaveBeenCalledWith({ chatId: '100', threadId: undefined, text: 'Hello fallback' });
-    expect(messaging.sendText).toHaveBeenCalledWith({ chatId: '300', threadId: undefined, text: 'Hello fallback' });
-    expect(result.delivered).toBe(2);
+    expect(messaging.sendText).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(0);
     expect(result.failed).toBe(0);
   });
 });

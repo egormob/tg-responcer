@@ -1,5 +1,4 @@
 import { json } from '../../shared';
-import type { BroadcastAudienceFilter } from './broadcast-payload';
 import type {
   BroadcastRecipientUpsertInput,
   BroadcastRecipientsStore,
@@ -36,26 +35,29 @@ const toOptionalString = (value: unknown): string | undefined => {
   return undefined;
 };
 
-const parseFilterFromQuery = (url: URL): BroadcastAudienceFilter | undefined => {
+const parseFilterFromQuery = (
+  url: URL,
+): { chatIds?: string[]; userIds?: string[]; usernames?: string[]; limit?: number } => {
   const chatIds = url.searchParams.getAll('chatId');
   const userIds = url.searchParams.getAll('userId');
-  const languageCodes = url.searchParams.getAll('language');
+  const usernames = url.searchParams.getAll('username');
+  const limitRaw = url.searchParams.get('limit');
 
   const normalizedChatIds = chatIds.map((value) => value.trim()).filter((value) => value.length > 0);
   const normalizedUserIds = userIds.map((value) => value.trim()).filter((value) => value.length > 0);
-  const normalizedLanguages = languageCodes
-    .map((value) => value.trim().toLowerCase())
-    .filter((value) => value.length > 0);
+  const normalizedUsernames = usernames
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .map((value) => value.replace(/^@+/, ''));
 
-  if (normalizedChatIds.length === 0 && normalizedUserIds.length === 0 && normalizedLanguages.length === 0) {
-    return undefined;
-  }
+  const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
 
   return {
     chatIds: normalizedChatIds.length > 0 ? normalizedChatIds : undefined,
     userIds: normalizedUserIds.length > 0 ? normalizedUserIds : undefined,
-    languageCodes: normalizedLanguages.length > 0 ? normalizedLanguages : undefined,
-  } satisfies BroadcastAudienceFilter;
+    usernames: normalizedUsernames.length > 0 ? normalizedUsernames : undefined,
+    limit: Number.isFinite(limit) && limit ? limit : undefined,
+  };
 };
 
 const parseUpsertPayload = async (request: Request): Promise<BroadcastRecipientUpsertInput> => {
@@ -84,10 +86,17 @@ export const createBroadcastRecipientsAdminHandlers = (
   list: async (request) => {
     const url = new URL(request.url);
     const filter = parseFilterFromQuery(url);
-    const recipients = await options.store.listActiveRecipients(filter);
+    const { items, count } = await options.store.listSample({
+      usernames: filter.usernames,
+      userIds: filter.userIds,
+      limit: filter.limit,
+    });
+    const recipients = filter.chatIds?.length
+      ? items.filter((recipient) => filter.chatIds?.includes(recipient.chatId))
+      : items;
     return json({
       items: recipients,
-      count: recipients.length,
+      count,
     });
   },
   upsert: async (request) => {
