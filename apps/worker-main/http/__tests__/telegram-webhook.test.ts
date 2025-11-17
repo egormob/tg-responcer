@@ -386,6 +386,7 @@ describe('transformTelegramUpdate', () => {
       messaging,
       sendBroadcast,
       now: () => new Date(),
+      recipientsRegistry: { listActiveRecipients: vi.fn().mockResolvedValue([]) },
     });
 
     const result = await transformTelegramUpdate(update, {
@@ -434,6 +435,7 @@ describe('transformTelegramUpdate', () => {
       sendBroadcast,
       now: () => new Date('2024-01-01T00:00:00Z'),
       logger,
+      recipientsRegistry: { listActiveRecipients: vi.fn().mockResolvedValue([]) },
     });
 
     const features = { handleAdminCommand: broadcastHandler.handleCommand };

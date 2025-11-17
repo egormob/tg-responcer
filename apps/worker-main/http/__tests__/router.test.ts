@@ -6,9 +6,9 @@ import { createQueuedMessagingPort, type MessagingQuotaSharedState } from '../..
 import { createTelegramWebhookHandler } from '../../features';
 import {
   createTelegramBroadcastCommandHandler,
-  BROADCAST_PROMPT_MESSAGE,
   BROADCAST_AUDIENCE_PROMPT,
   BROADCAST_SUCCESS_MESSAGE,
+  buildBroadcastPromptMessage,
   createImmediateBroadcastSender,
 } from '../../features/broadcast';
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
@@ -1210,6 +1210,7 @@ describe('http router', () => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
     const deferred = createDeferred<{ delivered: number; failed: number; deliveries: unknown[] }>();
     const sendBroadcast = vi.fn().mockReturnValue(deferred.promise);
+    const recipientsRegistry = { listActiveRecipients: vi.fn().mockResolvedValue([{ chatId: 'r-1' }]) };
 
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
@@ -1217,6 +1218,7 @@ describe('http router', () => {
       sendBroadcast,
       logger: console,
       now: () => new Date('2024-01-01T00:00:00Z'),
+      recipientsRegistry,
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1255,7 +1257,7 @@ describe('http router', () => {
         date: '1704067205',
         chat: { id: '4242', type: 'private' },
         from: { id: '1010', first_name: 'Admin' },
-        text: 'all',
+        text: '/everybody',
       },
     };
 
@@ -1300,7 +1302,7 @@ describe('http router', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: '4242',
       threadId: undefined,
-      text: BROADCAST_PROMPT_MESSAGE,
+      text: buildBroadcastPromptMessage(1),
     });
 
     const waitUntil = vi.fn();
@@ -1400,6 +1402,7 @@ describe('http router', () => {
       sendBroadcast,
       logger: console,
       now: () => new Date('2024-01-01T00:00:00Z'),
+      recipientsRegistry: { listActiveRecipients: vi.fn().mockResolvedValue([{ chatId: 'broadcast-1' }]) },
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1455,7 +1458,7 @@ describe('http router', () => {
         date: '1704067205',
         chat: { id: 'admin-chat', type: 'private' },
         from: { id: '2020', first_name: 'Admin' },
-        text: 'all',
+        text: '/everybody',
       },
     };
 
@@ -1499,7 +1502,7 @@ describe('http router', () => {
     expect(sendText).toHaveBeenCalledWith({
       chatId: 'admin-chat',
       threadId: undefined,
-      text: BROADCAST_PROMPT_MESSAGE,
+      text: buildBroadcastPromptMessage(1),
     });
 
     const waitUntil = vi.fn();
@@ -1614,6 +1617,12 @@ describe('http router', () => {
       sendBroadcast,
       logger: console,
       now: () => new Date('2024-01-01T00:00:00Z'),
+      recipientsRegistry: {
+        listActiveRecipients: vi.fn().mockResolvedValue([
+          { chatId: 'broadcast-1' },
+          { chatId: 'broadcast-2' },
+        ]),
+      },
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1669,7 +1678,7 @@ describe('http router', () => {
         date: '1704067205',
         chat: { id: 'admin-chat', type: 'private' },
         from: { id: '2040', first_name: 'Admin' },
-        text: 'all',
+        text: '/everybody',
       },
     };
 
@@ -1713,7 +1722,7 @@ describe('http router', () => {
     expect(sendText).toHaveBeenCalledWith({
       chatId: 'admin-chat',
       threadId: undefined,
-      text: BROADCAST_PROMPT_MESSAGE,
+      text: buildBroadcastPromptMessage(2),
     });
 
     const waitUntil = vi.fn();
