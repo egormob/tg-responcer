@@ -115,7 +115,7 @@ describe('createImmediateBroadcastSender', () => {
     );
   });
 
-  it('sends to all recipients even when filters are provided', async () => {
+  it('applies language filter to recipients', async () => {
     const recipients = [
       { chatId: 'chat-1', languageCode: 'en' },
       { chatId: 'chat-2', languageCode: 'ru' },
@@ -133,21 +133,16 @@ describe('createImmediateBroadcastSender', () => {
     const result = await sendBroadcast({
       text: 'hello',
       requestedBy: 'ops',
-      filters: { languageCodes: ['ru'], chatIds: ['chat-1'] },
+      filters: { languageCodes: ['ru'] },
     });
 
-    expect(sendText).toHaveBeenCalledTimes(2);
-    expect(sendText).toHaveBeenNthCalledWith(1, {
-      chatId: 'chat-1',
-      threadId: undefined,
-      text: 'hello',
-    });
-    expect(sendText).toHaveBeenNthCalledWith(2, {
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith({
       chatId: 'chat-2',
       threadId: undefined,
       text: 'hello',
     });
-    expect(result.delivered).toBe(2);
+    expect(result.delivered).toBe(1);
     expect(result.failed).toBe(0);
   });
 });

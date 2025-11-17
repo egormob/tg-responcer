@@ -259,6 +259,17 @@ const applyAudienceFilters = (
     result = result.filter((recipient) => userIds.has(recipient.chatId));
   }
 
+  if (filters.languageCodes?.length) {
+    const languageCodes = new Set(filters.languageCodes.map((code) => code.trim().toLowerCase()));
+    result = result.filter((recipient) => {
+      if (!recipient.languageCode) {
+        return false;
+      }
+
+      return languageCodes.has(recipient.languageCode.toLowerCase());
+    });
+  }
+
   return result;
 };
 
@@ -308,7 +319,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
   return async ({ text, requestedBy, filters }) => {
     const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
-    const filtersToApply = resolved.source === 'registry' ? filters : undefined;
+    const filtersToApply = filters;
     const recipients = deduplicateRecipients(
       applyAudienceFilters(
         resolved.recipients.filter((recipient) => recipient.chatId.trim().length > 0),
