@@ -116,6 +116,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       { chatId: 'subscriber-2', username: 'bob' },
       { chatId: 'subscriber-3', username: 'charlie' },
     ],
+    maxTextLength,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
@@ -123,6 +124,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     adminErrorRecorder?: AdminCommandErrorRecorder;
     logger?: { info?: (...args: unknown[]) => unknown; warn?: (...args: unknown[]) => unknown; error?: (...args: unknown[]) => unknown };
     recipients?: Array<{ chatId: string; username?: string }>;
+    maxTextLength?: number;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -144,6 +146,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       adminErrorRecorder,
       recipientsRegistry,
       exportLogKv,
+      maxTextLength,
     });
 
     return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger, exportLogKv };
@@ -234,6 +237,61 @@ describe('createTelegramBroadcastCommandHandler', () => {
       chatId: 'chat-1',
       threadId: 'thread-1',
       text: '✅ Рассылка отправлена!',
+    });
+  });
+
+  it('blocks further messages after length rejection until /new_text is received', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi
+      .fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockResolvedValue({
+        delivered: 3,
+        failed: 0,
+        deliveries: [],
+        recipients: 3,
+        durationMs: 42,
+        source: 'D1',
+        sample: [],
+        throttled429: 0,
+      });
+
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, maxTextLength: 5 });
+
+    await startBroadcastFlow(handler);
+
+    await handler.handleMessage(createIncomingMessage('123456'));
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+
+    await handler.handleMessage(createIncomingMessage('ok'));
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+
+    await handler.handleMessage(createIncomingMessage('/new_text'));
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Пришлите текст длиной до 5 символов.',
+    });
+
+    await handler.handleMessage(createIncomingMessage('short'));
+
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      filters: undefined,
+      requestedBy: 'admin-1',
+      text: 'short',
     });
   });
 
@@ -428,7 +486,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит 3970 символов: превышение на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
   });
 
@@ -447,12 +505,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(3, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит 3970 символов: превышение на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
     expect(sendTextMock).toHaveBeenNthCalledWith(4, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит 3970 символов: превышение на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
   });
 
@@ -470,7 +528,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит 3970 символов: превышение на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
   });
 
