@@ -864,6 +864,85 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
+    if (entry.awaitingNewText) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      if (normalized === '/new_text') {
+        const resumedEntry: PendingBroadcast = {
+          ...refreshedEntry,
+          awaitingNewText: false,
+          lastRejectedLength: undefined,
+          lastExceededBy: undefined,
+        };
+
+        await savePendingEntry(userKey, resumedEntry);
+
+        try {
+          await options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: buildNewTextPrompt(maxTextLength),
+          });
+
+          logger.info('broadcast awaiting new text after rejection', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+          });
+        } catch (error) {
+          logger.error('failed to send broadcast new text prompt', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+            error: toErrorDetails(error),
+          });
+
+          await handleMessagingFailure(message.user.userId, 'broadcast_new_text_prompt', error);
+        }
+
+        return 'handled';
+      }
+
+      const exceededBy = Math.max(
+        1,
+        entry.lastExceededBy ??
+          (typeof entry.lastRejectedLength === 'number'
+            ? entry.lastRejectedLength - maxTextLength
+            : 1),
+      );
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      logger.info('broadcast awaiting new text', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        exceededBy,
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: buildTooLongMessage(maxTextLength, exceededBy),
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast length warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_length_warning', error);
+      }
+
+      return 'handled';
+    }
+
     if (entry.stage === 'audience' && entry.audience) {
       entry = {
         ...entry,
@@ -938,60 +1017,6 @@ export const createTelegramBroadcastCommandHandler = (
 
     if (entry.stage === 'audience') {
       return handleAudienceSelection(message, entry);
-    }
-
-    if (entry.awaitingNewText) {
-      const refreshedEntry: PendingBroadcast = {
-        ...entry,
-        expiresAt: now().getTime() + pendingTtlMs,
-      };
-
-      if (normalized === '/new_text') {
-        const resumedEntry: PendingBroadcast = {
-          ...refreshedEntry,
-          awaitingNewText: false,
-          lastRejectedLength: undefined,
-          lastExceededBy: undefined,
-        };
-
-        await savePendingEntry(userKey, resumedEntry);
-
-        try {
-          await options.messaging.sendText({
-            chatId: message.chat.id,
-            threadId: message.chat.threadId,
-            text: buildNewTextPrompt(maxTextLength),
-          });
-
-          logger.info('broadcast awaiting new text after rejection', {
-            userId: message.user.userId,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-          });
-        } catch (error) {
-          logger.error('failed to send broadcast new text prompt', {
-            userId: message.user.userId,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-            error: toErrorDetails(error),
-          });
-
-          await handleMessagingFailure(message.user.userId, 'broadcast_new_text_prompt', error);
-        }
-
-        return 'handled';
-      }
-
-      await savePendingEntry(userKey, refreshedEntry);
-
-      logger.info('broadcast message ignored while awaiting new text', {
-        userId: message.user.userId,
-        chatId: message.chat.id,
-        threadId: message.chat.threadId ?? null,
-        messageId: message.messageId ?? null,
-      });
-
-      return 'handled';
     }
 
     const { text, usedSendCommand } = extractBroadcastText(rawText);
