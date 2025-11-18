@@ -865,6 +865,18 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     if (entry.awaitingNewText) {
+      if (normalized === '/broadcast') {
+        logger.info('broadcast restart requested while awaiting new text', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+
+        await deletePendingEntry(userKey);
+
+        return undefined;
+      }
+
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
