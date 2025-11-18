@@ -495,6 +495,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       stage: 'text',
       audience: { mode: 'all', total: 3, notFound: [] },
+      awaitingTextPrompt: true,
       expiresAt: new Date('2024-01-01T00:01:00Z').getTime(),
     };
 
@@ -520,6 +521,52 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: 'Текст рассылки не укладывается в лимит на 30 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
+  });
+
+  it('resends awaiting text prompt when restored pending entry lacks prompt flag', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { kv, store } = createPendingKv();
+    const pendingStore = new Map<string, PendingBroadcast>();
+    const { handler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      logger,
+      pendingKv: kv,
+      pendingStore,
+    });
+
+    await handler.handleCommand(createContext());
+
+    const restoredEntry: PendingBroadcast = {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      stage: 'text',
+      audience: { mode: 'all', total: 3, notFound: [] },
+      expiresAt: new Date('2024-01-01T00:01:00Z').getTime(),
+    };
+
+    pendingStore.clear();
+    store.set('broadcast:pending:admin-1', {
+      value: JSON.stringify({ version: 2, entry: restoredEntry }),
+      expiration: Math.floor(new Date('2024-01-01T00:01:00Z').getTime() / 1000),
+    });
+
+    const result = await handler.handleMessage(createIncomingMessage('hello after restore'));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting text prompt restored',
+      expect.objectContaining({ mode: 'all', total: 3, notFound: [] }),
+    );
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildBroadcastPromptMessage(3),
+    });
+    expect(pendingStore.get('admin-1')).toEqual(
+      expect.objectContaining({ awaitingTextPrompt: true, stage: 'text' }),
+    );
   });
 
   it('rejects text that exceeds telegram limit with precise overflow notice', async () => {
