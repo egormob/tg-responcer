@@ -1,0 +1,13 @@
+# Broadcast + параллельный диалог — wrangler tail
+
+- **Диаг-пакет:** `/broadcast` + параллельный диалог, файл tail: `tg-responcer-broadcast-20251118-104723.log` (wrangler tail --format=json, scriptName=tg-responcer, scriptVersion=7c06139d-6492-4f32-a209-2d440379ad8a).
+- **Источник аудитории:** `source: "D1"`; для `list` — `filters.chatIds = ["270641809"]`, sample `chatId: "270641809", username: "trainup_support", languageCode: "ru"`; для `all` — `filters: null`, `recipients: 5`.
+- **Сценарий проверки:** администратор (userId=136236606) запускает `/broadcast` в режимах `list` (1 адресат) и `all` (5 адресатов), в это же время пользователь ведёт обычный диалог; бот отвечает стабильно.
+- **Цепочка событий:** `broadcast awaiting audience selection → broadcast awaiting text (mode: list/all) → broadcast dispatch scheduled via telegram command → broadcast using registry recipients → broadcast pool initialized → broadcast delivered → broadcast_summary → broadcast sent via telegram command`.
+- **Метрики очереди рассылки:** на всём протяжении `activePending=0`, `expiredPending=0`; `broadcast pending metrics` фиксируется с `reason: "command"` и `reason: "message"` без накопленных хвостов.
+- **Итоги точечной рассылки (mode: list, filters.chatIds=["270641809"]):** `recipients: 1`, `delivered: 1`, `failed: 0`, `poolSize: 4`, `throttled429: 0`, `durationMs: 52`, `topErrors: []`.
+- **Итоги массовой рассылки (mode: all):** `recipients: 5`, `filters: null`, `delivered: 5`, `failed: 0`, `poolSize: 4`, `throttled429: 0`, `durationMs: 114`, `topErrors: []`.
+- **AI-контур во время рассылки:** конфиг `[ai][config]` — `maxConcurrency: 4`, `maxQueue: 64`, `requestTimeoutMs: 18000`, `retryMax: 3`, `baseUrls` включает `https://api.openai.com/v1/responses` и endpoint с `cf_region=eu`. Во всех `[ai][queue_leave]` — `queued = 0`, `queueWaitMs = 0`, `active ≤ 1`; присутствуют `[ai][timeout] + [ai][retry]`, но без роста очереди.
+- **Параллельный диалог:** часть tail (текст логов) отправлена пользователем в чат, модель обрабатывает запросы с единичными таймаутами, при этом рассылка и Telegram-ответы не блокируются.
+- **Ошибки и предохранители:** все события с `outcome: "ok"`, `exceptions: []`; POST на `/webhook/devsecret` — HTTP 200; отдельные 405 по `https://tg-responcer.egormob.workers.dev/webhook/devsecret` трактуются как техпроверки. Фиксируются управляемые `broadcast cancelled via telegram command` и `broadcast text rejected` (`reason: "empty"`, `usedSendCommand: true`).
+- **Вывод:** минимальная рассылка по D1-аудитории здорова: отправка доступна в режимах `list` и `all`, `delivered = recipients`, `failed = 0`, троттлинг не срабатывает (`throttled429: 0`), очередь AI не блокируется (`queued=0`, `active≤1`) и диалоговые ответы проходят параллельно.
