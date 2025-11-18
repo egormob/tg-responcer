@@ -31,8 +31,7 @@ const MINIMUM_KV_TTL_SECONDS = 60;
 const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export const BROADCAST_AUDIENCE_PROMPT =
-  'Шаг 1. Пришлите /everybody или список user_id/username через запятую или пробел. ' +
-  'Дубликаты уберём автоматически.';
+  'Шаг 1. Выберите получателей /everybody или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.';
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
   const base = `Шаг 2. Пришлите текст для ${count} получателей, /cancel для отмены.`;
