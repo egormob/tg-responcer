@@ -15,6 +15,7 @@ import type {
   BroadcastSendResult,
   SendBroadcast,
 } from './minimal-broadcast-service';
+import { ADMIN_HELP_MESSAGE } from '../export/telegram-export-command';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -48,7 +49,9 @@ const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
 const buildTooLongMessage = (limit: number, exceededBy: number) =>
-  `Текст превышает лимит в ${limit} символов, сократите его на ${exceededBy} символов или отмените рассылку командой /cancel`;
+  `Текст рассылки не укладывается в лимит ${limit} символов: превышение на ${exceededBy} символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.`;
+
+const buildNewTextPrompt = (limit: number) => `Пришлите текст длиной до ${limit} символов.`;
 
 const BROADCAST_EMPTY_MESSAGE =
   'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
@@ -66,6 +69,8 @@ export interface PendingBroadcast {
   expiresAt: number;
   stage: 'audience' | 'text';
   audience?: BroadcastAudience;
+  awaitingNewText?: boolean;
+  lastRejectedLength?: number;
 }
 
 type BroadcastAudienceMode = 'all' | 'list';
@@ -261,6 +266,11 @@ export const createTelegramBroadcastCommandHandler = (
       }
 
       const audience = parseAudience(parsed.entry.audience);
+      const awaitingNewText = parsed.entry.awaitingNewText === true;
+      const lastRejectedLength =
+        typeof (parsed.entry as { lastRejectedLength?: unknown }).lastRejectedLength === 'number'
+          ? (parsed.entry as { lastRejectedLength: number }).lastRejectedLength
+          : undefined;
 
       return {
         chatId: parsed.entry.chatId,
@@ -268,6 +278,8 @@ export const createTelegramBroadcastCommandHandler = (
         expiresAt: parsed.entry.expiresAt,
         stage: parsed.entry.stage,
         audience,
+        awaitingNewText,
+        lastRejectedLength,
       } satisfies PendingBroadcast;
     } catch (error) {
       logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
@@ -619,6 +631,8 @@ export const createTelegramBroadcastCommandHandler = (
       stage: 'text',
       audience,
       expiresAt: now().getTime() + pendingTtlMs,
+      awaitingNewText: false,
+      lastRejectedLength: undefined,
     };
 
     await savePendingEntry(userKey, updatedEntry);
@@ -820,6 +834,12 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId,
           text: BROADCAST_CANCEL_MESSAGE,
         });
+
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: ADMIN_HELP_MESSAGE,
+        });
       } catch (error) {
         logger.error('failed to send broadcast cancel notice', {
           userId: message.user.userId,
@@ -836,6 +856,78 @@ export const createTelegramBroadcastCommandHandler = (
 
     if (entry.stage === 'audience') {
       return handleAudienceSelection(message, entry);
+    }
+
+    if (entry.awaitingNewText) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      if (normalized === '/new_text') {
+        const resumedEntry: PendingBroadcast = {
+          ...refreshedEntry,
+          awaitingNewText: false,
+          lastRejectedLength: undefined,
+        };
+
+        await savePendingEntry(userKey, resumedEntry);
+
+        try {
+          await options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: buildNewTextPrompt(maxTextLength),
+          });
+
+          logger.info('broadcast awaiting new text after rejection', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+          });
+        } catch (error) {
+          logger.error('failed to send broadcast new text prompt', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+            error: toErrorDetails(error),
+          });
+
+          await handleMessagingFailure(message.user.userId, 'broadcast_new_text_prompt', error);
+        }
+
+        return 'handled';
+      }
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      const exceededBy = Math.max(1, (entry.lastRejectedLength ?? maxTextLength + 1) - maxTextLength);
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: buildTooLongMessage(maxTextLength, exceededBy),
+        });
+
+        logger.warn('broadcast text still pending replacement after rejection', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          exceededBy,
+        });
+      } catch (error) {
+        logger.error('failed to resend broadcast length warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_length_warning_repeat', error);
+      }
+
+      return 'handled';
     }
 
     const { text, usedSendCommand } = extractBroadcastText(rawText);
@@ -881,6 +973,8 @@ export const createTelegramBroadcastCommandHandler = (
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
+        awaitingNewText: true,
+        lastRejectedLength: visibleLength,
       };
 
       await savePendingEntry(userKey, refreshedEntry);

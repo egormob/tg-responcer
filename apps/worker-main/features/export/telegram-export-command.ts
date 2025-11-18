@@ -428,7 +428,7 @@ const collectPaginatedExport = async (
   return { ok: true, data, rowCount, utmSources, limitReached };
 };
 
-const ADMIN_HELP_MESSAGE = [
+export const ADMIN_HELP_MESSAGE = [
   'Доступные команды администратора:',
   '- /admin status — проверить, есть ли у вас доступ администратора. Ответ: admin-ok или forbidden.',
   '- /broadcast — мгновенная рассылка',
