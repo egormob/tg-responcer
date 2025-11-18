@@ -792,8 +792,6 @@ export const createTelegramBroadcastCommandHandler = (
       return undefined;
     }
 
-    await deletePendingEntry(userKey);
-
     if (entry.chatId !== message.chat.id) {
       return undefined;
     }
@@ -814,6 +812,8 @@ export const createTelegramBroadcastCommandHandler = (
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
       });
+
+      await deletePendingEntry(userKey);
 
       try {
         await options.messaging.sendText({
@@ -843,6 +843,13 @@ export const createTelegramBroadcastCommandHandler = (
     const trimmed = text.trim();
 
     if (trimmed.length === 0) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
         reason: 'empty',
@@ -872,6 +879,13 @@ export const createTelegramBroadcastCommandHandler = (
     const visibleLength = getVisibleTextLength(text);
 
     if (visibleLength > maxTextLength) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
         reason: 'too_long',
@@ -908,6 +922,8 @@ export const createTelegramBroadcastCommandHandler = (
         threadId: message.chat.threadId ?? null,
       });
 
+      await deletePendingEntry(userKey);
+
       return 'handled';
     }
 
@@ -929,6 +945,8 @@ export const createTelegramBroadcastCommandHandler = (
     };
 
     const startedAt = now();
+
+    await deletePendingEntry(userKey);
 
     const runBroadcast = async () => {
       let result: BroadcastSendResult | undefined;
