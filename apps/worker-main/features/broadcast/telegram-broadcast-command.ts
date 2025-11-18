@@ -806,7 +806,7 @@ export const createTelegramBroadcastCommandHandler = (
     scheduleMaintenance('message', context);
 
     const userKey = getUserKey(message.user.userId);
-    const entry = await loadPendingEntry(userKey, currentTime);
+    let entry = await loadPendingEntry(userKey, currentTime);
     if (!entry) {
       return undefined;
     }
@@ -858,6 +858,24 @@ export const createTelegramBroadcastCommandHandler = (
       }
 
       return 'handled';
+    }
+
+    if (entry.stage === 'audience' && entry.audience) {
+      entry = {
+        ...entry,
+        stage: 'text',
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, entry);
+
+      logger.info('broadcast awaiting text restored from pending', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        mode: entry.audience.mode,
+        total: entry.audience.total,
+      });
     }
 
     if (entry.stage === 'audience') {
@@ -974,6 +992,13 @@ export const createTelegramBroadcastCommandHandler = (
         reason: 'too_long',
         length: visibleLength,
         limit: maxTextLength,
+      });
+
+      logger.info('broadcast awaiting new text', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        exceededBy,
       });
 
       try {

@@ -4,6 +4,7 @@ import {
   BROADCAST_AUDIENCE_PROMPT,
   buildBroadcastPromptMessage,
   createTelegramBroadcastCommandHandler,
+  type PendingBroadcast,
 } from '../telegram-broadcast-command';
 import type { BroadcastPendingKvNamespace } from '../telegram-broadcast-command';
 import { ADMIN_HELP_MESSAGE } from '../../export/telegram-export-command';
@@ -117,6 +118,8 @@ describe('createTelegramBroadcastCommandHandler', () => {
       { chatId: 'subscriber-3', username: 'charlie' },
     ],
     maxTextLength,
+    pendingStore,
+    pendingKv,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
@@ -125,6 +128,8 @@ describe('createTelegramBroadcastCommandHandler', () => {
     logger?: { info?: (...args: unknown[]) => unknown; warn?: (...args: unknown[]) => unknown; error?: (...args: unknown[]) => unknown };
     recipients?: Array<{ chatId: string; username?: string }>;
     maxTextLength?: number;
+    pendingStore?: Map<string, PendingBroadcast>;
+    pendingKv?: BroadcastPendingKvNamespace;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -147,6 +152,8 @@ describe('createTelegramBroadcastCommandHandler', () => {
       recipientsRegistry,
       exportLogKv,
       maxTextLength,
+      pendingStore,
+      pendingKv,
     });
 
     return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger, exportLogKv };
@@ -469,6 +476,52 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
+  it('logs pending rejection when long text arrives after pending restore', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { kv, store } = createPendingKv();
+    const pendingStore = new Map<string, PendingBroadcast>();
+    const { handler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      logger,
+      pendingKv: kv,
+      pendingStore,
+    });
+
+    await handler.handleCommand(createContext());
+
+    const restoredEntry: PendingBroadcast = {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      stage: 'text',
+      audience: { mode: 'all', total: 3, notFound: [] },
+      expiresAt: new Date('2024-01-01T00:01:00Z').getTime(),
+    };
+
+    pendingStore.clear();
+    store.set('broadcast:pending:admin-1', {
+      value: JSON.stringify({ version: 2, entry: restoredEntry }),
+      expiration: Math.floor(new Date('2024-01-01T00:01:00Z').getTime() / 1000),
+    });
+
+    await handler.handleMessage(createIncomingMessage('a'.repeat(4000)));
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'broadcast text rejected',
+      expect.objectContaining({ reason: 'too_long', length: 4000, limit: 3970 }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting new text',
+      expect.objectContaining({ exceededBy: 30 }),
+    );
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 30 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+  });
+
   it('rejects text that exceeds telegram limit with precise overflow notice', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
@@ -506,6 +559,54 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledTimes(3);
   });
 
+  it('ignores messages while awaiting new text and refreshes rejection details', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const pendingStore = new Map<string, PendingBroadcast>();
+    const { handler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      logger,
+      maxTextLength: 5,
+      pendingStore,
+    });
+
+    await startBroadcastFlow(handler);
+
+    await handler.handleMessage(createIncomingMessage('1234567'));
+
+    expect(pendingStore.get('admin-1')?.awaitingNewText).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting new text',
+      expect.objectContaining({ exceededBy: 2 }),
+    );
+
+    await handler.handleMessage(createIncomingMessage('tail payload'));
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast message ignored while awaiting new text',
+      expect.objectContaining({ messageId: 'incoming-1' }),
+    );
+
+    await handler.handleMessage(createIncomingMessage('/new_text'));
+
+    expect(pendingStore.get('admin-1')?.awaitingNewText).toBe(false);
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Пришлите текст длиной до 5 символов.',
+    });
+
+    await handler.handleMessage(createIncomingMessage('abcdef'));
+
+    expect(pendingStore.get('admin-1')?.lastExceededBy).toBe(1);
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+  });
+
   it('requires /new_text after a too long message before accepting another text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
@@ -518,6 +619,39 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(followUp).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
     expect(sendTextMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs broadcast after valid text following /new_text and logs flow', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock, logger });
+
+    await startBroadcastFlow(handler);
+
+    await handler.handleMessage(createIncomingMessage('a'.repeat(5000)));
+    await handler.handleMessage(createIncomingMessage('/new_text'));
+
+    const result = await handler.handleMessage(createIncomingMessage('ок'));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      text: 'ок',
+      requestedBy: 'admin-1',
+      filters: undefined,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'broadcast text rejected',
+      expect.objectContaining({ reason: 'too_long' }),
+    );
+    expect(logger.info.mock.calls.map(([message]: [string]) => message)).toEqual(
+      expect.arrayContaining([
+        'broadcast awaiting new text',
+        'broadcast awaiting new text after rejection',
+        'broadcast dispatch scheduled via telegram command',
+        'broadcast sent via telegram command',
+      ]),
+    );
   });
 
   it('allows resending text after /new_text command', async () => {
