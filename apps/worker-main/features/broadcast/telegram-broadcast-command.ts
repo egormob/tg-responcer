@@ -69,6 +69,7 @@ export interface PendingBroadcast {
   expiresAt: number;
   stage: 'audience' | 'text';
   audience?: BroadcastAudience;
+  awaitingTextPrompt?: boolean;
   awaitingNewText?: boolean;
   lastRejectedLength?: number;
   lastExceededBy?: number;
@@ -268,6 +269,7 @@ export const createTelegramBroadcastCommandHandler = (
 
       const audience = parseAudience(parsed.entry.audience);
       const awaitingNewText = parsed.entry.awaitingNewText === true;
+      const awaitingTextPrompt = parsed.entry.awaitingTextPrompt === true;
       const lastRejectedLength =
         typeof (parsed.entry as { lastRejectedLength?: unknown }).lastRejectedLength === 'number'
           ? (parsed.entry as { lastRejectedLength: number }).lastRejectedLength
@@ -283,6 +285,7 @@ export const createTelegramBroadcastCommandHandler = (
         expiresAt: parsed.entry.expiresAt,
         stage: parsed.entry.stage,
         audience,
+        awaitingTextPrompt,
         awaitingNewText,
         lastRejectedLength,
         lastExceededBy,
@@ -637,6 +640,7 @@ export const createTelegramBroadcastCommandHandler = (
       stage: 'text',
       audience,
       expiresAt: now().getTime() + pendingTtlMs,
+      awaitingTextPrompt: true,
       awaitingNewText: false,
       lastRejectedLength: undefined,
     };
@@ -876,6 +880,60 @@ export const createTelegramBroadcastCommandHandler = (
         mode: entry.audience.mode,
         total: entry.audience.total,
       });
+    }
+
+    if (entry.stage === 'text' && entry.awaitingTextPrompt !== true) {
+      const audience = entry.audience;
+
+      if (!audience) {
+        logger.warn('broadcast audience missing in pending entry', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+
+        await deletePendingEntry(userKey);
+
+        return 'handled';
+      }
+
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+        awaitingTextPrompt: true,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      const promptMessage = buildBroadcastPromptMessage(audience.total, audience.notFound);
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: promptMessage,
+        });
+
+        logger.info('broadcast awaiting text prompt restored', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          mode: audience.mode,
+          total: audience.total,
+          notFound: audience.notFound,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast text prompt restore', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_text_prompt_restore', error);
+      }
+
+      return 'handled';
     }
 
     if (entry.stage === 'audience') {
