@@ -278,7 +278,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await handler.handleMessage(createIncomingMessage('ok'));
 
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledTimes(3);
+    expect(sendTextMock).toHaveBeenCalledTimes(4);
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
@@ -598,12 +598,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(firstAttempt).toBe('handled');
     expect(secondAttempt).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenNthCalledWith(3, {
+    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
       chatId: 'chat-1',
       threadId: 'thread-1',
       text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
-    expect(sendTextMock).toHaveBeenCalledTimes(3);
+    expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
 
   it('ignores messages while awaiting new text and refreshes rejection details', async () => {
@@ -630,10 +630,15 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await handler.handleMessage(createIncomingMessage('tail payload'));
 
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      'broadcast message ignored while awaiting new text',
-      expect.objectContaining({ messageId: 'incoming-1' }),
-    );
+    const awaitingCalls = logger.info.mock.calls.filter(([message]) => message === 'broadcast awaiting new text');
+
+    expect(awaitingCalls.length).toBeGreaterThanOrEqual(2);
+    expect(awaitingCalls.at(-1)?.[1]).toEqual(expect.objectContaining({ exceededBy: 2 }));
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 2 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
@@ -654,6 +659,71 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
+  it('restores awaiting new text state from kv and resends warning until /new_text', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { kv } = createPendingKv();
+    const initialPendingStore = new Map<string, PendingBroadcast>();
+    const { handler: initialHandler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      logger,
+      maxTextLength: 5,
+      pendingKv: kv,
+      pendingStore: initialPendingStore,
+    });
+
+    await startBroadcastFlow(initialHandler);
+    await initialHandler.handleMessage(createIncomingMessage('123456'));
+
+    sendTextMock.mockClear();
+    logger.info.mockClear();
+
+    const restoredPendingStore = new Map<string, PendingBroadcast>();
+    const { handler } = createHandler({
+      sendTextMock,
+      logger,
+      maxTextLength: 5,
+      pendingKv: kv,
+      pendingStore: restoredPendingStore,
+      sendBroadcastMock,
+    });
+
+    const ignoredResult = await handler.handleMessage(createIncomingMessage('tail after restore'));
+
+    expect(ignoredResult).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting new text',
+      expect.objectContaining({ exceededBy: 1 }),
+    );
+
+    sendTextMock.mockClear();
+
+    const promptResult = await handler.handleMessage(createIncomingMessage('/new_text'));
+
+    expect(promptResult).toBe('handled');
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Пришлите текст длиной до 5 символов.',
+    });
+
+    const repeatResult = await handler.handleMessage(createIncomingMessage('abcdefg'));
+
+    expect(repeatResult).toBe('handled');
+    expect(restoredPendingStore.get('admin-1')?.lastExceededBy).toBe(2);
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст рассылки не укладывается в лимит на 2 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+    });
+  });
+
   it('requires /new_text after a too long message before accepting another text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
@@ -665,7 +735,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(followUp).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledTimes(3);
+    expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
 
   it('runs broadcast after valid text following /new_text and logs flow', async () => {
