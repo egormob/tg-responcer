@@ -882,7 +882,7 @@ export const createTelegramBroadcastCommandHandler = (
       });
     }
 
-    if (entry.stage === 'text' && entry.awaitingTextPrompt !== true) {
+    if (entry.stage === 'text' && entry.awaitingTextPrompt !== true && entry.awaitingNewText !== true) {
       const audience = entry.audience;
 
       if (!audience) {
