@@ -431,6 +431,30 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
+  it('keeps pending broadcast after repeated too long texts', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    await startBroadcastFlow(handler);
+
+    const firstAttempt = await handler.handleMessage(createIncomingMessage('a'.repeat(5000)));
+    const secondAttempt = await handler.handleMessage(createIncomingMessage('b'.repeat(5001)));
+
+    expect(firstAttempt).toBe('handled');
+    expect(secondAttempt).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenNthCalledWith(3, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст превышает лимит в 3970 символов, сократите его на 1030 символов или отмените рассылку командой /cancel',
+    });
+    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Текст превышает лимит в 3970 символов, сократите его на 1031 символов или отмените рассылку командой /cancel',
+    });
+  });
+
   it('allows text that matches telegram limit without warnings', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const sendBroadcastMock = vi.fn().mockResolvedValue({
