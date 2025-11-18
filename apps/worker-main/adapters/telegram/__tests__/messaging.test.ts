@@ -175,7 +175,7 @@ describe('createTelegramMessagingAdapter', () => {
       },
     });
 
-    const longText = 'a'.repeat(4096) + 'b'.repeat(10);
+    const longText = 'a'.repeat(4090) + 'b'.repeat(20);
 
     fetchMock
       .mockResolvedValueOnce(
@@ -193,13 +193,14 @@ describe('createTelegramMessagingAdapter', () => {
     const firstBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     const secondBody = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
 
-    expect(firstBody.text).toHaveLength(4096);
-    expect(secondBody.text).toHaveLength(10);
+    expect(firstBody.text).toHaveLength(4090);
+    expect(secondBody.text).toHaveLength(20);
 
     expect(warnMock).toHaveBeenCalledWith(
       'telegram-adapter splitting long message into chunks',
       expect.objectContaining({
         originalLength: longText.length,
+        visibleLength: longText.length,
         chunkCount: 2,
       }),
     );

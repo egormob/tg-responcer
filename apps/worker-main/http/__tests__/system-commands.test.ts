@@ -38,6 +38,17 @@ describe('system-commands roles', () => {
     expect(isCommandAllowedForRole(descriptor, 'global')).toBe(false);
     expect(isCommandAllowedForRole(descriptor, 'scoped')).toBe(true);
   });
+
+  it('allows broadcast helper commands only for scoped role', () => {
+    const everyone = findDescriptor('/everybody');
+    const cancel = findDescriptor('/cancel');
+    const send = findDescriptor('/send');
+
+    for (const descriptor of [everyone, cancel, send]) {
+      expect(isCommandAllowedForRole(descriptor, 'global')).toBe(false);
+      expect(isCommandAllowedForRole(descriptor, 'scoped')).toBe(true);
+    }
+  });
 });
 
 describe('system-commands matchSystemCommand', () => {

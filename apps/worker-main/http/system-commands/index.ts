@@ -90,6 +90,24 @@ export const SYSTEM_COMMAND_DESCRIPTORS: readonly SystemCommandDescriptor[] = [
     roles: ['scoped'],
     handler: scopedHandler,
   },
+  {
+    name: '/everybody',
+    bareName: '/everybody',
+    roles: ['scoped'],
+    handler: scopedHandler,
+  },
+  {
+    name: '/send',
+    bareName: '/send',
+    roles: ['scoped'],
+    handler: scopedHandler,
+  },
+  {
+    name: '/cancel',
+    bareName: '/cancel',
+    roles: ['scoped'],
+    handler: scopedHandler,
+  },
 ];
 
 const descriptorsByBareName = new Map<string, SystemCommandDescriptor[]>();
