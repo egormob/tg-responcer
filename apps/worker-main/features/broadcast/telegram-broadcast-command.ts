@@ -272,6 +272,10 @@ export const createTelegramBroadcastCommandHandler = (
         typeof (parsed.entry as { lastRejectedLength?: unknown }).lastRejectedLength === 'number'
           ? (parsed.entry as { lastRejectedLength: number }).lastRejectedLength
           : undefined;
+      const lastExceededBy =
+        typeof (parsed.entry as { lastExceededBy?: unknown }).lastExceededBy === 'number'
+          ? (parsed.entry as { lastExceededBy: number }).lastExceededBy
+          : undefined;
 
       return {
         chatId: parsed.entry.chatId,
@@ -281,6 +285,7 @@ export const createTelegramBroadcastCommandHandler = (
         audience,
         awaitingNewText,
         lastRejectedLength,
+        lastExceededBy,
       } satisfies PendingBroadcast;
     } catch (error) {
       logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
@@ -903,34 +908,12 @@ export const createTelegramBroadcastCommandHandler = (
 
       await savePendingEntry(userKey, refreshedEntry);
 
-      const exceededBy = Math.max(
-        1,
-        entry.lastExceededBy ?? (entry.lastRejectedLength ?? maxTextLength + 1) - maxTextLength,
-      );
-
-      try {
-        await options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: buildTooLongMessage(maxTextLength, exceededBy),
-        });
-
-        logger.warn('broadcast text still pending replacement after rejection', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          exceededBy,
-        });
-      } catch (error) {
-        logger.error('failed to resend broadcast length warning', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          error: toErrorDetails(error),
-        });
-
-        await handleMessagingFailure(message.user.userId, 'broadcast_length_warning_repeat', error);
-      }
+      logger.info('broadcast message ignored while awaiting new text', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        messageId: message.messageId ?? null,
+      });
 
       return 'handled';
     }

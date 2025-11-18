@@ -271,11 +271,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await handler.handleMessage(createIncomingMessage('ok'));
 
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenLastCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
-    });
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
@@ -507,11 +503,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
     });
-    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
-    });
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
   });
 
   it('requires /new_text after a too long message before accepting another text', async () => {
@@ -525,11 +517,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(followUp).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenLastCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
-    });
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
   });
 
   it('allows resending text after /new_text command', async () => {
