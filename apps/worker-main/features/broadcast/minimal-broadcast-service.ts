@@ -654,10 +654,17 @@ export const createRegistryBroadcastSender = (
   options: CreateRegistryBroadcastSenderOptions,
 ): SendBroadcast => {
   const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
-    const sanitizedFilters =
-      filters?.chatIds || filters?.userIds
-        ? { chatIds: filters.chatIds ?? filters.userIds }
-        : undefined;
+    const sanitizedFilters = filters
+      ? (Object.fromEntries(
+          (
+            [
+              ['chatIds', filters.chatIds],
+              ['userIds', filters.userIds],
+              ['languageCodes', filters.languageCodes],
+            ] as const
+          ).filter(([, value]) => value?.length),
+        ) as BroadcastAudienceFilter)
+      : undefined;
 
     try {
       const fromRegistry = await options.registry.listActiveRecipients(sanitizedFilters);
