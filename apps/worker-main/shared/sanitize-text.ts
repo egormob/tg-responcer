@@ -31,3 +31,5 @@ export const getVisibleTextLength = (text: string): number => {
 
   return withoutMarkdown.length;
 };
+
+export const getRawTextLength = (text: string): number => stripControlCharacters(text).length;
