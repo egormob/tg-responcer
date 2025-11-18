@@ -30,12 +30,13 @@ const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const MINIMUM_KV_TTL_SECONDS = 60;
 const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-export const BROADCAST_AUDIENCE_PROMPT = 'Введите user_id/username или /everybody';
+export const BROADCAST_AUDIENCE_PROMPT =
+  'Шаг 1. Пришлите /everybody или список user_id/username через запятую или пробел. ' +
+  'Дубликаты уберём автоматически.';
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
   const base =
-    `Пришлите текст для ${count} получателей и подтвердите отправкой /send или сообщением. ` +
-    'Нажмите /cancel если ❌ не хотите отправлять рассылку.';
+    `Шаг 2. Пришлите текст для ${count} получателей. Используйте /send для отправки или /cancel для отмены.`;
 
   if (notFound.length === 0) {
     return base;
@@ -176,43 +177,6 @@ const extractBroadcastText = (value: string): { text: string; usedSendCommand: b
   }
 
   return { text: value, usedSendCommand: false };
-};
-
-const parseAudienceSelection = (value: string): BroadcastAudienceFilter | undefined | null => {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const normalized = trimmed.toLowerCase();
-
-  if (normalized === 'all' || normalized === '*' || normalized === 'everyone') {
-    return undefined;
-  }
-
-  const applyList = (list: string[]): BroadcastAudienceFilter | null => {
-    if (list.length === 0) {
-      return null;
-    }
-
-    return { chatIds: list } satisfies BroadcastAudienceFilter;
-  };
-
-  if (normalized.startsWith('chat=')) {
-    const ids = parseList(trimmed.slice(trimmed.indexOf('=') + 1));
-    const filter = applyList(ids);
-    return filter ?? null;
-  }
-
-  if (normalized.startsWith('user=')) {
-    const ids = parseList(trimmed.slice(trimmed.indexOf('=') + 1));
-    if (ids.length === 0) {
-      return null;
-    }
-    return { userIds: ids } satisfies BroadcastAudienceFilter;
-  }
-
-  return null;
 };
 
 export const createTelegramBroadcastCommandHandler = (
@@ -479,6 +443,7 @@ export const createTelegramBroadcastCommandHandler = (
     },
   ) => {
     const { audience, result, requestedBy, startedAt } = input;
+    const durationMs = result?.durationMs ?? Math.max(0, now().getTime() - startedAt.getTime());
     const payload = {
       ts: startedAt.toISOString(),
       admin_id: String(requestedBy),
@@ -487,7 +452,8 @@ export const createTelegramBroadcastCommandHandler = (
       recipients: result?.recipients ?? audience.total ?? 0,
       delivered: result?.delivered ?? 0,
       failed: result?.failed ?? 0,
-      duration_ms: result?.durationMs ?? Math.max(0, now().getTime() - startedAt.getTime()),
+      throttled429: result?.throttled429 ?? 0,
+      duration_ms: durationMs,
       sample: (result?.sample ?? []).slice(0, 5),
       not_found: audience.notFound.slice(0, 10),
     } satisfies Record<string, unknown>;
@@ -570,7 +536,85 @@ export const createTelegramBroadcastCommandHandler = (
     const tokens = parseList(message.text ?? '');
     const userKey = getUserKey(message.user.userId);
 
+    const normalizedTokens = tokens.map((token) => token.trim()).filter((token) => token.length > 0);
+    const wantsEveryone =
+      normalizedTokens.length === 1 && normalizedTokens[0].toLowerCase() === '/everybody';
+
+    if (!wantsEveryone && normalizedTokens.length === 0) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_AUDIENCE_PROMPT,
+        });
+
+        logger.info('broadcast awaiting audience selection', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          reason: 'empty_audience_selection',
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast prompt', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_prompt', error);
+      }
+
+      return 'handled';
+    }
+
     const audience = await buildAudienceSelection(tokens);
+
+    if (audience.total === 0) {
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      const notFoundSuffix = audience.notFound.length
+        ? ` Не нашли: ${audience.notFound.join(', ')}`
+        : '';
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: `Аудитория пуста. Пришлите /everybody или список user_id/username.${notFoundSuffix}`,
+        });
+
+        logger.warn('broadcast empty audience selection', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          notFound: audience.notFound,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast empty audience notice', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_empty_audience', error);
+      }
+
+      return 'handled';
+    }
 
     const updatedEntry: PendingBroadcast = {
       ...entry,

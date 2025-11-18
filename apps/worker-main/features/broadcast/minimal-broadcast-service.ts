@@ -654,31 +654,36 @@ export const createRegistryBroadcastSender = (
   options: CreateRegistryBroadcastSenderOptions,
 ): SendBroadcast => {
   const resolveRecipients = async (filters?: BroadcastAudienceFilter) => {
+    const sanitizedFilters =
+      filters?.chatIds || filters?.userIds
+        ? { chatIds: filters.chatIds ?? filters.userIds }
+        : undefined;
+
     try {
-      const fromRegistry = await options.registry.listActiveRecipients(filters);
+      const fromRegistry = await options.registry.listActiveRecipients(sanitizedFilters);
       if (fromRegistry.length > 0) {
         options.logger?.info?.('broadcast using registry recipients', {
-          filters: filters ?? null,
+          filters: sanitizedFilters ?? null,
           recipients: fromRegistry.length,
         });
 
-        return { recipients: fromRegistry, source: 'registry' } satisfies ResolveRecipientsResult;
+        return { recipients: fromRegistry, source: 'D1' } satisfies ResolveRecipientsResult;
       }
 
-        options.logger?.info?.('broadcast registry returned empty result', {
-        filters: filters ?? null,
+      options.logger?.info?.('broadcast registry returned empty result', {
+        filters: sanitizedFilters ?? null,
       });
     } catch (error) {
       options.logger?.warn?.('broadcast registry lookup failed', {
         error: toErrorDetails(error),
-        filters: filters ?? null,
+        filters: sanitizedFilters ?? null,
       });
     }
 
     options.logger?.warn?.('no broadcast recipients resolved', {
-      filters: filters ?? null,
+      filters: sanitizedFilters ?? null,
     });
-    return { recipients: [], source: 'none' } satisfies ResolveRecipientsResult;
+    return { recipients: [], source: 'D1' } satisfies ResolveRecipientsResult;
   };
 
   return createBroadcastSender({
