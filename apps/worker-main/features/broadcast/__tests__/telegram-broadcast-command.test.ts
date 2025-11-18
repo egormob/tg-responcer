@@ -738,6 +738,48 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
 
+  it('allows restarting broadcast with /broadcast while awaiting new text', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const pendingStore = new Map<string, PendingBroadcast>();
+    const { handler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      pendingStore,
+      maxTextLength: 5,
+    });
+
+    await startBroadcastFlow(handler);
+    await handler.handleMessage(createIncomingMessage('123456'));
+
+    expect(pendingStore.get('admin-1')?.awaitingNewText).toBe(true);
+
+    sendTextMock.mockClear();
+
+    const restartResult = await handler.handleMessage(createIncomingMessage('/broadcast'));
+
+    expect(restartResult).toBeUndefined();
+    expect(pendingStore.get('admin-1')).toBeUndefined();
+
+    await startBroadcastFlow(handler);
+    const sendResult = await handler.handleMessage(createIncomingMessage('short'));
+
+    expect(sendResult).toBe('handled');
+    expect(sendTextMock).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: BROADCAST_AUDIENCE_PROMPT,
+    });
+    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildBroadcastPromptMessage(3),
+    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      filters: undefined,
+      requestedBy: 'admin-1',
+      text: 'short',
+    });
+  });
+
   it('runs broadcast after valid text following /new_text and logs flow', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
