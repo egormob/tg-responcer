@@ -22,7 +22,7 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
-const DEFAULT_MAX_TEXT_LENGTH = 4090;
+const DEFAULT_MAX_TEXT_LENGTH = 3970;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 const BROADCAST_PENDING_KV_VERSION = 2;
 const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';

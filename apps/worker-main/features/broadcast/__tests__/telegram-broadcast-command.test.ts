@@ -427,7 +427,43 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст превышает лимит в 4090 символов, сократите его на 910 символов или отмените рассылку командой /cancel',
+      text: 'Текст превышает лимит в 3970 символов, сократите его на 1030 символов или отмените рассылку командой /cancel',
+    });
+  });
+
+  it('allows text that matches telegram limit without warnings', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi.fn().mockResolvedValue({
+      delivered: 3,
+      failed: 0,
+      deliveries: [],
+      recipients: 3,
+      durationMs: 120,
+      source: 'D1',
+      sample: [],
+      throttled429: 0,
+    });
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
+
+    await startBroadcastFlow(handler);
+    const waitUntil = vi.fn();
+    const result = await handler.handleMessage(createIncomingMessage('a'.repeat(3970)), { waitUntil });
+
+    expect(result).toBe('handled');
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    const scheduled = waitUntil.mock.calls[0]?.[0];
+    expect(typeof scheduled?.then).toBe('function');
+    await scheduled;
+
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      text: 'a'.repeat(3970),
+      requestedBy: 'admin-1',
+      filters: undefined,
+    });
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: '✅ Рассылка отправлена!',
     });
   });
 
