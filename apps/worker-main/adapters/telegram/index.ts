@@ -1,5 +1,5 @@
 import type { MessagingPort } from '../../ports';
-import { stripControlCharacters } from '../../shared';
+import { getVisibleTextLength, stripControlCharacters } from '../../shared';
 
 const DEFAULT_BASE_URL = 'https://api.telegram.org';
 const DEFAULT_MAX_RETRIES = 3;
@@ -65,7 +65,7 @@ class TelegramApiError extends Error {
   }
 }
 
-const MAX_MESSAGE_LENGTH = 4096;
+const TELEGRAM_VISIBLE_TEXT_LIMIT = 4090;
 
 const sanitizeText = (text: string): string => stripControlCharacters(text);
 
@@ -75,8 +75,8 @@ const splitTextIntoChunks = (text: string): string[] => {
   }
 
   const chunks: string[] = [];
-  for (let index = 0; index < text.length; index += MAX_MESSAGE_LENGTH) {
-    chunks.push(text.slice(index, index + MAX_MESSAGE_LENGTH));
+  for (let index = 0; index < text.length; index += TELEGRAM_VISIBLE_TEXT_LIMIT) {
+    chunks.push(text.slice(index, index + TELEGRAM_VISIBLE_TEXT_LIMIT));
   }
 
   return chunks;
@@ -310,11 +310,14 @@ export const createTelegramMessagingAdapter = (
       const chatId = ensureStringId('sendMessage', 'chat_id', input.chatId);
       const threadId = ensureOptionalStringId('sendMessage', 'message_thread_id', input.threadId);
       const sanitizedText = sanitizeText(input.text);
-      const chunks = splitTextIntoChunks(sanitizedText);
+      const visibleLength = getVisibleTextLength(sanitizedText);
+      const needsSplitting = Math.max(visibleLength, sanitizedText.length) > TELEGRAM_VISIBLE_TEXT_LIMIT;
+      const chunks = needsSplitting ? splitTextIntoChunks(sanitizedText) : [sanitizedText];
 
       if (chunks.length > 1) {
         logger?.warn?.('telegram-adapter splitting long message into chunks', {
           originalLength: sanitizedText.length,
+          visibleLength,
           chunkCount: chunks.length,
         });
       }
@@ -357,8 +360,9 @@ export const createTelegramMessagingAdapter = (
 
     async editMessageText(input) {
       const sanitizedText = sanitizeText(input.text);
+      const visibleLength = getVisibleTextLength(sanitizedText);
 
-      if (sanitizedText.length > MAX_MESSAGE_LENGTH) {
+      if (Math.max(visibleLength, sanitizedText.length) > TELEGRAM_VISIBLE_TEXT_LIMIT) {
         throw new Error('Telegram editMessageText payload exceeds maximum length');
       }
 

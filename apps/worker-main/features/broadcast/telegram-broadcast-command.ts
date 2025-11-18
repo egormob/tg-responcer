@@ -1,4 +1,4 @@
-import { json } from '../../shared';
+import { getVisibleTextLength, json } from '../../shared';
 import type { IncomingMessage } from '../../core';
 import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../http';
 import type { MessagingPort } from '../../ports';
@@ -22,7 +22,7 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
-const DEFAULT_MAX_TEXT_LENGTH = 4096;
+const DEFAULT_MAX_TEXT_LENGTH = 4090;
 const DEFAULT_PENDING_TTL_MS = 60 * 1000;
 const BROADCAST_PENDING_KV_VERSION = 2;
 const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';
@@ -35,8 +35,7 @@ export const BROADCAST_AUDIENCE_PROMPT =
   'Дубликаты уберём автоматически.';
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
-  const base =
-    `Шаг 2. Пришлите текст для ${count} получателей. Используйте /send для отправки или /cancel для отмены.`;
+  const base = `Шаг 2. Пришлите текст для ${count} получателей, /cancel для отмены.`;
 
   if (notFound.length === 0) {
     return base;
@@ -49,8 +48,8 @@ export const buildBroadcastPromptMessage = (count: number, notFound: readonly st
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
-const buildTooLongMessage = (limit: number) =>
-  `Текст рассылки превышает лимит ${limit} символов. Отправьте более короткое сообщение.`;
+const buildTooLongMessage = (limit: number, exceededBy: number) =>
+  `Текст превышает лимит в ${limit} символов, сократите его на ${exceededBy} символов или отмените рассылку командой /cancel`;
 
 const BROADCAST_EMPTY_MESSAGE =
   'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
@@ -870,11 +869,13 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
-    if (text.length > maxTextLength) {
+    const visibleLength = getVisibleTextLength(text);
+
+    if (visibleLength > maxTextLength) {
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
         reason: 'too_long',
-        length: text.length,
+        length: visibleLength,
         limit: maxTextLength,
       });
 
@@ -882,7 +883,7 @@ export const createTelegramBroadcastCommandHandler = (
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: buildTooLongMessage(maxTextLength),
+          text: buildTooLongMessage(maxTextLength, visibleLength - maxTextLength),
         });
       } catch (error) {
         logger.error('failed to send broadcast length warning', {

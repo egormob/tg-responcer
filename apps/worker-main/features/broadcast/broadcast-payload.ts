@@ -1,3 +1,5 @@
+import { getVisibleTextLength } from '../../shared';
+
 export interface BroadcastAudienceFilter {
   readonly chatIds?: readonly string[];
   readonly userIds?: readonly string[];
@@ -20,7 +22,7 @@ export interface BuildBroadcastPayloadOptions {
   maxTextLength?: number;
 }
 
-export const DEFAULT_MAX_TEXT_LENGTH = 4096;
+export const DEFAULT_MAX_TEXT_LENGTH = 4090;
 
 const cloneMetadata = (
   metadata: Record<string, unknown> | undefined,
@@ -80,7 +82,9 @@ export const buildBroadcastPayload = (
     throw new Error('text must not be empty');
   }
 
-  if (text.length > maxTextLength) {
+  const visibleLength = getVisibleTextLength(text);
+
+  if (Math.max(text.length, visibleLength) > maxTextLength) {
     throw new Error(`text must not exceed ${maxTextLength} characters`);
   }
 

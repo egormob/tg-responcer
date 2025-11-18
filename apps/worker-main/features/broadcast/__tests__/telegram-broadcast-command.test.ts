@@ -414,7 +414,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
-  it('rejects text that exceeds telegram limit', async () => {
+  it('rejects text that exceeds telegram limit with precise overflow notice', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
 
@@ -427,7 +427,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки превышает лимит 4096 символов. Отправьте более короткое сообщение.',
+      text: 'Текст превышает лимит в 4090 символов, сократите его на 910 символов или отмените рассылку командой /cancel',
     });
   });
 

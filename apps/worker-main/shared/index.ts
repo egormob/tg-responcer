@@ -1,2 +1,2 @@
 export { json } from './json-response';
-export { stripControlCharacters, sanitizeVisibleText } from './sanitize-text';
+export { getVisibleTextLength, stripControlCharacters, sanitizeVisibleText } from './sanitize-text';
