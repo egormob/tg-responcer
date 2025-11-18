@@ -741,9 +741,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
   it('allows restarting broadcast with /broadcast while awaiting new text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const pendingStore = new Map<string, PendingBroadcast>();
+    const { kv, store } = createPendingKv();
     const { handler, sendBroadcastMock } = createHandler({
       sendTextMock,
       pendingStore,
+      pendingKv: kv,
       maxTextLength: 5,
     });
 
@@ -751,6 +753,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await handler.handleMessage(createIncomingMessage('123456'));
 
     expect(pendingStore.get('admin-1')?.awaitingNewText).toBe(true);
+    expect(store.has('broadcast:pending:admin-1')).toBe(true);
 
     sendTextMock.mockClear();
 
@@ -758,6 +761,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(restartResult).toBeUndefined();
     expect(pendingStore.get('admin-1')).toBeUndefined();
+    expect(store.has('broadcast:pending:admin-1')).toBe(false);
 
     await startBroadcastFlow(handler);
     const sendResult = await handler.handleMessage(createIncomingMessage('short'));

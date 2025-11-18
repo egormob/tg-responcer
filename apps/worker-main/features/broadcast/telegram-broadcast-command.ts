@@ -870,6 +870,7 @@ export const createTelegramBroadcastCommandHandler = (
           userId: message.user.userId,
           chatId: message.chat.id,
           threadId: message.chat.threadId ?? null,
+          restart: true,
         });
 
         await deletePendingEntry(userKey);
