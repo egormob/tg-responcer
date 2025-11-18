@@ -1,4 +1,4 @@
-import { getVisibleTextLength, json } from '../../shared';
+import { getRawTextLength, getVisibleTextLength, json } from '../../shared';
 import type { IncomingMessage } from '../../core';
 import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../http';
 import type { MessagingPort } from '../../ports';
@@ -1069,15 +1069,17 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
+    const rawLength = getRawTextLength(text);
     const visibleLength = getVisibleTextLength(text);
+    const effectiveLength = Math.max(rawLength, visibleLength);
 
-    if (visibleLength > maxTextLength) {
-      const exceededBy = visibleLength - maxTextLength;
+    if (effectiveLength > maxTextLength) {
+      const exceededBy = effectiveLength - maxTextLength;
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
         awaitingNewText: true,
-        lastRejectedLength: visibleLength,
+        lastRejectedLength: effectiveLength,
         lastExceededBy: exceededBy,
       };
 
@@ -1086,7 +1088,9 @@ export const createTelegramBroadcastCommandHandler = (
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
         reason: 'too_long',
-        length: visibleLength,
+        length: effectiveLength,
+        rawLength,
+        visibleLength,
         limit: maxTextLength,
       });
 
