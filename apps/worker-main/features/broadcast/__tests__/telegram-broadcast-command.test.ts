@@ -570,6 +570,49 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(pending?.lastRejectedLength).toBe(rawLength);
   });
 
+  it('awaits new text when markdown/html link raw length exceeds limit but visible fits', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const pendingStore = new Map<string, PendingBroadcast>();
+    const { handler, sendBroadcastMock } = createHandler({
+      sendTextMock,
+      logger,
+      pendingStore,
+    });
+
+    await startBroadcastFlow(handler);
+
+    const markdownUrl = `https://example.com/${'a'.repeat(4000)}`;
+    const htmlUrl = `https://example.com/${'b'.repeat(200)}`;
+    const text = `[visible](${markdownUrl})<a href="${htmlUrl}">short</a>`;
+    const rawLength = text.length;
+    const visibleLength = 'visibleshort'.length;
+    const exceededBy = rawLength - 3970;
+
+    const result = await handler.handleMessage(createIncomingMessage(text));
+
+    expect(result).toBe('handled');
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'broadcast text rejected',
+      expect.objectContaining({
+        reason: 'too_long',
+        length: rawLength,
+        rawLength,
+        visibleLength,
+        limit: 3970,
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting new text',
+      expect.objectContaining({ exceededBy }),
+    );
+
+    const pending = pendingStore.get('admin-1');
+    expect(pending?.awaitingNewText).toBe(true);
+    expect(pending?.lastRejectedLength).toBe(rawLength);
+  });
+
   it('resends awaiting text prompt when restored pending entry lacks prompt flag', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

@@ -1033,6 +1033,9 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     const { text, usedSendCommand } = extractBroadcastText(rawText);
+    const rawLength = getRawTextLength(text);
+    const visibleLength = getVisibleTextLength(text);
+    const effectiveLength = Math.max(rawLength, visibleLength);
     const trimmed = text.trim();
 
     if (trimmed.length === 0) {
@@ -1047,6 +1050,8 @@ export const createTelegramBroadcastCommandHandler = (
         userId: message.user.userId,
         reason: 'empty',
         usedSendCommand,
+        rawLength,
+        visibleLength,
       });
 
       try {
@@ -1068,10 +1073,6 @@ export const createTelegramBroadcastCommandHandler = (
 
       return 'handled';
     }
-
-    const rawLength = getRawTextLength(text);
-    const visibleLength = getVisibleTextLength(text);
-    const effectiveLength = Math.max(rawLength, visibleLength);
 
     if (effectiveLength > maxTextLength) {
       const exceededBy = effectiveLength - maxTextLength;
