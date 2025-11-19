@@ -56,6 +56,9 @@ const createIncomingMessage = (text: string): IncomingMessage => ({
   receivedAt: new Date('2024-01-01T00:01:00Z'),
 });
 
+const buildExpectedTooLongMessage = (overflow: number) =>
+  `Текст рассылки не укладывается в лимит на ${overflow} символов. /new_text чтобы отправить снова или /cancel для отмены`;
+
 const createDeferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -272,7 +275,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(1),
     });
 
     await handler.handleMessage(createIncomingMessage('ok'));
@@ -519,7 +522,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(30),
     });
   });
 
@@ -562,7 +565,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(exceededBy),
     });
 
     const pending = pendingStore.get('admin-1');
@@ -672,7 +675,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(1030),
     });
   });
 
@@ -691,7 +694,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(4, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(1030),
     });
     expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
@@ -727,7 +730,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(2),
     });
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
@@ -745,7 +748,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(1),
     });
   });
 
@@ -785,7 +788,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(1),
     });
     expect(logger.info).toHaveBeenCalledWith(
       'broadcast awaiting new text',
@@ -810,7 +813,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
+      text: buildExpectedTooLongMessage(2),
     });
   });
 
