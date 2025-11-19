@@ -324,6 +324,25 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   };
 
   return async ({ text, requestedBy, filters }) => {
+    const rawLength = getRawTextLength(text);
+    const visibleLength = getVisibleTextLength(text);
+    const effectiveLength = Math.max(rawLength, visibleLength);
+
+    if (effectiveLength > maxTextLength) {
+      const exceededBy = effectiveLength - maxTextLength;
+      const context = {
+        requestedBy,
+        rawLength,
+        visibleLength,
+        length: effectiveLength,
+        limit: maxTextLength,
+        exceededBy,
+      } satisfies Record<string, unknown>;
+
+      options.logger?.warn?.('broadcast text exceeds limit', context);
+      throw new BroadcastAbortedError('telegram_limit_exceeded', context);
+    }
+
     const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
     const filtersToApply = filters;
     const recipients = deduplicateRecipients(
@@ -365,25 +384,6 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         sample: recipientsSample,
         throttled429: 0,
       } satisfies BroadcastSendResult;
-    }
-
-    const rawLength = getRawTextLength(text);
-    const visibleLength = getVisibleTextLength(text);
-    const effectiveLength = Math.max(rawLength, visibleLength);
-
-    if (effectiveLength > maxTextLength) {
-      const exceededBy = effectiveLength - maxTextLength;
-      const context = {
-        requestedBy,
-        rawLength,
-        visibleLength,
-        length: effectiveLength,
-        limit: maxTextLength,
-        exceededBy,
-      } satisfies Record<string, unknown>;
-
-      options.logger?.warn?.('broadcast text exceeds limit', context);
-      throw new BroadcastAbortedError('telegram_limit_exceeded', context);
     }
 
     options.logger?.info?.('broadcast pool initialized', {
