@@ -32,11 +32,38 @@ const MINIMUM_KV_TTL_SECONDS = 60;
 const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TEXT_CHUNK_DEBOUNCE_MS = 1000;
 
+interface CommandDescription {
+  command: string;
+  description: string;
+}
+
+export const formatCommandList = (
+  message: string,
+  commands: CommandDescription[],
+): string => {
+  const normalizedMessage = message.trim();
+  const formattedCommands = commands.map(({ command, description }) => {
+    const normalizedCommand = command.startsWith('/') ? command : `/${command}`;
+    return `- ${normalizedCommand} — ${description}`;
+  });
+
+  if (normalizedMessage.length === 0) {
+    return formattedCommands.join('\n');
+  }
+
+  return [normalizedMessage, ...formattedCommands].join('\n');
+};
+
 export const BROADCAST_AUDIENCE_PROMPT =
-  'Шаг 1. Выберите получателей /everybody или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.';
+  formatCommandList(
+    'Шаг 1. Выберите получателей или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.',
+    [{ command: '/everybody', description: 'чтобы выбрать всех получателей' }],
+  );
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
-  const base = `Шаг 2. Пришлите текст для ${count} получателей, /cancel_broadcast для отмены.`;
+  const base = formatCommandList(`Шаг 2. Пришлите текст для ${count} получателей.`, [
+    { command: '/cancel_broadcast', description: 'для отмены' },
+  ]);
 
   if (notFound.length === 0) {
     return base;
@@ -47,13 +74,22 @@ export const buildBroadcastPromptMessage = (count: number, notFound: readonly st
 
 
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
-  'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
+  formatCommandList('Мгновенная рассылка доступна только через эту команду:', [
+    { command: '/broadcast', description: 'без аргументов' },
+  ]);
 
 const buildTooLongMessage = (_overflow: number) =>
-  'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
+  formatCommandList('Текст не укладывается в лимит Telegram. Выберите:', [
+    { command: '/new_text', description: 'чтобы отправить другой текст' },
+    { command: '/cancel_broadcast', description: 'для отмены' },
+  ]);
 
 export const buildAwaitingSendPromptMessage = (audience: BroadcastAudience): string => {
-  const base = `Текст принят. Получателей ${audience.total}. Выберите: /send чтобы отправить, /new_text чтобы изменить текст или /cancel_broadcast для отмены.`;
+  const base = formatCommandList(`Текст принят. Получателей ${audience.total}. Выберите:`, [
+    { command: '/send', description: 'чтобы отправить' },
+    { command: '/new_text', description: 'чтобы изменить текст' },
+    { command: '/cancel_broadcast', description: 'для отмены' },
+  ]);
 
   if (audience.notFound.length === 0) {
     return base;
@@ -63,12 +99,16 @@ export const buildAwaitingSendPromptMessage = (audience: BroadcastAudience): str
 };
 
 const BROADCAST_EMPTY_MESSAGE =
-  'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
+  formatCommandList('Текст рассылки не может быть пустым. Запустите команду заново:', [
+    { command: '/broadcast', description: 'чтобы начать заново' },
+  ]);
 
 const BROADCAST_FAILURE_MESSAGE =
   'Не удалось отправить рассылку. Попробуйте ещё раз позже или обратитесь к оператору.';
 const BROADCAST_CANCEL_MESSAGE =
-  '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.';
+  formatCommandList('❌ Рассылка отменена. Чтобы отправить новое сообщение, выполните команду:', [
+    { command: '/broadcast', description: 'чтобы начать заново' },
+  ]);
 
 export const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
 
@@ -724,15 +764,20 @@ export const createTelegramBroadcastCommandHandler = (
 
       await savePendingEntry(userKey, refreshedEntry);
 
-      const notFoundSuffix = audience.notFound.length
-        ? ` Не нашли: ${audience.notFound.join(', ')}`
-        : '';
+      const emptyAudienceMessageBase = formatCommandList(
+        'Аудитория пуста. Пришлите список user_id/username или воспользуйтесь командой:',
+        [{ command: '/everybody', description: 'чтобы выбрать всех получателей' }],
+      );
+      const emptyAudienceMessage =
+        audience.notFound.length === 0
+          ? emptyAudienceMessageBase
+          : `${emptyAudienceMessageBase}\nНе нашли: ${audience.notFound.join(', ')}`;
 
       try {
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: `Аудитория пуста. Пришлите /everybody или список user_id/username.${notFoundSuffix}`,
+          text: emptyAudienceMessage,
         });
 
         logger.warn('broadcast empty audience selection', {
