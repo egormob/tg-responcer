@@ -164,6 +164,24 @@ describe('createImmediateBroadcastSender', () => {
       expect.objectContaining({ length: 3980, limit: 3970 }),
     );
   });
+
+  it('delivers broadcast when text respects the configured limit', async () => {
+    const recipients = createRecipients(3);
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'ok' });
+
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      maxTextLength: 5000,
+    });
+
+    const result = await sendBroadcast({ text: 'a'.repeat(4500), requestedBy: 'ops' });
+
+    expect(sendText).toHaveBeenCalledTimes(recipients.length);
+    expect(result.delivered).toBe(recipients.length);
+    expect(result.failed).toBe(0);
+  });
 });
 
 describe('createRegistryBroadcastSender', () => {
@@ -183,7 +201,7 @@ describe('createRegistryBroadcastSender', () => {
       sendBroadcast({ text: 'b'.repeat(5000), requestedBy: 'ops' }),
     ).rejects.toBeInstanceOf(BroadcastAbortedError);
 
-    expect(registry.listActiveRecipients).toHaveBeenCalledTimes(1);
+    expect(registry.listActiveRecipients).not.toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       'broadcast text exceeds limit',
