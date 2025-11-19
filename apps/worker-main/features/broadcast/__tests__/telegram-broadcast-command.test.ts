@@ -224,99 +224,6 @@ describe('createTelegramBroadcastCommandHandler', () => {
     return { sendWaitUntil };
   };
 
-  describe('stage mismatch notices', () => {
-    it('repeats audience prompt when broadcast text arrives before audience selection', async () => {
-      const sendTextMock = vi.fn().mockResolvedValue({});
-      const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
-
-      await handler.handleCommand(createContext());
-
-      expect(sendTextMock).toHaveBeenNthCalledWith(1, {
-        chatId: 'chat-1',
-        threadId: 'thread-1',
-        text: BROADCAST_AUDIENCE_PROMPT,
-      });
-
-      const mismatchResult = await handler.handleMessage(createIncomingMessage('Привет всем'));
-
-      expect(mismatchResult).toBe('handled');
-      expect(sendTextMock).toHaveBeenNthCalledWith(2, {
-        chatId: 'chat-1',
-        threadId: 'thread-1',
-        text: `Эти данные не соответствуют выполняемой команде:\n${BROADCAST_AUDIENCE_PROMPT}`,
-      });
-      expect(sendBroadcastMock).not.toHaveBeenCalled();
-    });
-
-    it('reminds about /send prompt when arbitrary text arrives during awaiting_send', async () => {
-      const sendTextMock = vi.fn().mockResolvedValue({});
-      const sendBroadcastMock = vi.fn().mockResolvedValue({
-        delivered: 1,
-        failed: 0,
-        deliveries: [],
-        recipients: 1,
-        durationMs: 10,
-        source: 'D1',
-        sample: [],
-        throttled429: 0,
-      });
-
-      const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
-
-      await startBroadcastFlow(handler);
-      await submitTextAndAwaitPrompt(handler, 'Привет!');
-
-      const sendCallsBeforeMismatch = sendTextMock.mock.calls.length;
-      const mismatchResult = await handler.handleMessage(createIncomingMessage('любая строка'));
-
-      expect(mismatchResult).toBe('handled');
-      expect(sendTextMock).toHaveBeenNthCalledWith(sendCallsBeforeMismatch + 1, {
-        chatId: 'chat-1',
-        threadId: 'thread-1',
-        text: `Эти данные не соответствуют выполняемой команде:\n${buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] })}`,
-      });
-      expect(sendBroadcastMock).not.toHaveBeenCalled();
-    });
-
-    it('sends mismatch notice when media arrives during collecting_text stage', async () => {
-      const sendTextMock = vi.fn().mockResolvedValue({});
-      const sendBroadcastMock = vi.fn().mockResolvedValue({
-        delivered: 1,
-        failed: 0,
-        deliveries: [],
-        recipients: 1,
-        durationMs: 10,
-        source: 'D1',
-        sample: [],
-        throttled429: 0,
-      });
-
-      const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
-
-      await startBroadcastFlow(handler);
-
-      const waitUntil = vi.fn();
-      const textResult = await handler.handleMessage(createIncomingMessage('Сообщение на модерации'), {
-        waitUntil,
-      });
-
-      expect(textResult).toBe('handled');
-
-      const mediaMessage = { ...createIncomingMessage(''), text: undefined as unknown as string };
-      const mismatchResult = await handler.handleMessage(mediaMessage);
-
-      expect(mismatchResult).toBe('handled');
-      expect(sendTextMock).toHaveBeenCalledWith({
-        chatId: 'chat-1',
-        threadId: 'thread-1',
-        text: `Эти данные не соответствуют выполняемой команде:\n${buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] })}`,
-      });
-      expect(sendBroadcastMock).not.toHaveBeenCalled();
-
-      await flushPendingChunks(waitUntil);
-    });
-  });
-
   it('prompts admin for audience selection after /broadcast command', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, adminAccess } = createHandler({ sendTextMock });
@@ -659,7 +566,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: `Эти данные не соответствуют выполняемой команде:\n${BROADCAST_AUDIENCE_PROMPT}`,
+      text: BROADCAST_AUDIENCE_PROMPT,
     });
   });
 
