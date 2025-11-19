@@ -41,7 +41,7 @@ describe('system-commands roles', () => {
 
   it('allows broadcast helper commands only for scoped role', () => {
     const everyone = findDescriptor('/everybody');
-    const cancel = findDescriptor('/cancel');
+    const cancel = findDescriptor('/cancel_broadcast');
     const send = findDescriptor('/send');
 
     for (const descriptor of [everyone, cancel, send]) {

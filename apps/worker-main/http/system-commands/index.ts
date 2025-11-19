@@ -103,8 +103,8 @@ export const SYSTEM_COMMAND_DESCRIPTORS: readonly SystemCommandDescriptor[] = [
     handler: scopedHandler,
   },
   {
-    name: '/cancel',
-    bareName: '/cancel',
+    name: '/cancel_broadcast',
+    bareName: '/cancel_broadcast',
     roles: ['scoped'],
     handler: scopedHandler,
   },
