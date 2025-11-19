@@ -610,6 +610,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
       'broadcast awaiting new text',
       expect.objectContaining({ exceededBy }),
     );
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(exceededBy),
+    });
 
     const pending = pendingStore.get('admin-1');
     expect(pending?.awaitingNewText).toBe(true);
@@ -824,10 +829,20 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await startBroadcastFlow(handler);
 
     await handler.handleMessage(createIncomingMessage('a'.repeat(5000)));
+    expect(sendTextMock).toHaveBeenNthCalledWith(3, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(1030),
+    });
     const followUp = await handler.handleMessage(createIncomingMessage('короткий текст'));
 
     expect(followUp).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(1030),
+    });
     expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
 
@@ -847,6 +862,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(pendingStore.get('admin-1')?.awaitingNewText).toBe(true);
     expect(store.has('broadcast:pending:admin-1')).toBe(true);
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(1),
+    });
 
     sendTextMock.mockClear();
 
@@ -885,6 +905,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await startBroadcastFlow(handler);
 
     await handler.handleMessage(createIncomingMessage('a'.repeat(5000)));
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(1030),
+    });
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
     const result = await handler.handleMessage(createIncomingMessage('ок'));
@@ -927,6 +952,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await startBroadcastFlow(handler);
 
     await handler.handleMessage(createIncomingMessage('a'.repeat(5000)));
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(1030),
+    });
     const promptResult = await handler.handleMessage(createIncomingMessage('/new_text'));
 
     expect(promptResult).toBe('handled');
