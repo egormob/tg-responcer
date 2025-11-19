@@ -744,6 +744,106 @@ export const createTelegramBroadcastCommandHandler = (
     });
   };
 
+  const finalizeCollectingTextEntry = async ({
+    entry,
+    userKey,
+    message,
+  }: {
+    entry: PendingBroadcast;
+    userKey: string;
+    message: IncomingMessage;
+  }): Promise<void> => {
+    const audience = entry.audience;
+    if (!audience) {
+      logger.warn('broadcast collecting text missing audience', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+
+      await deletePendingEntry(userKey);
+      return;
+    }
+
+    if ((entry.chunkCount ?? 0) <= 1 && entry.textChunks?.length === 1) {
+      const awaitingEntry: PendingBroadcast = {
+        ...entry,
+        stage: 'awaiting_send',
+        awaitingSendCommand: true,
+        awaitingNewText: false,
+        awaitingNewTextPrompt: undefined,
+        chunkCount: undefined,
+        debounceUntil: undefined,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, awaitingEntry);
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: buildAwaitingSendPromptMessage(audience),
+        });
+
+        logger.info('broadcast awaiting send confirmation', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          total: audience.total,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast send confirmation prompt', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_send_confirmation_prompt', error);
+      }
+
+      return;
+    }
+
+    const rejectionEntry: PendingBroadcast = {
+      ...entry,
+      stage: 'text',
+      awaitingNewText: true,
+      awaitingNewTextPrompt: true,
+      awaitingSendCommand: undefined,
+      textChunks: undefined,
+      chunkCount: undefined,
+      debounceUntil: undefined,
+      expiresAt: now().getTime() + pendingTtlMs,
+    };
+
+    await savePendingEntry(userKey, rejectionEntry);
+
+    try {
+      await options.messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text: buildTooLongMessage(0),
+      });
+
+      logger.warn('broadcast text rejected due to multiple chunks', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+    } catch (error) {
+      logger.error('failed to send broadcast chunk length warning', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        error: toErrorDetails(error),
+      });
+
+      await handleMessagingFailure(message.user.userId, 'broadcast_chunk_length_warning', error);
+    }
+  };
+
   const scheduleTextChunkFinalization = ({
     userKey,
     message,
@@ -761,95 +861,7 @@ export const createTelegramBroadcastCommandHandler = (
         return;
       }
 
-      const audience = latest.audience;
-      if (!audience) {
-        logger.warn('broadcast collecting text missing audience', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-        });
-
-        await deletePendingEntry(userKey);
-        return;
-      }
-
-      if ((latest.chunkCount ?? 0) <= 1 && latest.textChunks?.length === 1) {
-        const awaitingEntry: PendingBroadcast = {
-          ...latest,
-          stage: 'awaiting_send',
-          awaitingSendCommand: true,
-          awaitingNewText: false,
-          awaitingNewTextPrompt: undefined,
-          chunkCount: undefined,
-          debounceUntil: undefined,
-          expiresAt: now().getTime() + pendingTtlMs,
-        };
-
-        await savePendingEntry(userKey, awaitingEntry);
-
-        try {
-          await options.messaging.sendText({
-            chatId: message.chat.id,
-            threadId: message.chat.threadId,
-            text: buildAwaitingSendPromptMessage(audience),
-          });
-
-          logger.info('broadcast awaiting send confirmation', {
-            userId: message.user.userId,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-            total: audience.total,
-          });
-        } catch (error) {
-          logger.error('failed to send broadcast send confirmation prompt', {
-            userId: message.user.userId,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-            error: toErrorDetails(error),
-          });
-
-          await handleMessagingFailure(message.user.userId, 'broadcast_send_confirmation_prompt', error);
-        }
-
-        return;
-      }
-
-      const rejectionEntry: PendingBroadcast = {
-        ...latest,
-        stage: 'text',
-        awaitingNewText: true,
-        awaitingNewTextPrompt: true,
-        awaitingSendCommand: undefined,
-        textChunks: undefined,
-        chunkCount: undefined,
-        debounceUntil: undefined,
-        expiresAt: now().getTime() + pendingTtlMs,
-      };
-
-      await savePendingEntry(userKey, rejectionEntry);
-
-      try {
-        await options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: buildTooLongMessage(0),
-        });
-
-        logger.warn('broadcast text rejected due to multiple chunks', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-        });
-      } catch (error) {
-        logger.error('failed to send broadcast chunk length warning', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          error: toErrorDetails(error),
-        });
-
-        await handleMessagingFailure(message.user.userId, 'broadcast_chunk_length_warning', error);
-      }
+      await finalizeCollectingTextEntry({ entry: latest, userKey, message });
     })();
 
     if (context?.waitUntil) {
@@ -1023,6 +1035,27 @@ export const createTelegramBroadcastCommandHandler = (
       }
 
       return 'handled';
+    }
+
+    if (entry.stage === 'collecting_text') {
+      const debounceUntil = entry.debounceUntil ?? 0;
+      if (typeof debounceUntil === 'number' && debounceUntil > 0 && debounceUntil <= currentTime) {
+        await finalizeCollectingTextEntry({ entry, userKey, message });
+
+        entry = await loadPendingEntry(userKey, now().getTime());
+        if (!entry) {
+          return 'handled';
+        }
+
+        if (entry.chatId !== message.chat.id) {
+          return 'handled';
+        }
+
+        const refreshedThreadId = entry.threadId ?? null;
+        if (refreshedThreadId !== messageThreadId) {
+          return 'handled';
+        }
+      }
     }
 
     if (entry.stage === 'collecting_text') {

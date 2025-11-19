@@ -316,6 +316,51 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   });
 
+  it('finalizes collecting_text entries when debounce already elapsed after restart', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi.fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockResolvedValue({
+        delivered: 3,
+        failed: 0,
+        deliveries: [],
+        recipients: 3,
+        durationMs: 75,
+        source: 'D1',
+        sample: [],
+        throttled429: 0,
+      });
+    const pendingStore = new Map<string, PendingBroadcast>();
+    pendingStore.set('admin-1', {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      stage: 'collecting_text',
+      audience: { mode: 'all', total: 3, notFound: [] },
+      textChunks: ['Recovered text'],
+      chunkCount: 1,
+      debounceUntil: new Date('2023-12-31T23:59:59Z').getTime(),
+      expiresAt: new Date('2024-01-01T00:05:00Z').getTime(),
+    });
+
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, pendingStore });
+
+    const result = await handler.handleMessage(createIncomingMessage('/send'));
+    expect(result).toBe('handled');
+
+    expect(sendTextMock).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] }),
+    });
+
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      text: 'Recovered text',
+      requestedBy: 'admin-1',
+      filters: undefined,
+    });
+
+    expect(pendingStore.has('admin-1')).toBe(false);
+  });
+
   it('rejects multi-message text and prompts for /new_text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
