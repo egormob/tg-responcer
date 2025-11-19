@@ -272,7 +272,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
 
     await handler.handleMessage(createIncomingMessage('ok'));
@@ -519,7 +519,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 30 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
   });
 
@@ -562,7 +562,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: `Текст рассылки не укладывается в лимит на ${exceededBy} символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.`,
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
 
     const pending = pendingStore.get('admin-1');
@@ -672,7 +672,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
   });
 
@@ -691,7 +691,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(4, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1030 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
     expect(sendTextMock).toHaveBeenCalledTimes(4);
   });
@@ -727,7 +727,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 2 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
@@ -745,7 +745,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
   });
 
@@ -785,7 +785,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 1 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
     expect(logger.info).toHaveBeenCalledWith(
       'broadcast awaiting new text',
@@ -810,7 +810,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не укладывается в лимит на 2 символов. Нажмите /new_text чтобы отправить новый или отмените рассылку /cancel.',
+      text: 'Лимит превышен, /new_text чтобы отправить снова  или /cancel для отмены',
     });
   });
 
