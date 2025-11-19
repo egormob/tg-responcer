@@ -15,7 +15,7 @@ import type {
   BroadcastSendResult,
   SendBroadcast,
 } from './minimal-broadcast-service';
-import { ADMIN_HELP_MESSAGE } from '../export/telegram-export-command';
+import { createAdminHelpSender, type SendAdminHelp } from '../export/telegram-export-command';
 
 interface Logger {
   info?(message: string, details?: Record<string, unknown>): void;
@@ -36,7 +36,7 @@ export const BROADCAST_AUDIENCE_PROMPT =
   'Шаг 1. Выберите получателей /everybody или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.';
 
 export const buildBroadcastPromptMessage = (count: number, notFound: readonly string[] = []): string => {
-  const base = `Шаг 2. Пришлите текст для ${count} получателей, /cancel для отмены.`;
+  const base = `Шаг 2. Пришлите текст для ${count} получателей, /cancel_broadcast для отмены.`;
 
   if (notFound.length === 0) {
     return base;
@@ -148,6 +148,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   pendingStore?: Map<string, PendingBroadcast>;
   pendingKv?: BroadcastPendingKvNamespace;
   exportLogKv: Pick<KVNamespace, 'put'>;
+  sendAdminHelp?: SendAdminHelp;
 }
 
 export interface TelegramBroadcastCommandHandler {
@@ -203,7 +204,19 @@ const extractBroadcastText = (value: string): { text: string; usedSendCommand: b
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const isCancelCommand = (value: string): boolean => value === '/cancel' || value === '/cancel_broadcast';
+const parseCancelCommand = (
+  value: string,
+): { canonical: '/cancel_broadcast'; original: '/cancel' | '/cancel_broadcast' } | undefined => {
+  if (value === '/cancel_broadcast') {
+    return { canonical: '/cancel_broadcast', original: '/cancel_broadcast' };
+  }
+
+  if (value === '/cancel') {
+    return { canonical: '/cancel_broadcast', original: '/cancel' };
+  }
+
+  return undefined;
+};
 
 export const createTelegramBroadcastCommandHandler = (
   options: CreateTelegramBroadcastCommandHandlerOptions,
@@ -215,6 +228,14 @@ export const createTelegramBroadcastCommandHandler = (
 
   const pendingCache = options.pendingStore ?? new Map<string, PendingBroadcast>();
   const pendingKv = options.pendingKv;
+  const sendAdminHelp =
+    options.sendAdminHelp ??
+    createAdminHelpSender({
+      messaging: options.messaging,
+      logger,
+      adminAccess: options.adminAccess,
+      adminErrorRecorder: options.adminErrorRecorder,
+    });
 
   const maintenanceState: { lastRunAt: number; promise?: Promise<void> } = { lastRunAt: 0 };
 
@@ -1001,13 +1022,22 @@ export const createTelegramBroadcastCommandHandler = (
     const rawText = message.text ?? '';
     const normalized = rawText.trim().toLowerCase();
 
-    if (isCancelCommand(normalized)) {
+    const cancelCommand = parseCancelCommand(normalized);
+    if (cancelCommand) {
       logger.info('broadcast cancelled via telegram command', {
         userId: message.user.userId,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
-        command: normalized,
+        command: cancelCommand.original,
       });
+
+      if (cancelCommand.original === '/cancel') {
+        logger.warn('deprecated broadcast cancel alias used', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+      }
 
       await deletePendingEntry(userKey);
 
@@ -1016,12 +1046,6 @@ export const createTelegramBroadcastCommandHandler = (
           chatId: message.chat.id,
           threadId: message.chat.threadId,
           text: BROADCAST_CANCEL_MESSAGE,
-        });
-
-        await options.messaging.sendText({
-          chatId: message.chat.id,
-          threadId: message.chat.threadId,
-          text: ADMIN_HELP_MESSAGE,
         });
       } catch (error) {
         logger.error('failed to send broadcast cancel notice', {
@@ -1032,6 +1056,21 @@ export const createTelegramBroadcastCommandHandler = (
         });
 
         await handleMessagingFailure(message.user.userId, 'broadcast_cancel_notice', error);
+      }
+
+      try {
+        await sendAdminHelp({
+          userId: String(message.user.userId),
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+        });
+      } catch (error) {
+        logger.error('failed to send admin help after broadcast cancel', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
       }
 
       return 'handled';

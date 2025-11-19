@@ -8,7 +8,6 @@ import {
   type PendingBroadcast,
 } from '../telegram-broadcast-command';
 import type { BroadcastPendingKvNamespace } from '../telegram-broadcast-command';
-import { ADMIN_HELP_MESSAGE } from '../../export/telegram-export-command';
 import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
@@ -124,6 +123,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     maxTextLength,
     pendingStore,
     pendingKv,
+    sendAdminHelp = vi.fn().mockResolvedValue(undefined),
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
@@ -134,6 +134,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     maxTextLength?: number;
     pendingStore?: Map<string, PendingBroadcast>;
     pendingKv?: BroadcastPendingKvNamespace;
+    sendAdminHelp?: ReturnType<typeof vi.fn>;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -158,9 +159,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
       maxTextLength,
       pendingStore,
       pendingKv,
+      sendAdminHelp,
     });
 
-    return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger, exportLogKv };
+    return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger, exportLogKv, sendAdminHelp };
   };
 
   const startBroadcastFlow = async (
@@ -1224,12 +1226,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await expect(baseAliasResponse?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
   });
 
-  it('cancels broadcast when admin sends /cancel', async () => {
+  it('cancels broadcast when admin sends /cancel_broadcast', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
-    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+    const sendAdminHelp = vi.fn().mockResolvedValue(undefined);
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock, sendAdminHelp });
 
     await handler.handleCommand(createContext());
-    const result = await handler.handleMessage(createIncomingMessage('/cancel'));
+    const result = await handler.handleMessage(createIncomingMessage('/cancel_broadcast'));
 
     expect(result).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
@@ -1238,10 +1241,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.',
     });
-    expect(sendTextMock).toHaveBeenNthCalledWith(3, {
+    expect(sendAdminHelp).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: ADMIN_HELP_MESSAGE,
+      userId: 'admin-1',
     });
   });
 

@@ -96,6 +96,7 @@ const createLogger = (logger?: Logger) => ({
 });
 
 type LoggerInstance = ReturnType<typeof createLogger>;
+export type AdminCommandLogger = LoggerInstance;
 
 interface CooldownStoreOptions {
   primary?: AdminExportRateLimitKvNamespace;
@@ -277,6 +278,45 @@ const createCooldownStore = (options: CooldownStoreOptions) => {
 const normalizeErrorForLog = (error: unknown) =>
   error instanceof Error ? { name: error.name, message: error.message } : String(error);
 
+const createAdminMessagingErrorLogger = (
+  logger: LoggerInstance,
+  adminErrorRecorder?: AdminCommandErrorRecorder,
+  adminAccess?: AdminAccess,
+) =>
+  async (
+    message: string,
+    contextDetails: { userId: string; chatId: string; threadId?: string },
+    error: unknown,
+    commandLabel: string,
+  ) => {
+    const telegramDetails = extractTelegramErrorDetails(error);
+    const logDetails: Record<string, unknown> = {
+      ...contextDetails,
+      error: normalizeErrorForLog(error),
+    };
+
+    if (telegramDetails.status !== undefined) {
+      logDetails.status = telegramDetails.status;
+    }
+
+    if (telegramDetails.description) {
+      logDetails.description = telegramDetails.description;
+    }
+
+    logger.error(message, logDetails);
+
+    if (shouldInvalidateAdminAccess(telegramDetails)) {
+      adminAccess?.invalidate?.(contextDetails.userId);
+    }
+
+    await adminErrorRecorder?.record({
+      userId: contextDetails.userId,
+      command: commandLabel,
+      error,
+      details: telegramDetails,
+    });
+  };
+
 const buildTelegramFormData = (
   chatId: string,
   threadId: string | undefined,
@@ -435,6 +475,56 @@ export const ADMIN_HELP_MESSAGE = [
   '- /export [from] [to] — выгрузить историю диалогов в CSV. Даты необязательные, формат YYYY-MM-DD. Запросы ограничены: не чаще одного раза в 60 секунд.',
 ].join('\n');
 
+export interface AdminHelpContextDetails {
+  userId: string;
+  chatId: string;
+  threadId?: string;
+}
+
+export interface CreateAdminHelpSenderOptions {
+  messaging: Pick<MessagingPort, 'sendText'>;
+  logger: LoggerInstance;
+  adminErrorRecorder?: AdminCommandErrorRecorder;
+  adminAccess?: AdminAccess;
+}
+
+export type SendAdminHelp = (context: AdminHelpContextDetails) => Promise<void>;
+
+export const createAdminHelpSender = (
+  options: CreateAdminHelpSenderOptions,
+): SendAdminHelp => {
+  const logAdminMessagingError = createAdminMessagingErrorLogger(
+    options.logger,
+    options.adminErrorRecorder,
+    options.adminAccess,
+  );
+
+  return async ({ chatId, threadId, userId }) => {
+    try {
+      await options.messaging.sendText({
+        chatId,
+        threadId,
+        text: ADMIN_HELP_MESSAGE,
+      });
+
+      options.logger.info('admin help sent', {
+        userId,
+        chatId,
+        threadId: threadId ?? null,
+      });
+    } catch (error) {
+      await logAdminMessagingError(
+        'failed to send admin help response',
+        { userId, chatId, threadId },
+        error,
+        'admin_help',
+      );
+
+      throw error;
+    }
+  };
+};
+
 const parseUtmSourcesHeader = (value: string | null): string[] | undefined => {
   if (!value) {
     return undefined;
@@ -483,6 +573,17 @@ export const createTelegramExportCommandHandler = (
 ) => {
   const now = options.now ?? (() => new Date());
   const logger = createLogger(options.logger);
+  const logAdminMessagingError = createAdminMessagingErrorLogger(
+    logger,
+    options.adminErrorRecorder,
+    options.adminAccess,
+  );
+  const sendAdminHelp = createAdminHelpSender({
+    messaging: options.messaging,
+    logger,
+    adminErrorRecorder: options.adminErrorRecorder,
+    adminAccess: options.adminAccess,
+  });
   const apiUrl = `https://api.telegram.org/bot${options.botToken}/sendDocument`;
   const fallbackCooldownKv =
     options.adminAccessKv && options.adminAccessKv !== options.cooldownKv ? options.adminAccessKv : undefined;
@@ -492,40 +593,6 @@ export const createTelegramExportCommandHandler = (
     logger,
   });
   const hasCooldownStore = Boolean(options.cooldownKv || fallbackCooldownKv);
-
-  const logAdminMessagingError = async (
-    message: string,
-    contextDetails: { userId: string; chatId: string; threadId?: string },
-    error: unknown,
-    commandLabel: string,
-  ) => {
-    const telegramDetails = extractTelegramErrorDetails(error);
-    const logDetails: Record<string, unknown> = {
-      ...contextDetails,
-      error: normalizeErrorForLog(error),
-    };
-
-    if (telegramDetails.status !== undefined) {
-      logDetails.status = telegramDetails.status;
-    }
-
-    if (telegramDetails.description) {
-      logDetails.description = telegramDetails.description;
-    }
-
-    logger.error(message, logDetails);
-
-    if (shouldInvalidateAdminAccess(telegramDetails)) {
-      options.adminAccess.invalidate?.(contextDetails.userId);
-    }
-
-    await options.adminErrorRecorder?.record({
-      userId: contextDetails.userId,
-      command: commandLabel,
-      error,
-      details: telegramDetails,
-    });
-  };
 
   return async (context: TelegramAdminCommandContext): Promise<Response | void> => {
     const commandToken =
@@ -545,29 +612,13 @@ export const createTelegramExportCommandHandler = (
       }
 
       try {
-        await options.messaging.sendText({
-          chatId: context.chat.id,
-          threadId: context.chat.threadId,
-          text: ADMIN_HELP_MESSAGE,
-        });
-
-        logger.info('admin help sent', {
+        await sendAdminHelp({
           userId,
           chatId: context.chat.id,
           threadId: context.chat.threadId,
         });
       } catch (error) {
-        await logAdminMessagingError(
-          'failed to send admin help response',
-          {
-            userId,
-            chatId: context.chat.id,
-            threadId: context.chat.threadId,
-          },
-          error,
-          'admin_help',
-        );
-
+        void error;
         return json({ error: 'Failed to send admin help response' }, { status: 502 });
       }
 
