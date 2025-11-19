@@ -2,13 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   BROADCAST_AUDIENCE_PROMPT,
+  buildAwaitingSendPromptMessage,
   buildBroadcastPromptMessage,
   createTelegramBroadcastCommandHandler,
   type PendingBroadcast,
 } from '../telegram-broadcast-command';
 import type { BroadcastPendingKvNamespace } from '../telegram-broadcast-command';
 import { ADMIN_HELP_MESSAGE } from '../../export/telegram-export-command';
-import type { TelegramAdminCommandContext } from '../../../http';
+import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
 import type { BroadcastSendResult, SendBroadcast } from '../minimal-broadcast-service';
@@ -56,8 +57,8 @@ const createIncomingMessage = (text: string): IncomingMessage => ({
   receivedAt: new Date('2024-01-01T00:01:00Z'),
 });
 
-const buildExpectedTooLongMessage = (overflow: number) =>
-  `Текст рассылки не укладывается в лимит на ${overflow} символов. /new_text чтобы отправить снова или /cancel для отмены`;
+const buildExpectedTooLongMessage = (_overflow: number) =>
+  'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
 
 const createDeferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -171,6 +172,56 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(selectionResult).toBe('handled');
   };
 
+  const withFakeTimers = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const alreadyFake = vi.isFakeTimers();
+    if (!alreadyFake) {
+      vi.useFakeTimers();
+    }
+
+    try {
+      return await fn();
+    } finally {
+      if (!alreadyFake) {
+        vi.useRealTimers();
+      }
+    }
+  };
+
+  const flushPendingChunks = async (waitUntil: ReturnType<typeof vi.fn>) => {
+    await withFakeTimers(async () => {
+      await vi.runAllTimersAsync();
+      const scheduled = waitUntil.mock.calls.at(-1)?.[0];
+      if (scheduled) {
+        await scheduled;
+      }
+    });
+  };
+
+  const submitTextAndAwaitPrompt = async (
+    handler: ReturnType<typeof createTelegramBroadcastCommandHandler>,
+    text: string,
+  ) => {
+    const waitUntil = vi.fn();
+    const result = await handler.handleMessage(createIncomingMessage(text), { waitUntil });
+    expect(result).toBe('handled');
+    await flushPendingChunks(waitUntil);
+    return waitUntil;
+  };
+
+  const completeBroadcast = async (
+    handler: ReturnType<typeof createTelegramBroadcastCommandHandler>,
+    text: string,
+    options?: { sendContext?: TransformPayloadContext },
+  ) => {
+    const collectionWaitUntil = await submitTextAndAwaitPrompt(handler, text);
+    void collectionWaitUntil;
+    const sendWaitUntil = options?.sendContext?.waitUntil ?? vi.fn();
+    const sendContext = { ...options?.sendContext, waitUntil: sendWaitUntil };
+    const result = await handler.handleMessage(createIncomingMessage('/send'), sendContext);
+    expect(result).toBe('handled');
+    return { sendWaitUntil };
+  };
+
   it('prompts admin for audience selection after /broadcast command', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler, adminAccess } = createHandler({ sendTextMock });
@@ -198,7 +249,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(response).toBeUndefined();
   });
 
-  it('sends broadcast when admin selects /everybody and provides valid text', async () => {
+  it('waits for confirmation before sending broadcast text', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const deferred = createDeferred<BroadcastSendResult>();
     const sendBroadcastMock = vi
@@ -209,26 +260,41 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     await startBroadcastFlow(handler);
 
-    const waitUntil = vi.fn();
-    const resultPromise = handler.handleMessage(
-      createIncomingMessage('hello everyone'),
-      { waitUntil },
-    );
+    await withFakeTimers(async () => {
+      const collectionWaitUntil = vi.fn();
+      const initialResult = handler.handleMessage(createIncomingMessage('hello everyone'), {
+        waitUntil: collectionWaitUntil,
+      });
 
-    await expect(resultPromise).resolves.toBe('handled');
-    expect(sendTextMock).toHaveBeenNthCalledWith(2, {
+      await expect(initialResult).resolves.toBe('handled');
+      expect(sendBroadcastMock).not.toHaveBeenCalled();
+
+      expect(collectionWaitUntil).toHaveBeenCalledTimes(1);
+      const collectionPromise = collectionWaitUntil.mock.calls[0]?.[0];
+      expect(typeof collectionPromise?.then).toBe('function');
+
+      await vi.runAllTimersAsync();
+      await collectionPromise;
+    });
+
+    expect(sendTextMock).toHaveBeenNthCalledWith(3, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: buildBroadcastPromptMessage(3),
+      text: buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] }),
     });
+
+    const sendWaitUntil = vi.fn();
+    const sendResult = handler.handleMessage(createIncomingMessage('/send'), { waitUntil: sendWaitUntil });
+    await expect(sendResult).resolves.toBe('handled');
+
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'hello everyone',
       requestedBy: 'admin-1',
       filters: undefined,
     });
 
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    const scheduled = waitUntil.mock.calls[0]?.[0];
+    expect(sendWaitUntil).toHaveBeenCalledTimes(1);
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
 
     deferred.resolve({
@@ -247,6 +313,71 @@ describe('createTelegramBroadcastCommandHandler', () => {
       chatId: 'chat-1',
       threadId: 'thread-1',
       text: '✅ Рассылка отправлена!',
+    });
+  });
+
+  it('finalizes collecting_text entries when debounce already elapsed after restart', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const sendBroadcastMock = vi.fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockResolvedValue({
+        delivered: 3,
+        failed: 0,
+        deliveries: [],
+        recipients: 3,
+        durationMs: 75,
+        source: 'D1',
+        sample: [],
+        throttled429: 0,
+      });
+    const pendingStore = new Map<string, PendingBroadcast>();
+    pendingStore.set('admin-1', {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      stage: 'collecting_text',
+      audience: { mode: 'all', total: 3, notFound: [] },
+      textChunks: ['Recovered text'],
+      chunkCount: 1,
+      debounceUntil: new Date('2023-12-31T23:59:59Z').getTime(),
+      expiresAt: new Date('2024-01-01T00:05:00Z').getTime(),
+    });
+
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, pendingStore });
+
+    const result = await handler.handleMessage(createIncomingMessage('/send'));
+    expect(result).toBe('handled');
+
+    expect(sendTextMock).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] }),
+    });
+
+    expect(sendBroadcastMock).toHaveBeenCalledWith({
+      text: 'Recovered text',
+      requestedBy: 'admin-1',
+      filters: undefined,
+    });
+
+    expect(pendingStore.has('admin-1')).toBe(false);
+  });
+
+  it('rejects multi-message text and prompts for /new_text', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler, sendBroadcastMock } = createHandler({ sendTextMock });
+
+    await startBroadcastFlow(handler);
+
+    const firstWaitUntil = vi.fn();
+    await handler.handleMessage(createIncomingMessage('short chunk'), { waitUntil: firstWaitUntil });
+    await handler.handleMessage(createIncomingMessage('second chunk'));
+
+    await flushPendingChunks(firstWaitUntil);
+
+    expect(sendBroadcastMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(0),
     });
   });
 
@@ -289,10 +420,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст длиной до 5 символов.',
+      text: buildBroadcastPromptMessage(3),
     });
 
-    await handler.handleMessage(createIncomingMessage('short'));
+    await completeBroadcast(handler, 'short');
 
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       filters: undefined,
@@ -320,8 +451,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await startBroadcastFlow(handler);
 
     const waitUntil = vi.fn();
-    await handler.handleMessage(createIncomingMessage('/send hello!'), { waitUntil });
-    const scheduled = waitUntil.mock.calls[0]?.[0];
+    const { sendWaitUntil } = await completeBroadcast(handler, '/send hello!', {
+      sendContext: { waitUntil },
+    });
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
     await scheduled;
 
@@ -368,8 +501,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       text: buildBroadcastPromptMessage(2),
     });
 
-    const result = await handler.handleMessage(createIncomingMessage('Segmented message'));
-    expect(result).toBe('handled');
+    await completeBroadcast(handler, 'Segmented message');
 
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'Segmented message',
@@ -402,8 +534,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       text: buildBroadcastPromptMessage(1, ['missing-one']),
     });
 
-    const result = await handler.handleMessage(createIncomingMessage('Check not found'));
-    expect(result).toBe('handled');
+    await completeBroadcast(handler, 'Check not found');
 
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'Check not found',
@@ -744,7 +875,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст длиной до 5 символов.',
+      text: buildBroadcastPromptMessage(3),
     });
 
     await handler.handleMessage(createIncomingMessage('abcdef'));
@@ -808,7 +939,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст длиной до 5 символов.',
+      text: buildBroadcastPromptMessage(3),
     });
 
     const repeatResult = await handler.handleMessage(createIncomingMessage('abcdefg'));
@@ -877,9 +1008,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(store.has('broadcast:pending:admin-1')).toBe(false);
 
     await startBroadcastFlow(handler);
-    const sendResult = await handler.handleMessage(createIncomingMessage('short'));
-
-    expect(sendResult).toBe('handled');
+    await completeBroadcast(handler, 'short');
     expect(sendTextMock).toHaveBeenNthCalledWith(1, {
       chatId: 'chat-1',
       threadId: 'thread-1',
@@ -912,9 +1041,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
-    const result = await handler.handleMessage(createIncomingMessage('ок'));
+    const { sendWaitUntil } = await completeBroadcast(handler, 'ок');
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
+    expect(typeof scheduled?.then).toBe('function');
+    await scheduled;
 
-    expect(result).toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'ок',
       requestedBy: 'admin-1',
@@ -929,7 +1060,9 @@ describe('createTelegramBroadcastCommandHandler', () => {
       expect.arrayContaining([
         'broadcast awaiting new text',
         'broadcast awaiting new text after rejection',
-        'broadcast dispatch scheduled via telegram command',
+        'broadcast text chunk collected',
+        'broadcast awaiting send confirmation',
+        'broadcast dispatch confirmed via telegram command',
         'broadcast sent via telegram command',
       ]),
     );
@@ -963,20 +1096,21 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Пришлите текст длиной до 3970 символов.',
+      text: buildBroadcastPromptMessage(3),
     });
 
     const waitUntil = vi.fn();
-    const result = await handler.handleMessage(createIncomingMessage('готовый текст'), { waitUntil });
+    const { sendWaitUntil } = await completeBroadcast(handler, 'готовый текст', {
+      sendContext: { waitUntil },
+    });
 
-    expect(result).toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledWith({
       text: 'готовый текст',
       requestedBy: 'admin-1',
       filters: undefined,
     });
 
-    const scheduled = waitUntil.mock.calls[0]?.[0];
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
     await scheduled;
   });
@@ -997,11 +1131,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     await startBroadcastFlow(handler);
     const waitUntil = vi.fn();
-    const result = await handler.handleMessage(createIncomingMessage('a'.repeat(3970)), { waitUntil });
+    const { sendWaitUntil } = await completeBroadcast(handler, 'a'.repeat(3970), {
+      sendContext: { waitUntil },
+    });
 
-    expect(result).toBe('handled');
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    const scheduled = waitUntil.mock.calls[0]?.[0];
+    expect(sendWaitUntil).toHaveBeenCalledTimes(1);
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
     await scheduled;
 
@@ -1047,9 +1182,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     const { handler } = createHandler({ sendTextMock, sendBroadcastMock });
 
     await startBroadcastFlow(handler);
-    const result = await handler.handleMessage(createIncomingMessage('hello everyone'));
+    const { sendWaitUntil } = await completeBroadcast(handler, 'hello everyone');
+    const scheduled = sendWaitUntil.mock.calls[0]?.[0];
+    expect(typeof scheduled?.then).toBe('function');
+    await scheduled;
 
-    expect(result).toBe('handled');
     expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
@@ -1454,7 +1591,7 @@ describe('worker integration for broadcast command', () => {
       },
     };
 
-    const broadcastResponse = await worker.fetch(
+    const textResponse = await worker.fetch(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1464,16 +1601,52 @@ describe('worker integration for broadcast command', () => {
       ctx,
     );
 
-    expect(broadcastResponse.status).toBe(200);
-    await expect(broadcastResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(textResponse.status).toBe(200);
+    await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
     expect(composeWorkerMock).toHaveBeenCalledTimes(1);
     expect(handleMessage).not.toHaveBeenCalled();
     expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
 
-    const backgroundTask = ctx.waitUntil.mock.calls[0]?.[0];
-    expect(typeof backgroundTask?.then).toBe('function');
+    const chunkTask = ctx.waitUntil.mock.calls[0]?.[0];
+    expect(typeof chunkTask?.then).toBe('function');
+    await chunkTask;
 
     expect(messaging.sendText).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: '77',
+      text: buildAwaitingSendPromptMessage({ mode: 'all', total: 1, notFound: [] }),
+    });
+
+    const sendUpdate = {
+      update_id: 4,
+      message: {
+        message_id: '103',
+        date: '1710000015',
+        text: '/send',
+        from: { id: 'admin-1', first_name: 'Admin' },
+        chat: { id: 'chat-1', type: 'private' },
+        message_thread_id: '77',
+      },
+    };
+
+    const sendResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sendUpdate),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(sendResponse.status).toBe(200);
+    await expect(sendResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+
+    const backgroundTask = ctx.waitUntil.mock.calls.at(-1)?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
       chatId: 'subscriber-1',
       threadId: undefined,
       text: 'Всем привет',
@@ -1650,6 +1823,8 @@ describe('worker integration for broadcast command', () => {
       },
     };
 
+    const waitUntilCallsBeforeText = ctx.waitUntil.mock.calls.length;
+
     const broadcastResponse = await worker.fetch(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
@@ -1663,17 +1838,59 @@ describe('worker integration for broadcast command', () => {
     expect(broadcastResponse.status).toBe(200);
     await expect(broadcastResponse.json()).resolves.toEqual({ status: 'ok' });
     expect(handleMessage).not.toHaveBeenCalled();
-    expect(ctx.waitUntil).toHaveBeenCalled();
+    expect(ctx.waitUntil.mock.calls.length).toBeGreaterThan(waitUntilCallsBeforeText);
+
+    const chunkTask = ctx.waitUntil.mock.calls.at(-1)?.[0];
+    expect(typeof chunkTask?.then).toBe('function');
+    await chunkTask;
+
+    expect(messaging.sendText).toHaveBeenNthCalledWith(1, {
+      chatId: 'chat-1',
+      threadId: undefined,
+      text: buildAwaitingSendPromptMessage({ mode: 'all', total: 1, notFound: [] }),
+    });
+
+    module.__internal.clearRouterCache(env as never);
+    module.__internal.clearBroadcastSessionStore(env as never);
+
+    const sendUpdate = {
+      update_id: 4,
+      message: {
+        message_id: '103',
+        date: '1710000015',
+        text: '/send',
+        from: { id: 'admin-1', first_name: 'Admin' },
+        chat: { id: 'chat-1', type: 'private' },
+      },
+    };
+
+    const waitUntilCallsBeforeSend = ctx.waitUntil.mock.calls.length;
+
+    const sendResponse = await worker.fetch(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sendUpdate),
+      }),
+      env,
+      ctx,
+    );
+
+    expect(sendResponse.status).toBe(200);
+    await expect(sendResponse.json()).resolves.toEqual({ status: 'ok' });
+    expect(ctx.waitUntil.mock.calls.length).toBeGreaterThan(waitUntilCallsBeforeSend);
 
     const backgroundTask = ctx.waitUntil.mock.calls.at(-1)?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
+    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
+      chatId: 'subscriber-1',
+      threadId: undefined,
+      text: 'Всем привет',
+    });
+
     recipientDeferred.resolve({ messageId: 'delivered-late' });
     await backgroundTask;
-
-    expect(messaging.sendText).toHaveBeenCalledWith(
-      expect.objectContaining({ chatId: 'subscriber-1', text: 'Всем привет' }),
-    );
 
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',

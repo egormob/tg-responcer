@@ -30,6 +30,7 @@ const BROADCAST_PENDING_KV_PREFIX = 'broadcast:pending:';
 const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const MINIMUM_KV_TTL_SECONDS = 60;
 const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
+const TEXT_CHUNK_DEBOUNCE_MS = 1000;
 
 export const BROADCAST_AUDIENCE_PROMPT =
   'Шаг 1. Выберите получателей /everybody или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.';
@@ -48,10 +49,21 @@ export const buildBroadcastPromptMessage = (count: number, notFound: readonly st
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
-const buildTooLongMessage = (overflow: number) =>
-  `Текст рассылки не укладывается в лимит на ${overflow} символов. /new_text чтобы отправить снова или /cancel для отмены`;
+const buildTooLongMessage = (_overflow: number) =>
+  'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
 
-const buildNewTextPrompt = (limit: number) => `Пришлите текст длиной до ${limit} символов.`;
+export const buildAwaitingSendPromptMessage = (audience: BroadcastAudience): string => {
+  const base = `Текст принят. Получателей ${audience.total}. Выберите: /send чтобы отправить, /new_text чтобы изменить текст или /cancel_broadcast для отмены.`;
+
+  if (audience.notFound.length === 0) {
+    return base;
+  }
+
+  return `${base}\nНе нашли: ${audience.notFound.join(', ')}`;
+};
+
+const BROADCAST_AWAITING_SEND_WARNING =
+  'Сейчас доступны только команды /send, /new_text или /cancel_broadcast.';
 
 const BROADCAST_EMPTY_MESSAGE =
   'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
@@ -67,12 +79,17 @@ export interface PendingBroadcast {
   chatId: string;
   threadId?: string;
   expiresAt: number;
-  stage: 'audience' | 'text';
+  stage: 'audience' | 'text' | 'collecting_text' | 'awaiting_send';
   audience?: BroadcastAudience;
   awaitingTextPrompt?: boolean;
   awaitingNewText?: boolean;
+  awaitingNewTextPrompt?: boolean;
+  awaitingSendCommand?: boolean;
   lastRejectedLength?: number;
   lastExceededBy?: number;
+  textChunks?: string[];
+  chunkCount?: number;
+  debounceUntil?: number;
 }
 
 type BroadcastAudienceMode = 'all' | 'list';
@@ -184,6 +201,10 @@ const extractBroadcastText = (value: string): { text: string; usedSendCommand: b
   return { text: value, usedSendCommand: false };
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isCancelCommand = (value: string): boolean => value === '/cancel' || value === '/cancel_broadcast';
+
 export const createTelegramBroadcastCommandHandler = (
   options: CreateTelegramBroadcastCommandHandlerOptions,
 ): TelegramBroadcastCommandHandler => {
@@ -257,12 +278,18 @@ export const createTelegramBroadcastCommandHandler = (
         entry?: PendingBroadcast;
       };
 
+      const isValidStage =
+        parsed.entry?.stage === 'audience' ||
+        parsed.entry?.stage === 'text' ||
+        parsed.entry?.stage === 'collecting_text' ||
+        parsed.entry?.stage === 'awaiting_send';
+
       if (
         parsed.version !== BROADCAST_PENDING_KV_VERSION ||
         !parsed.entry ||
         typeof parsed.entry.chatId !== 'string' ||
         typeof parsed.entry.expiresAt !== 'number' ||
-        (parsed.entry.stage !== 'audience' && parsed.entry.stage !== 'text')
+        !isValidStage
       ) {
         return undefined;
       }
@@ -270,6 +297,8 @@ export const createTelegramBroadcastCommandHandler = (
       const audience = parseAudience(parsed.entry.audience);
       const awaitingNewText = parsed.entry.awaitingNewText === true;
       const awaitingTextPrompt = parsed.entry.awaitingTextPrompt === true;
+      const awaitingNewTextPrompt = parsed.entry.awaitingNewTextPrompt === true;
+      const awaitingSendCommand = parsed.entry.awaitingSendCommand === true;
       const lastRejectedLength =
         typeof (parsed.entry as { lastRejectedLength?: unknown }).lastRejectedLength === 'number'
           ? (parsed.entry as { lastRejectedLength: number }).lastRejectedLength
@@ -277,6 +306,17 @@ export const createTelegramBroadcastCommandHandler = (
       const lastExceededBy =
         typeof (parsed.entry as { lastExceededBy?: unknown }).lastExceededBy === 'number'
           ? (parsed.entry as { lastExceededBy: number }).lastExceededBy
+          : undefined;
+      const textChunks = Array.isArray(parsed.entry.textChunks)
+        ? parsed.entry.textChunks.filter((chunk): chunk is string => typeof chunk === 'string')
+        : undefined;
+      const chunkCount =
+        typeof (parsed.entry as { chunkCount?: unknown }).chunkCount === 'number'
+          ? (parsed.entry as { chunkCount: number }).chunkCount
+          : undefined;
+      const debounceUntil =
+        typeof (parsed.entry as { debounceUntil?: unknown }).debounceUntil === 'number'
+          ? (parsed.entry as { debounceUntil: number }).debounceUntil
           : undefined;
 
       return {
@@ -287,8 +327,13 @@ export const createTelegramBroadcastCommandHandler = (
         audience,
         awaitingTextPrompt,
         awaitingNewText,
+        awaitingNewTextPrompt,
+        awaitingSendCommand,
         lastRejectedLength,
         lastExceededBy,
+        textChunks,
+        chunkCount,
+        debounceUntil,
       } satisfies PendingBroadcast;
     } catch (error) {
       logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
@@ -699,6 +744,133 @@ export const createTelegramBroadcastCommandHandler = (
     });
   };
 
+  const finalizeCollectingTextEntry = async ({
+    entry,
+    userKey,
+    message,
+  }: {
+    entry: PendingBroadcast;
+    userKey: string;
+    message: IncomingMessage;
+  }): Promise<void> => {
+    const audience = entry.audience;
+    if (!audience) {
+      logger.warn('broadcast collecting text missing audience', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+
+      await deletePendingEntry(userKey);
+      return;
+    }
+
+    if ((entry.chunkCount ?? 0) <= 1 && entry.textChunks?.length === 1) {
+      const awaitingEntry: PendingBroadcast = {
+        ...entry,
+        stage: 'awaiting_send',
+        awaitingSendCommand: true,
+        awaitingNewText: false,
+        awaitingNewTextPrompt: undefined,
+        chunkCount: undefined,
+        debounceUntil: undefined,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, awaitingEntry);
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: buildAwaitingSendPromptMessage(audience),
+        });
+
+        logger.info('broadcast awaiting send confirmation', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          total: audience.total,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast send confirmation prompt', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_send_confirmation_prompt', error);
+      }
+
+      return;
+    }
+
+    const rejectionEntry: PendingBroadcast = {
+      ...entry,
+      stage: 'text',
+      awaitingNewText: true,
+      awaitingNewTextPrompt: true,
+      awaitingSendCommand: undefined,
+      textChunks: undefined,
+      chunkCount: undefined,
+      debounceUntil: undefined,
+      expiresAt: now().getTime() + pendingTtlMs,
+    };
+
+    await savePendingEntry(userKey, rejectionEntry);
+
+    try {
+      await options.messaging.sendText({
+        chatId: message.chat.id,
+        threadId: message.chat.threadId,
+        text: buildTooLongMessage(0),
+      });
+
+      logger.warn('broadcast text rejected due to multiple chunks', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+      });
+    } catch (error) {
+      logger.error('failed to send broadcast chunk length warning', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        error: toErrorDetails(error),
+      });
+
+      await handleMessagingFailure(message.user.userId, 'broadcast_chunk_length_warning', error);
+    }
+  };
+
+  const scheduleTextChunkFinalization = ({
+    userKey,
+    message,
+    context,
+  }: {
+    userKey: string;
+    message: IncomingMessage;
+    context?: TransformPayloadContext;
+  }) => {
+    const finalizePromise = (async () => {
+      await delay(TEXT_CHUNK_DEBOUNCE_MS);
+
+      const latest = await loadPendingEntry(userKey, now().getTime());
+      if (!latest || latest.stage !== 'collecting_text') {
+        return;
+      }
+
+      await finalizeCollectingTextEntry({ entry: latest, userKey, message });
+    })();
+
+    if (context?.waitUntil) {
+      context.waitUntil(finalizePromise);
+    } else {
+      void finalizePromise;
+    }
+  };
+
   const handleCommand = async (context: TelegramAdminCommandContext): Promise<Response | void> => {
     const currentTime = now().getTime();
     cleanupExpiredCache(currentTime);
@@ -829,11 +1001,12 @@ export const createTelegramBroadcastCommandHandler = (
     const rawText = message.text ?? '';
     const normalized = rawText.trim().toLowerCase();
 
-    if (normalized === '/cancel') {
+    if (isCancelCommand(normalized)) {
       logger.info('broadcast cancelled via telegram command', {
         userId: message.user.userId,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
+        command: normalized,
       });
 
       await deletePendingEntry(userKey);
@@ -864,7 +1037,257 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
+    if (entry.stage === 'collecting_text') {
+      const debounceUntil = entry.debounceUntil ?? 0;
+      if (typeof debounceUntil === 'number' && debounceUntil > 0 && debounceUntil <= currentTime) {
+        await finalizeCollectingTextEntry({ entry, userKey, message });
+
+        entry = await loadPendingEntry(userKey, now().getTime());
+        if (!entry) {
+          return 'handled';
+        }
+
+        if (entry.chatId !== message.chat.id) {
+          return 'handled';
+        }
+
+        const refreshedThreadId = entry.threadId ?? null;
+        if (refreshedThreadId !== messageThreadId) {
+          return 'handled';
+        }
+      }
+    }
+
+    if (entry.stage === 'collecting_text') {
+      if (normalized.startsWith('/')) {
+        return 'handled';
+      }
+
+      const refreshedEntry: PendingBroadcast = {
+        ...entry,
+        chunkCount: Math.max(entry.chunkCount ?? 1, 1) + 1,
+        textChunks: undefined,
+        expiresAt: now().getTime() + pendingTtlMs,
+      };
+
+      await savePendingEntry(userKey, refreshedEntry);
+
+      logger.warn('broadcast text chunk rejected due to multiple messages', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        chunkCount: refreshedEntry.chunkCount,
+      });
+
+      return 'handled';
+    }
+
+    if (entry.stage === 'awaiting_send' && entry.awaitingSendCommand === true) {
+      const audience = entry.audience;
+      if (!audience) {
+        logger.warn('broadcast awaiting send without audience', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+
+        await deletePendingEntry(userKey);
+
+        return 'handled';
+      }
+
+      if (normalized === '/send') {
+        const textChunk = entry.textChunks?.[0];
+        if (!textChunk) {
+          logger.warn('broadcast awaiting send without text chunk', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+          });
+
+          await deletePendingEntry(userKey);
+
+          return 'handled';
+        }
+
+        const filters: BroadcastAudienceFilter | undefined =
+          audience.mode === 'list' ? { chatIds: audience.chatIds } : undefined;
+
+        const requestedBy = message.user.userId;
+
+        logger.info('broadcast dispatch confirmed via telegram command', {
+          userId: requestedBy,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+
+        const payload: BroadcastSendInput = {
+          text: textChunk,
+          requestedBy,
+          filters,
+        };
+
+        const startedAt = now();
+
+        await deletePendingEntry(userKey);
+
+        const runBroadcast = async () => {
+          let result: BroadcastSendResult | undefined;
+          try {
+            result = await options.sendBroadcast(payload);
+
+            logger.info('broadcast sent via telegram command', {
+              userId: requestedBy,
+              delivered: result.delivered,
+              failed: result.failed,
+            });
+
+            try {
+              await options.messaging.sendText({
+                chatId: message.chat.id,
+                threadId: message.chat.threadId,
+                text: createBroadcastResponse(result),
+              });
+            } catch (error) {
+              logger.error('failed to send broadcast confirmation', {
+                userId: requestedBy,
+                chatId: message.chat.id,
+                threadId: message.chat.threadId ?? null,
+                error: toErrorDetails(error),
+              });
+
+              await handleMessagingFailure(requestedBy, 'broadcast_confirmation', error);
+            }
+          } catch (error) {
+            logger.error('broadcast send failed via telegram command', {
+              userId: requestedBy,
+              chatId: message.chat.id,
+              threadId: message.chat.threadId ?? null,
+              error: toErrorDetails(error),
+            });
+
+            try {
+              await options.messaging.sendText({
+                chatId: message.chat.id,
+                threadId: message.chat.threadId,
+                text: BROADCAST_FAILURE_MESSAGE,
+              });
+            } catch (sendError) {
+              logger.error('failed to send broadcast failure message', {
+                userId: requestedBy,
+                chatId: message.chat.id,
+                threadId: message.chat.threadId ?? null,
+                error: toErrorDetails(sendError),
+              });
+
+              await handleMessagingFailure(requestedBy, 'broadcast_failure_notice', sendError);
+            }
+          }
+
+          await persistBroadcastLog({
+            audience,
+            result,
+            requestedBy,
+            startedAt,
+          });
+        };
+
+        const broadcastPromise = runBroadcast();
+
+        if (context?.waitUntil) {
+          context.waitUntil(broadcastPromise);
+        } else {
+          await broadcastPromise;
+        }
+
+        return 'handled';
+      }
+
+      if (normalized === '/new_text') {
+        const updatedEntry: PendingBroadcast = {
+          ...entry,
+          stage: 'text',
+          awaitingSendCommand: undefined,
+          awaitingNewText: false,
+          awaitingNewTextPrompt: undefined,
+          awaitingTextPrompt: true,
+          textChunks: undefined,
+          chunkCount: undefined,
+          debounceUntil: undefined,
+          expiresAt: now().getTime() + pendingTtlMs,
+        };
+
+        await savePendingEntry(userKey, updatedEntry);
+
+        const promptMessage = buildBroadcastPromptMessage(audience.total, audience.notFound);
+
+        try {
+          await options.messaging.sendText({
+            chatId: message.chat.id,
+            threadId: message.chat.threadId,
+            text: promptMessage,
+          });
+
+          logger.info('broadcast awaiting text restarted before send', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+          });
+        } catch (error) {
+          logger.error('failed to send broadcast text prompt restart', {
+            userId: message.user.userId,
+            chatId: message.chat.id,
+            threadId: message.chat.threadId ?? null,
+            error: toErrorDetails(error),
+          });
+
+          await handleMessagingFailure(message.user.userId, 'broadcast_text_prompt_restart', error);
+        }
+
+        return 'handled';
+      }
+
+      logger.warn('broadcast awaiting send received invalid input', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        text: rawText,
+      });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_AWAITING_SEND_WARNING,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast awaiting send warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_awaiting_send_warning', error);
+      }
+
+      return 'handled';
+    }
+
     if (entry.awaitingNewText) {
+      const audience = entry.audience;
+      if (!audience) {
+        logger.warn('broadcast awaiting new text without audience', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+        });
+
+        await deletePendingEntry(userKey);
+
+        return 'handled';
+      }
+
       if (normalized === '/broadcast') {
         logger.info('broadcast restart requested while awaiting new text', {
           userId: message.user.userId,
@@ -886,18 +1309,27 @@ export const createTelegramBroadcastCommandHandler = (
       if (normalized === '/new_text') {
         const resumedEntry: PendingBroadcast = {
           ...refreshedEntry,
+          stage: 'text',
           awaitingNewText: false,
+          awaitingNewTextPrompt: undefined,
+          awaitingTextPrompt: true,
+          awaitingSendCommand: undefined,
+          textChunks: undefined,
+          chunkCount: undefined,
+          debounceUntil: undefined,
           lastRejectedLength: undefined,
           lastExceededBy: undefined,
         };
 
         await savePendingEntry(userKey, resumedEntry);
 
+        const promptMessage = buildBroadcastPromptMessage(audience.total, audience.notFound);
+
         try {
           await options.messaging.sendText({
             chatId: message.chat.id,
             threadId: message.chat.threadId,
-            text: buildNewTextPrompt(maxTextLength),
+            text: promptMessage,
           });
 
           logger.info('broadcast awaiting new text after rejection', {
@@ -1136,95 +1568,32 @@ export const createTelegramBroadcastCommandHandler = (
       return 'handled';
     }
 
-    const filters: BroadcastAudienceFilter | undefined =
-      audience.mode === 'list' ? { chatIds: audience.chatIds } : undefined;
+    const collectingEntry: PendingBroadcast = {
+      ...entry,
+      stage: 'collecting_text',
+      awaitingSendCommand: undefined,
+      awaitingNewText: false,
+      awaitingNewTextPrompt: undefined,
+      textChunks: [text],
+      chunkCount: 1,
+      debounceUntil: now().getTime() + TEXT_CHUNK_DEBOUNCE_MS,
+      expiresAt: now().getTime() + pendingTtlMs,
+      lastRejectedLength: undefined,
+      lastExceededBy: undefined,
+    };
 
-    const requestedBy = message.user.userId;
+    await savePendingEntry(userKey, collectingEntry);
 
-    logger.info('broadcast dispatch scheduled via telegram command', {
-      userId: requestedBy,
+    logger.info('broadcast text chunk collected', {
+      userId: message.user.userId,
       chatId: message.chat.id,
       threadId: message.chat.threadId ?? null,
+      usedSendCommand,
+      rawLength,
+      visibleLength,
     });
 
-    const payload: BroadcastSendInput = {
-      text,
-      requestedBy,
-      filters,
-    };
-
-    const startedAt = now();
-
-    await deletePendingEntry(userKey);
-
-    const runBroadcast = async () => {
-      let result: BroadcastSendResult | undefined;
-      try {
-        result = await options.sendBroadcast(payload);
-
-        logger.info('broadcast sent via telegram command', {
-          userId: requestedBy,
-          delivered: result.delivered,
-          failed: result.failed,
-        });
-
-        try {
-          await options.messaging.sendText({
-            chatId: message.chat.id,
-            threadId: message.chat.threadId,
-            text: createBroadcastResponse(result),
-          });
-        } catch (error) {
-          logger.error('failed to send broadcast confirmation', {
-            userId: requestedBy,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-            error: toErrorDetails(error),
-          });
-
-          await handleMessagingFailure(requestedBy, 'broadcast_confirmation', error);
-        }
-      } catch (error) {
-        logger.error('broadcast send failed via telegram command', {
-          userId: requestedBy,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-          error: toErrorDetails(error),
-        });
-
-        try {
-          await options.messaging.sendText({
-            chatId: message.chat.id,
-            threadId: message.chat.threadId,
-            text: BROADCAST_FAILURE_MESSAGE,
-          });
-        } catch (sendError) {
-          logger.error('failed to send broadcast failure message', {
-            userId: requestedBy,
-            chatId: message.chat.id,
-            threadId: message.chat.threadId ?? null,
-            error: toErrorDetails(sendError),
-          });
-
-          await handleMessagingFailure(requestedBy, 'broadcast_failure_notice', sendError);
-        }
-      }
-
-      await persistBroadcastLog({
-        audience,
-        result,
-        requestedBy,
-        startedAt,
-      });
-    };
-
-    const broadcastPromise = runBroadcast();
-
-    if (context?.waitUntil) {
-      context.waitUntil(broadcastPromise);
-    } else {
-      await broadcastPromise;
-    }
+    scheduleTextChunkFinalization({ userKey, message, context });
 
     return 'handled';
   };
