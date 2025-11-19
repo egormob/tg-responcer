@@ -56,8 +56,99 @@ const createIncomingMessage = (text: string): IncomingMessage => ({
   receivedAt: new Date('2024-01-01T00:01:00Z'),
 });
 
+const expectCommandPrompt = (
+  text: string,
+  commands: Array<{ command: string; description: string }>,
+  options: { header?: string; suffix?: string } = {},
+) => {
+  const lines = text.split('\n');
+  let index = 0;
+
+  if (options.header) {
+    expect(lines[index]).toBe(options.header);
+    index += 1;
+  }
+
+  commands.forEach(({ command, description }) => {
+    const expectedLine = `- ${command} — ${description}`;
+    const line = lines[index];
+    expect(line).toBe(expectedLine);
+    expect(line.startsWith('- /') || line.startsWith('/')).toBe(true);
+    index += 1;
+  });
+
+  if (options.suffix) {
+    expect(lines.slice(index).join('\n')).toBe(options.suffix);
+  } else {
+    expect(index).toBe(lines.length);
+  }
+};
+
+type AwaitingAudience = Parameters<typeof buildAwaitingSendPromptMessage>[0];
+
+const createAudience = (overrides: Partial<AwaitingAudience> = {}): AwaitingAudience => ({
+  mode: 'all',
+  total: 1,
+  notFound: [],
+  ...overrides,
+});
+
 const buildExpectedTooLongMessage = (_overflow: number) =>
-  'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
+  [
+    'Текст не укладывается в лимит Telegram. Выберите:',
+    '- /new_text — чтобы отправить другой текст',
+    '- /cancel_broadcast — для отмены',
+  ].join('\n');
+
+describe('broadcast command prompts', () => {
+  it('formats audience prompt with per-command lines', () => {
+    expectCommandPrompt(BROADCAST_AUDIENCE_PROMPT, [
+      { command: '/everybody', description: 'чтобы выбрать всех получателей' },
+    ], {
+      header:
+        'Шаг 1. Выберите получателей или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.',
+    });
+  });
+
+  it('formats broadcast prompt without missing recipients', () => {
+    expectCommandPrompt(buildBroadcastPromptMessage(3), [
+      { command: '/cancel_broadcast', description: 'для отмены' },
+    ], {
+      header: 'Шаг 2. Пришлите текст для 3 получателей.',
+    });
+  });
+
+  it('formats broadcast prompt with missing recipients suffix', () => {
+    const text = buildBroadcastPromptMessage(2, ['missing-one']);
+    expectCommandPrompt(text, [{ command: '/cancel_broadcast', description: 'для отмены' }], {
+      header: 'Шаг 2. Пришлите текст для 2 получателей.',
+      suffix: 'Не нашли: missing-one',
+    });
+  });
+
+  it('formats awaiting send prompt with commands', () => {
+    const audience = createAudience({ total: 5 });
+    expectCommandPrompt(buildAwaitingSendPromptMessage(audience), [
+      { command: '/send', description: 'чтобы отправить' },
+      { command: '/new_text', description: 'чтобы изменить текст' },
+      { command: '/cancel_broadcast', description: 'для отмены' },
+    ], {
+      header: 'Текст принят. Получателей 5. Выберите:',
+    });
+  });
+
+  it('formats awaiting send prompt with missing recipients suffix', () => {
+    const audience = createAudience({ total: 3, notFound: ['ghost'] });
+    expectCommandPrompt(buildAwaitingSendPromptMessage(audience), [
+      { command: '/send', description: 'чтобы отправить' },
+      { command: '/new_text', description: 'чтобы изменить текст' },
+      { command: '/cancel_broadcast', description: 'для отмены' },
+    ], {
+      header: 'Текст принят. Получателей 3. Выберите:',
+      suffix: 'Не нашли: ghost',
+    });
+  });
+});
 
 const createDeferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -474,6 +565,14 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: buildExpectedTooLongMessage(0),
     });
+
+    const rejectionPrompt = sendTextMock.mock.calls.at(-1)?.[0]?.text ?? '';
+    expectCommandPrompt(rejectionPrompt, [
+      { command: '/new_text', description: 'чтобы отправить другой текст' },
+      { command: '/cancel_broadcast', description: 'для отмены' },
+    ], {
+      header: 'Текст не укладывается в лимит Telegram. Выберите:',
+    });
   });
 
   it('blocks further messages after length rejection until /new_text is received', async () => {
@@ -502,6 +601,14 @@ describe('createTelegramBroadcastCommandHandler', () => {
       chatId: 'chat-1',
       threadId: 'thread-1',
       text: buildExpectedTooLongMessage(1),
+    });
+
+    const overflowPrompt = sendTextMock.mock.calls.at(-1)?.[0]?.text ?? '';
+    expectCommandPrompt(overflowPrompt, [
+      { command: '/new_text', description: 'чтобы отправить другой текст' },
+      { command: '/cancel_broadcast', description: 'для отмены' },
+    ], {
+      header: 'Текст не укладывается в лимит Telegram. Выберите:',
     });
 
     await handler.handleMessage(createIncomingMessage('ok'));
@@ -701,7 +808,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.',
+      text: 'Текст рассылки не может быть пустым. Запустите команду заново:\n- /broadcast — чтобы начать заново',
+    });
+
+    const emptyPrompt = sendTextMock.mock.calls.at(-1)?.[0]?.text ?? '';
+    expectCommandPrompt(emptyPrompt, [{ command: '/broadcast', description: 'чтобы начать заново' }], {
+      header: 'Текст рассылки не может быть пустым. Запустите команду заново:',
     });
   });
 
@@ -1299,7 +1411,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Мгновенная рассылка доступна только через команду /broadcast без аргументов.',
+      text: 'Мгновенная рассылка доступна только через эту команду:\n- /broadcast — без аргументов',
     });
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
@@ -1314,7 +1426,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: 'Мгновенная рассылка доступна только через команду /broadcast без аргументов.',
+      text: 'Мгновенная рассылка доступна только через эту команду:\n- /broadcast — без аргументов',
+    });
+    const unsupportedPrompt = sendTextMock.mock.calls.at(-1)?.[0]?.text ?? '';
+    expectCommandPrompt(unsupportedPrompt, [{ command: '/broadcast', description: 'без аргументов' }], {
+      header: 'Мгновенная рассылка доступна только через эту команду:',
     });
     await expect(baseAliasResponse?.json()).resolves.toEqual({ status: 'unsupported_broadcast_subcommand' });
   });
@@ -1332,7 +1448,11 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(2, {
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.',
+      text: '❌ Рассылка отменена. Чтобы отправить новое сообщение, выполните команду:\n- /broadcast — чтобы начать заново',
+    });
+    const cancelPrompt = sendTextMock.mock.calls.at(-1)?.[0]?.text ?? '';
+    expectCommandPrompt(cancelPrompt, [{ command: '/broadcast', description: 'чтобы начать заново' }], {
+      header: '❌ Рассылка отменена. Чтобы отправить новое сообщение, выполните команду:',
     });
     expect(sendAdminHelp).toHaveBeenCalledWith({
       chatId: 'chat-1',
