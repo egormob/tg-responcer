@@ -62,6 +62,9 @@ export const buildAwaitingSendPromptMessage = (audience: BroadcastAudience): str
   return `${base}\nНе нашли: ${audience.notFound.join(', ')}`;
 };
 
+const BROADCAST_AWAITING_SEND_WARNING =
+  'Сейчас доступны только команды /send, /new_text или /cancel_broadcast.';
+
 const BROADCAST_EMPTY_MESSAGE =
   'Текст рассылки не может быть пустым. Запустите /broadcast заново и введите сообщение.';
 
@@ -188,19 +191,6 @@ const parseList = (value: string): string[] =>
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 
-const isValidAudienceToken = (token: string): boolean => {
-  const trimmed = token.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-
-  if (/^-?\d+$/.test(trimmed)) {
-    return true;
-  }
-
-  return /^@?[a-z0-9_-]+$/i.test(trimmed);
-};
-
 const extractBroadcastText = (value: string): { text: string; usedSendCommand: boolean } => {
   const trimmed = value.trim();
   const normalized = trimmed.toLowerCase();
@@ -246,46 +236,6 @@ export const createTelegramBroadcastCommandHandler = (
       adminAccess: options.adminAccess,
       adminErrorRecorder: options.adminErrorRecorder,
     });
-  const buildStageMismatchMessage = (prompt: string) =>
-    `Эти данные не соответствуют выполняемой команде:\n${prompt}`;
-
-  const sendStageMismatchNotice = async ({
-    message,
-    expectedPrompt,
-    offendingText,
-    reason,
-  }: {
-    message: IncomingMessage;
-    expectedPrompt: string;
-    offendingText?: string;
-    reason: string;
-  }) => {
-    logger.warn('broadcast stage mismatch notice', {
-      userId: message.user.userId,
-      chatId: message.chat.id,
-      threadId: message.chat.threadId ?? null,
-      reason,
-      offendingText: offendingText ?? null,
-    });
-
-    try {
-      await options.messaging.sendText({
-        chatId: message.chat.id,
-        threadId: message.chat.threadId,
-        text: buildStageMismatchMessage(expectedPrompt),
-      });
-    } catch (error) {
-      logger.error('failed to send broadcast stage mismatch notice', {
-        userId: message.user.userId,
-        chatId: message.chat.id,
-        threadId: message.chat.threadId ?? null,
-        reason,
-        error: toErrorDetails(error),
-      });
-
-      await handleMessagingFailure(message.user.userId, 'broadcast_stage_mismatch_notice', error);
-    }
-  };
 
   const maintenanceState: { lastRunAt: number; promise?: Promise<void> } = { lastRunAt: 0 };
 
@@ -675,41 +625,37 @@ export const createTelegramBroadcastCommandHandler = (
     const wantsEveryone =
       normalizedTokens.length === 1 && normalizedTokens[0].toLowerCase() === '/everybody';
 
-    const refreshEntry = async () => {
+    if (!wantsEveryone && normalizedTokens.length === 0) {
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
       };
 
       await savePendingEntry(userKey, refreshedEntry);
-    };
 
-    if (!wantsEveryone && normalizedTokens.length === 0) {
-      await refreshEntry();
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_AUDIENCE_PROMPT,
+        });
 
-      await sendStageMismatchNotice({
-        message,
-        expectedPrompt: BROADCAST_AUDIENCE_PROMPT,
-        offendingText: message.text ?? undefined,
-        reason: 'empty_audience_selection',
-      });
+        logger.info('broadcast awaiting audience selection', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          reason: 'empty_audience_selection',
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast prompt', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
 
-      return 'handled';
-    }
-
-    const invalidToken = !wantsEveryone
-      ? tokens.find((token) => token.trim().length > 0 && !isValidAudienceToken(token))
-      : undefined;
-
-    if (invalidToken) {
-      await refreshEntry();
-
-      await sendStageMismatchNotice({
-        message,
-        expectedPrompt: BROADCAST_AUDIENCE_PROMPT,
-        offendingText: message.text ?? undefined,
-        reason: 'invalid_audience_selection',
-      });
+        await handleMessagingFailure(message.user.userId, 'broadcast_prompt', error);
+      }
 
       return 'handled';
     }
@@ -1152,53 +1098,7 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     if (entry.stage === 'collecting_text') {
-      const audience = entry.audience;
-      if (!audience) {
-        logger.warn('broadcast collecting text without audience', {
-          userId: message.user.userId,
-          chatId: message.chat.id,
-          threadId: message.chat.threadId ?? null,
-        });
-
-        await deletePendingEntry(userKey);
-
-        return 'handled';
-      }
-
-      const expectedPrompt = buildAwaitingSendPromptMessage(audience);
-      const refreshEntry = async (updates?: Partial<PendingBroadcast>) => {
-        const refreshedEntry: PendingBroadcast = {
-          ...entry,
-          ...updates,
-          expiresAt: now().getTime() + pendingTtlMs,
-        };
-
-        await savePendingEntry(userKey, refreshedEntry);
-      };
-
-      if (rawText.trim().length === 0) {
-        await refreshEntry();
-
-        await sendStageMismatchNotice({
-          message,
-          expectedPrompt,
-          offendingText: message.text ?? undefined,
-          reason: 'collecting_text_media',
-        });
-
-        return 'handled';
-      }
-
       if (normalized.startsWith('/')) {
-        await refreshEntry();
-
-        await sendStageMismatchNotice({
-          message,
-          expectedPrompt,
-          offendingText: rawText,
-          reason: 'collecting_text_command',
-        });
-
         return 'handled';
       }
 
@@ -1216,13 +1116,6 @@ export const createTelegramBroadcastCommandHandler = (
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
         chunkCount: refreshedEntry.chunkCount,
-      });
-
-      await sendStageMismatchNotice({
-        message,
-        expectedPrompt,
-        offendingText: rawText,
-        reason: 'collecting_text_additional_text',
       });
 
       return 'handled';
@@ -1393,19 +1286,29 @@ export const createTelegramBroadcastCommandHandler = (
         return 'handled';
       }
 
-      const refreshedEntry: PendingBroadcast = {
-        ...entry,
-        expiresAt: now().getTime() + pendingTtlMs,
-      };
-
-      await savePendingEntry(userKey, refreshedEntry);
-
-      await sendStageMismatchNotice({
-        message,
-        expectedPrompt: buildAwaitingSendPromptMessage(audience),
-        offendingText: rawText,
-        reason: 'awaiting_send_invalid_input',
+      logger.warn('broadcast awaiting send received invalid input', {
+        userId: message.user.userId,
+        chatId: message.chat.id,
+        threadId: message.chat.threadId ?? null,
+        text: rawText,
       });
+
+      try {
+        await options.messaging.sendText({
+          chatId: message.chat.id,
+          threadId: message.chat.threadId,
+          text: BROADCAST_AWAITING_SEND_WARNING,
+        });
+      } catch (error) {
+        logger.error('failed to send broadcast awaiting send warning', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          error: toErrorDetails(error),
+        });
+
+        await handleMessagingFailure(message.user.userId, 'broadcast_awaiting_send_warning', error);
+      }
 
       return 'handled';
     }
