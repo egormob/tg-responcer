@@ -48,8 +48,8 @@ export const buildBroadcastPromptMessage = (count: number, notFound: readonly st
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
-const buildTooLongMessage = (exceededBy: number) =>
-  `Текст рассылки не укладывается в лимит на ${exceededBy} символов. /new_text чтобы отправить снова или /cancel для отмены`;
+const buildTooLongMessage = (overflow: number) =>
+  `Текст рассылки не укладывается в лимит на ${overflow} символов. /new_text чтобы отправить снова или /cancel для отмены`;
 
 const buildNewTextPrompt = (limit: number) => `Пришлите текст длиной до ${limit} символов.`;
 
@@ -919,7 +919,7 @@ export const createTelegramBroadcastCommandHandler = (
         return 'handled';
       }
 
-      const exceededBy = Math.max(
+      const overflow = Math.max(
         1,
         entry.lastExceededBy ??
           (typeof entry.lastRejectedLength === 'number'
@@ -933,14 +933,14 @@ export const createTelegramBroadcastCommandHandler = (
         userId: message.user.userId,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
-        exceededBy,
+        exceededBy: overflow,
       });
 
       try {
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: buildTooLongMessage(exceededBy),
+          text: buildTooLongMessage(overflow),
         });
       } catch (error) {
         logger.error('failed to send broadcast length warning', {
@@ -1075,13 +1075,13 @@ export const createTelegramBroadcastCommandHandler = (
     }
 
     if (effectiveLength > maxTextLength) {
-      const exceededBy = effectiveLength - maxTextLength;
+      const overflow = effectiveLength - maxTextLength;
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
         awaitingNewText: true,
         lastRejectedLength: effectiveLength,
-        lastExceededBy: exceededBy,
+        lastExceededBy: overflow,
       };
 
       await savePendingEntry(userKey, refreshedEntry);
@@ -1099,14 +1099,14 @@ export const createTelegramBroadcastCommandHandler = (
         userId: message.user.userId,
         chatId: message.chat.id,
         threadId: message.chat.threadId ?? null,
-        exceededBy,
+        exceededBy: overflow,
       });
 
       try {
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: buildTooLongMessage(exceededBy),
+          text: buildTooLongMessage(overflow),
         });
       } catch (error) {
         logger.error('failed to send broadcast length warning', {
