@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BroadcastAbortedError,
   createImmediateBroadcastSender,
+  createRegistryBroadcastSender,
   type BroadcastRecipient,
 } from '../minimal-broadcast-service';
 
@@ -136,6 +137,73 @@ describe('createImmediateBroadcastSender', () => {
       requestedBy: 'ops',
       filters: { languageCodes: ['ru'] },
     });
+
+    expect(sendText).toHaveBeenCalledTimes(recipients.length);
+    expect(result.delivered).toBe(recipients.length);
+    expect(result.failed).toBe(0);
+  });
+
+  it('rejects text exceeding max length before sending', async () => {
+    const recipients = createRecipients(2);
+    const sendText = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger,
+    });
+
+    await expect(
+      sendBroadcast({ text: 'a'.repeat(3980), requestedBy: 'ops' }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'broadcast text exceeds limit',
+      expect.objectContaining({ length: 3980, limit: 3970 }),
+    );
+  });
+});
+
+describe('createRegistryBroadcastSender', () => {
+  it('rejects text exceeding max length before sending', async () => {
+    const recipients = createRecipients(2);
+    const sendText = vi.fn();
+    const registry = { listActiveRecipients: vi.fn().mockResolvedValue(recipients) };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const sendBroadcast = createRegistryBroadcastSender({
+      messaging: { sendText },
+      registry,
+      logger,
+    });
+
+    await expect(
+      sendBroadcast({ text: 'b'.repeat(5000), requestedBy: 'ops' }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    expect(registry.listActiveRecipients).toHaveBeenCalledTimes(1);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'broadcast text exceeds limit',
+      expect.objectContaining({ length: 5000 }),
+    );
+  });
+
+  it('delivers broadcast when text is within limit', async () => {
+    const recipients = createRecipients(3);
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'ok' });
+    const registry = { listActiveRecipients: vi.fn().mockResolvedValue(recipients) };
+
+    const sendBroadcast = createRegistryBroadcastSender({
+      messaging: { sendText },
+      registry,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      maxTextLength: 5000,
+    });
+
+    const result = await sendBroadcast({ text: 'a'.repeat(4000), requestedBy: 'ops' });
 
     expect(sendText).toHaveBeenCalledTimes(recipients.length);
     expect(result.delivered).toBe(recipients.length);

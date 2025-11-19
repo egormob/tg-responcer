@@ -1,4 +1,5 @@
 import type { MessagingPort } from '../../ports';
+import { getRawTextLength, getVisibleTextLength } from '../../shared';
 import type { BroadcastAudienceFilter } from './broadcast-payload';
 import type { BroadcastTelemetry } from './broadcast-telemetry';
 
@@ -103,6 +104,7 @@ export interface CreateImmediateBroadcastSenderOptions {
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
+  maxTextLength?: number;
 }
 
 export interface BroadcastRecipientsRegistry {
@@ -117,6 +119,7 @@ export interface CreateRegistryBroadcastSenderOptions {
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
+  maxTextLength?: number;
 }
 
 const DEFAULT_POOL_OPTIONS: Required<Omit<BroadcastPoolOptions, 'wait' | 'random'>> = {
@@ -125,6 +128,8 @@ const DEFAULT_POOL_OPTIONS: Required<Omit<BroadcastPoolOptions, 'wait' | 'random
   baseDelayMs: 1000,
   jitterRatio: 0.2,
 };
+
+const DEFAULT_BROADCAST_MAX_TEXT_LENGTH = 3970;
 
 const createWait = (wait?: (ms: number) => Promise<void>) =>
   wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -292,6 +297,7 @@ interface CreateBroadcastSenderOptions {
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
+  maxTextLength?: number;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
@@ -305,6 +311,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
   const deliveryMessaging = options.messagingBroadcast ?? options.messaging;
+  const maxTextLength = options.maxTextLength ?? DEFAULT_BROADCAST_MAX_TEXT_LENGTH;
 
   const normalizeResolveResult = (
     result: Awaited<ReturnType<ResolveRecipients>>,
@@ -358,6 +365,25 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         sample: recipientsSample,
         throttled429: 0,
       } satisfies BroadcastSendResult;
+    }
+
+    const rawLength = getRawTextLength(text);
+    const visibleLength = getVisibleTextLength(text);
+    const effectiveLength = Math.max(rawLength, visibleLength);
+
+    if (effectiveLength > maxTextLength) {
+      const exceededBy = effectiveLength - maxTextLength;
+      const context = {
+        requestedBy,
+        rawLength,
+        visibleLength,
+        length: effectiveLength,
+        limit: maxTextLength,
+        exceededBy,
+      } satisfies Record<string, unknown>;
+
+      options.logger?.warn?.('broadcast text exceeds limit', context);
+      throw new BroadcastAbortedError('telegram_limit_exceeded', context);
     }
 
     options.logger?.info?.('broadcast pool initialized', {
@@ -648,6 +674,7 @@ export const createImmediateBroadcastSender = (
     pool: options.pool,
     telemetry: options.telemetry,
     emergencyStop: options.emergencyStop,
+    maxTextLength: options.maxTextLength,
   });
 
 export const createRegistryBroadcastSender = (
@@ -701,5 +728,6 @@ export const createRegistryBroadcastSender = (
     pool: options.pool,
     telemetry: options.telemetry,
     emergencyStop: options.emergencyStop,
+    maxTextLength: options.maxTextLength,
   });
 };
