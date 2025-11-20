@@ -25,6 +25,26 @@
 
 После каждого шага обновлять этот список и соответствующие памятки. Проверки («ПРОВЕРКА x.y») — обязательные стоп-пойнты перед переходом к следующему шагу.
 
+## Полная дорожная карта (A–E)
+Отражает перенесённые элементы и их связь с текущей нумерацией (М8–М10), чтобы задачи не терялись при последующих обновлениях.
+
+### Майлстоун A — Диагностика и стресс-тесты (привязка к М9)
+- [x] Encode system conversation turns as `input_text` в OpenAI-адаптере — выполнено и учтено в тестах; контрольный статус закреплён за блоком наблюдаемости М9. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#a1-encode-input_text](memory-bank/tasks/roadmap-a-e-artifacts.md#a1-encode-input_text).
+- [x] AI Queue stress-тесты с `STRESS_TEST_ENABLED` / `STRESS_TEST_MAX_RETRIES_EXCEEDED` и политикой ретраев Variant C — выполнено, результаты и кодпоинты диаг/ретраев синхронизированы со шагами М9.Ш4–М9.Ш5. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#a2-ai-queue-stress](memory-bank/tasks/roadmap-a-e-artifacts.md#a2-ai-queue-stress).
+
+### Майлстоун B — UTM и экспорт (привязка к М8)
+- [x] Гарантированная async UTM-регистрация и UTM-алерты — боевой тест подтверждён, запись UTM при регистрации пользователя работает; статус закреплён за М8 как основа для последующих шагов. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#b1-utm-async](memory-bank/tasks/roadmap-a-e-artifacts.md#b1-utm-async).
+- [x] Экспорт CSV с пагинацией и UTM — боевой тест подтверждён, экспорт работает; контрольный статус связан с М8 и тестами экспорта. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#b2-export](memory-bank/tasks/roadmap-a-e-artifacts.md#b2-export).
+
+### Майлстоун C — UX-фиксы рассылки (привязка к М8)
+- [ ] Незавершённые UX-фиксы `/broadcast` (например, устранение двойного предупреждения о лимите текста) остаются в работе как М8.Ш4 и требуют закрытия перед сменой майлстоуна. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#c1-ux](memory-bank/tasks/roadmap-a-e-artifacts.md#c1-ux).
+
+### Майлстоун D — Observability & On-call (привязка к М9)
+- [x] Observability & On-call проверки (soft self-test 200, разделение retriable/non-retriable, разграничение user/admin) проведены и закреплены за М9; использование самотеста и тревог отражено в памятках. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#d1-observability](memory-bank/tasks/roadmap-a-e-artifacts.md#d1-observability).
+
+### Майлстоун E — Comms & models evaluation (привязка к М10)
+- [ ] Блок коммуникаций и оценки моделей (Comms & models evaluation) остаётся в backlog М10; требуется дополнить критериями и тестами перед стартом майлстоуна. Артефакты: [memory-bank/tasks/roadmap-a-e-artifacts.md#e1-comms](memory-bank/tasks/roadmap-a-e-artifacts.md#e1-comms).
+
 - **Релиз 1. Диалоговый контур.** Пользовательский диалог с Responses (5 экземпляров GPT в промпте), поддержка системного промпта, файлов и инструментов Responses, хранение памяти диалога в D1 и восстановление контекста при каждом запросе.
   - Функциональный охват: майлстоуны 3–5 + проверка `/admin/envz`, активация Responses и валидация KV/лимитов.
   - Блокеры: повторяющийся сброс переменных `OPENAI_MODEL`/`OPENAI_PROMPT_VARIABLES` и биндинга `RATE_LIMIT_KV` при деплое из Cloudflare Dashboard (см. `memory-bank/issues/cloudflare-env-reset.md`). Для релиза необходимо автоматизировать применение конфигурации и исключить ручные деплои, иначе воркер теряет настройки после каждой публикации.
