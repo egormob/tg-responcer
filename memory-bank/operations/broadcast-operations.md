@@ -75,6 +75,7 @@ Tail [`diag-2025-11-30-broadcast-webhook.md`](../logs/diag-2025-11-30-broadcast-
 - Историю запусков (включая `delivered`, `failed`, `throttled429`, `durationMs`, `requestedBy`, статус `ok/aborted`) можно получить по
   `GET /admin/diag?q=broadcast` с валидным `ADMIN_TOKEN` — эндпоинт возвращает последние N запусков и помогает сверить tail без
   доступа к логам.
+- Метрики рассылок персистятся в KV `BROADCAST_TELEMETRY_KV` ключами `broadcast:telemetry:<env>:<workerId>` (env берётся из `ENVIRONMENT_VERSION`/`CONFIG_VERSION`/`WORKER_VERSION`, workerId генерируется на старте воркера). TTL записей — 7 суток. Эндпоинт `/admin/diag?q=broadcast` объединяет данные из KV и локального in-memory кэша, поэтому после рестарта или при балансировке между воркерами видно последние запуски всех воркеров в окружении.
 - Аварийная остановка срабатывает, если Telegram требует `retry_after ≥5 с` (порог вычисляется исходя из `BROADCAST_MAX_RPS`) или
   общий `sendText` падает с фатальной ошибкой (`401`, `5xx`, сетевой сбой). В этом случае пул логирует `broadcast pool aborted`,
   оставшиеся получатели получают статус `BroadcastAborted`, а администратор — уведомление «❌ Рассылка отменена».

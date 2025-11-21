@@ -12,7 +12,7 @@ export const createBroadcastDiagRoute = (
     return json({ error: 'Method Not Allowed' }, { status: 405 });
   }
 
-  const snapshot = options.telemetry?.snapshot();
+  const snapshot = options.telemetry ? await options.telemetry.snapshot() : undefined;
   if (!snapshot) {
     return json({ status: 'disabled', feature: 'broadcast_metrics' });
   }
