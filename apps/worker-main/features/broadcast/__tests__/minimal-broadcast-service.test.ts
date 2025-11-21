@@ -4,11 +4,57 @@ import {
   BroadcastAbortedError,
   createImmediateBroadcastSender,
   createRegistryBroadcastSender,
+  loadBroadcastCheckpoint,
   type BroadcastRecipient,
 } from '../minimal-broadcast-service';
 
 const createRecipients = (count: number): BroadcastRecipient[] =>
   Array.from({ length: count }, (_, index) => ({ chatId: `chat-${index}` }));
+
+class MemoryKv implements KVNamespace {
+  constructor(private readonly now: () => number = () => Date.now()) {}
+
+  readonly store = new Map<string, { value: string; expiration?: number }>();
+
+  async get(key: string, type: 'text'): Promise<string | null> {
+    const entry = this.store.get(key);
+    if (!entry) {
+      return null;
+    }
+
+    if (entry.expiration && entry.expiration * 1000 <= this.now()) {
+      this.store.delete(key);
+      return null;
+    }
+
+    return entry.value;
+  }
+
+  async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
+    const expiration = options?.expirationTtl
+      ? Math.floor(this.now() / 1000) + options.expirationTtl
+      : undefined;
+    this.store.set(key, { value, expiration });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+
+  async list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<{
+    keys: Array<{ name: string; expiration?: number }>;
+    list_complete: boolean;
+    cursor: string;
+  }> {
+    const filteredKeys = Array.from(this.store.entries())
+      .filter(([name]) => (options?.prefix ? name.startsWith(options.prefix) : true))
+      .map(([name, entry]) => ({ name, expiration: entry.expiration }));
+
+    const limited = typeof options?.limit === 'number' ? filteredKeys.slice(0, options.limit) : filteredKeys;
+
+    return { keys: limited, list_complete: true, cursor: '' };
+  }
+}
 
 describe('createImmediateBroadcastSender', () => {
   it('throttles large batches, retries 429 responses, and records telemetry', async () => {
@@ -280,5 +326,106 @@ describe('createRegistryBroadcastSender', () => {
     expect(sendText).toHaveBeenCalledTimes(recipients.length);
     expect(result.delivered).toBe(recipients.length);
     expect(result.failed).toBe(0);
+  });
+
+  it('pauses on long retry_after and resumes without duplicates', async () => {
+    const recipients = createRecipients(3);
+    const timeline = { now: 0 };
+    const kv = new MemoryKv(() => timeline.now);
+    let resumed = false;
+
+    const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
+      if (chatId === 'chat-1' && !resumed) {
+        const error = new Error('Too Many Requests');
+        (error as Error & { status?: number; retryAfterMs?: number }).status = 429;
+        (error as Error & { status?: number; retryAfterMs?: number }).retryAfterMs = 5000;
+        throw error;
+      }
+
+      return { messageId: `${chatId}-${resumed ? 'resume' : 'initial'}` };
+    });
+
+    const wait = vi.fn(async (ms: number) => {
+      timeline.now += ms;
+    });
+
+    const sender = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      pool: {
+        concurrency: 1,
+        baseDelayMs: 1,
+        jitterRatio: 0,
+        wait,
+        random: () => 0,
+        rateJitterRatio: 0,
+        maxAttempts: 2,
+        maxRps: 28,
+      },
+      emergencyStop: { retryAfterMs: 4000 },
+      progressKv: kv,
+      progressTtlSeconds: 300,
+      jobIdGenerator: () => 'job-resume',
+    });
+
+    await expect(
+      sender({ text: 'hello', requestedBy: 'ops' }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    const checkpoint = await loadBroadcastCheckpoint(kv, 'job-resume');
+    expect(checkpoint).toMatchObject({
+      status: 'paused',
+      delivered: 1,
+      offset: 1,
+      ttlSeconds: 300,
+    });
+
+    resumed = true;
+    const result = await sender({ text: 'hello', requestedBy: 'ops', resumeFrom: checkpoint });
+
+    expect(result.delivered).toBe(recipients.length);
+    expect(sendText.mock.calls.filter(([payload]) => payload.chatId === 'chat-0').length).toBe(1);
+    expect(sendText.mock.calls.filter(([payload]) => payload.chatId === 'chat-1').length).toBe(2);
+    expect(await loadBroadcastCheckpoint(kv, 'job-resume')).toBeUndefined();
+  });
+
+  it('sends admin notification and leaves diagnostic checkpoint on fatal stop', async () => {
+    const kv = new MemoryKv();
+    const sendText = vi.fn(async () => {
+      const error = new Error('Unauthorized');
+      (error as Error & { status?: number }).status = 401;
+      throw error;
+    });
+
+    const onAdminNotification = vi.fn();
+    const sender = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients: createRecipients(2),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      emergencyStop: { retryAfterMs: 1000 },
+      progressKv: kv,
+      progressTtlSeconds: 180,
+      jobIdGenerator: () => 'job-fatal',
+      onAdminNotification,
+    });
+
+    await expect(
+      sender({ text: 'oops', requestedBy: 'ops', adminChat: { chatId: 'admin-chat' } }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    expect(onAdminNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: 'job-fatal',
+        status: 'aborted',
+        reason: 'send_text_failed',
+        checkpoint: expect.objectContaining({ reason: 'send_text_failed', ttlSeconds: 180 }),
+      }),
+    );
+
+    const checkpoint = await loadBroadcastCheckpoint(kv, 'job-fatal');
+    expect(checkpoint?.reason).toBe('send_text_failed');
+    expect(checkpoint?.ttlSeconds).toBe(180);
+    expect(checkpoint?.expiresAt).toBeDefined();
   });
 });

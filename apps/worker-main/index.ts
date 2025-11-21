@@ -749,7 +749,11 @@ const createAdminRoutes = (
   });
   const aiQueueDiagRoute = createAiQueueDiagRoute({ ai: composition.ports.ai });
   const exportRateDiagRoute = createExportRateDiagRoute({ telemetry: exportRateTelemetry });
-  const broadcastDiagRoute = createBroadcastDiagRoute({ telemetry: broadcastTelemetry });
+  const broadcastDiagRoute = createBroadcastDiagRoute({
+    telemetry: broadcastTelemetry,
+    progressKv: env.BROADCAST_PENDING_KV,
+    now: () => Date.now(),
+  });
 
   const routes: RouterOptions['admin'] = {
     token: adminToken,
@@ -888,14 +892,35 @@ const createTransformPayload = (
         telemetry: broadcastTelemetry,
         emergencyStop,
         progressKv: env.BROADCAST_PENDING_KV,
-        onAdminNotification: async ({ adminChat, jobId, status, reason }) => {
+        progressTtlSeconds: 24 * 60 * 60,
+        onAdminNotification: async ({ adminChat, jobId, status, reason, checkpoint }) => {
           if (!adminChat) {
             return;
           }
 
           const statusLabel = status === 'paused' ? '⏸ Пауза' : '❌ Прервано';
-          const reasonLabel = reason.replaceAll('_', ' ');
-          const message = `${statusLabel}: jobId=${jobId}\nПричина: ${reasonLabel}\nКоманды: /broadcast_resume ${jobId} или /cancel_broadcast`;
+          const stopReason = checkpoint?.reason ?? reason;
+          const reasonLabel = stopReason.replaceAll('_', ' ');
+          const remaining = checkpoint ? Math.max(0, checkpoint.total - checkpoint.offset) : null;
+          const ttlSeconds = checkpoint?.expiresAt
+            ? Math.max(0, Math.floor((new Date(checkpoint.expiresAt).getTime() - Date.now()) / 1000))
+            : checkpoint?.ttlSeconds ?? null;
+
+          const lines = [
+            `${statusLabel}: jobId=${jobId}`,
+            `Статус: ${checkpoint?.status ?? status}`,
+            `Причина: ${reasonLabel}`,
+            checkpoint
+              ? `Прогресс: delivered=${checkpoint.delivered}, failed=${checkpoint.failed}, throttled429=${checkpoint.throttled429}`
+              : null,
+            checkpoint
+              ? `Курсор: offset=${checkpoint.offset}/${checkpoint.total}${remaining !== null ? `, remaining=${remaining}` : ''}`
+              : null,
+            ttlSeconds !== null ? `TTL чекпоинта: ${ttlSeconds}s` : null,
+            `Команды: /broadcast_resume ${jobId} или /cancel_broadcast`,
+          ].filter((line): line is string => Boolean(line));
+
+          const message = lines.join('\n');
 
           await composition.ports.messaging.sendText({
             chatId: adminChat.chatId,
