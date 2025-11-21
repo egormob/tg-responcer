@@ -48,12 +48,16 @@ const createContext = ({
   };
 };
 
-const createIncomingMessage = (text: string): IncomingMessage => ({
+const createIncomingMessage = (
+  text: string,
+  overrides: Partial<IncomingMessage> = {},
+): IncomingMessage => ({
   user: { userId: 'admin-1' },
   chat: { id: 'chat-1', threadId: 'thread-1' },
   text,
   messageId: 'incoming-1',
   receivedAt: new Date('2024-01-01T00:01:00Z'),
+  ...overrides,
 });
 
 const buildExpectedTooLongMessage = (_overflow: number) =>
@@ -219,6 +223,33 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
     expect(
       sendTextMock.mock.calls.filter(([payload]) => payload.text === buildExpectedTooLongMessage(40)).length,
+    ).toBe(1);
+  });
+
+  it('deduplicates too long warning while awaiting new text across different messages', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock, maxTextLength: 5 });
+
+    await startBroadcastFlow(handler);
+
+    const firstMessage = createIncomingMessage('123456', {
+      messageId: 'incoming-1',
+      receivedAt: new Date('2024-01-01T00:02:00Z'),
+    });
+    const secondMessage = createIncomingMessage('123456', {
+      messageId: 'incoming-2',
+      receivedAt: new Date('2024-01-01T00:02:01Z'),
+    });
+
+    const firstResult = await handler.handleMessage(firstMessage);
+    const secondResult = await handler.handleMessage(secondMessage);
+
+    expect(firstResult).toBe('handled');
+    expect(secondResult).toBe('handled');
+    expect(
+      sendTextMock.mock.calls.filter(
+        ([payload]) => payload.text === buildExpectedTooLongMessage(1),
+      ).length,
     ).toBe(1);
   });
 

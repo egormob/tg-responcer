@@ -89,6 +89,8 @@ export interface PendingBroadcast {
   lastExceededBy?: number;
   lastWarningMessageId?: string;
   lastWarningText?: string;
+  lastReceivedText?: string;
+  lastReceivedLength?: number;
   textChunks?: string[];
   chunkCount?: number;
   debounceUntil?: number;
@@ -1354,6 +1356,10 @@ export const createTelegramBroadcastCommandHandler = (
         return undefined;
       }
 
+      const rawLength = getRawTextLength(rawText);
+      const visibleLength = getVisibleTextLength(rawText);
+      const effectiveLength = Math.max(rawLength, visibleLength);
+
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
@@ -1368,15 +1374,17 @@ export const createTelegramBroadcastCommandHandler = (
       );
 
       const isDuplicateWarning =
-        entry.awaitingNewTextPrompt === true &&
-        entry.lastWarningMessageId === message.messageId &&
-        entry.lastWarningText === rawText;
+        (entry.awaitingNewTextPrompt === true || entry.awaitingNewText === true) &&
+        entry.lastReceivedText === rawText &&
+        entry.lastReceivedLength === effectiveLength;
 
       const updatedEntry: PendingBroadcast = {
         ...refreshedEntry,
         awaitingNewTextPrompt: true,
         lastWarningMessageId: message.messageId,
         lastWarningText: rawText,
+        lastReceivedText: rawText,
+        lastReceivedLength: effectiveLength,
       };
 
       await savePendingEntry(userKey, updatedEntry);
@@ -1398,6 +1406,8 @@ export const createTelegramBroadcastCommandHandler = (
           debounceUntil: undefined,
           lastRejectedLength: undefined,
           lastExceededBy: undefined,
+          lastReceivedText: undefined,
+          lastReceivedLength: undefined,
         };
 
         await savePendingEntry(userKey, resumedEntry);
@@ -1586,12 +1596,14 @@ export const createTelegramBroadcastCommandHandler = (
         lastExceededBy: overflow,
         lastWarningMessageId: message.messageId,
         lastWarningText: rawText,
+        lastReceivedText: rawText,
+        lastReceivedLength: effectiveLength,
       };
 
       const isDuplicateWarning =
-        entry.awaitingNewTextPrompt === true &&
-        entry.lastWarningMessageId === message.messageId &&
-        entry.lastWarningText === rawText;
+        (entry.awaitingNewTextPrompt === true || entry.awaitingNewText === true) &&
+        entry.lastReceivedText === rawText &&
+        entry.lastReceivedLength === effectiveLength;
 
       await savePendingEntry(userKey, refreshedEntry);
 
@@ -1661,6 +1673,8 @@ export const createTelegramBroadcastCommandHandler = (
       expiresAt: now().getTime() + pendingTtlMs,
       lastRejectedLength: undefined,
       lastExceededBy: undefined,
+      lastReceivedText: undefined,
+      lastReceivedLength: undefined,
     };
 
     await savePendingEntry(userKey, collectingEntry);

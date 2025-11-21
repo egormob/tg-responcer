@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest",
+    "test:ci": "vitest run",
     "test:core": "vitest run apps/worker-main/core/__tests__/DialogEngine.test.ts",
     "lint": "eslint .",
     "validate-guards": "node scripts/validate-guards.mjs || exit 0",
