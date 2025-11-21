@@ -87,6 +87,8 @@ export interface PendingBroadcast {
   awaitingSendCommand?: boolean;
   lastRejectedLength?: number;
   lastExceededBy?: number;
+  lastWarningMessageId?: string;
+  lastWarningText?: string;
   textChunks?: string[];
   chunkCount?: number;
   debounceUntil?: number;
@@ -339,6 +341,14 @@ export const createTelegramBroadcastCommandHandler = (
         typeof (parsed.entry as { debounceUntil?: unknown }).debounceUntil === 'number'
           ? (parsed.entry as { debounceUntil: number }).debounceUntil
           : undefined;
+      const lastWarningMessageId =
+        typeof (parsed.entry as { lastWarningMessageId?: unknown }).lastWarningMessageId === 'string'
+          ? (parsed.entry as { lastWarningMessageId: string }).lastWarningMessageId
+          : undefined;
+      const lastWarningText =
+        typeof (parsed.entry as { lastWarningText?: unknown }).lastWarningText === 'string'
+          ? (parsed.entry as { lastWarningText: string }).lastWarningText
+          : undefined;
 
       return {
         chatId: parsed.entry.chatId,
@@ -352,6 +362,8 @@ export const createTelegramBroadcastCommandHandler = (
         awaitingSendCommand,
         lastRejectedLength,
         lastExceededBy,
+        lastWarningMessageId,
+        lastWarningText,
         textChunks,
         chunkCount,
         debounceUntil,
@@ -833,6 +845,8 @@ export const createTelegramBroadcastCommandHandler = (
       awaitingNewText: true,
       awaitingNewTextPrompt: true,
       awaitingSendCommand: undefined,
+      lastWarningMessageId: message.messageId,
+      lastWarningText: message.text ?? '',
       textChunks: undefined,
       chunkCount: undefined,
       debounceUntil: undefined,
@@ -1345,6 +1359,32 @@ export const createTelegramBroadcastCommandHandler = (
         expiresAt: now().getTime() + pendingTtlMs,
       };
 
+      const overflow = Math.max(
+        1,
+        entry.lastExceededBy ??
+          (typeof entry.lastRejectedLength === 'number'
+            ? entry.lastRejectedLength - maxTextLength
+            : 1),
+      );
+
+      const isDuplicateWarning =
+        entry.awaitingNewTextPrompt === true &&
+        entry.lastWarningMessageId === message.messageId &&
+        entry.lastWarningText === rawText;
+
+      const updatedEntry: PendingBroadcast = {
+        ...refreshedEntry,
+        awaitingNewTextPrompt: true,
+        lastWarningMessageId: message.messageId,
+        lastWarningText: rawText,
+      };
+
+      await savePendingEntry(userKey, updatedEntry);
+
+      if (isDuplicateWarning) {
+        return 'handled';
+      }
+
       if (normalized === '/new_text') {
         const resumedEntry: PendingBroadcast = {
           ...refreshedEntry,
@@ -1389,16 +1429,6 @@ export const createTelegramBroadcastCommandHandler = (
 
         return 'handled';
       }
-
-      const overflow = Math.max(
-        1,
-        entry.lastExceededBy ??
-          (typeof entry.lastRejectedLength === 'number'
-            ? entry.lastRejectedLength - maxTextLength
-            : 1),
-      );
-
-      await savePendingEntry(userKey, refreshedEntry);
 
       logger.info('broadcast awaiting new text', {
         userId: message.user.userId,
@@ -1551,11 +1581,23 @@ export const createTelegramBroadcastCommandHandler = (
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
         awaitingNewText: true,
+        awaitingNewTextPrompt: true,
         lastRejectedLength: effectiveLength,
         lastExceededBy: overflow,
+        lastWarningMessageId: message.messageId,
+        lastWarningText: rawText,
       };
 
+      const isDuplicateWarning =
+        entry.awaitingNewTextPrompt === true &&
+        entry.lastWarningMessageId === message.messageId &&
+        entry.lastWarningText === rawText;
+
       await savePendingEntry(userKey, refreshedEntry);
+
+      if (isDuplicateWarning) {
+        return 'handled';
+      }
 
       logger.warn('broadcast text rejected', {
         userId: message.user.userId,
