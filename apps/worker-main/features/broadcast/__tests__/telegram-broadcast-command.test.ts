@@ -128,6 +128,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     pendingStore,
     pendingKv,
     sendAdminHelp = vi.fn().mockResolvedValue(undefined),
+    now,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
@@ -139,6 +140,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     pendingStore?: Map<string, PendingBroadcast>;
     pendingKv?: BroadcastPendingKvNamespace;
     sendAdminHelp?: ReturnType<typeof vi.fn>;
+    now?: () => Date;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -155,7 +157,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       adminAccess,
       messaging,
       sendBroadcast: sendBroadcastMock,
-      now: () => new Date('2024-01-01T00:00:00Z'),
+      now: now ?? (() => new Date(Date.now())),
       logger,
       adminErrorRecorder,
       recipientsRegistry,
@@ -397,7 +399,12 @@ describe('createTelegramBroadcastCommandHandler', () => {
       expiresAt: new Date('2024-01-01T00:05:00Z').getTime(),
     });
 
-    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, pendingStore });
+    const { handler } = createHandler({
+      sendTextMock,
+      sendBroadcastMock,
+      pendingStore,
+      now: () => new Date('2024-01-01T00:01:00Z'),
+    });
 
     const result = await handler.handleMessage(createIncomingMessage('/send'));
     expect(result).toBe('handled');
@@ -468,7 +475,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await handler.handleMessage(createIncomingMessage('ok'));
 
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledTimes(4);
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
@@ -676,6 +683,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       logger,
       pendingKv: kv,
       pendingStore,
+      now: () => new Date('2024-01-01T00:00:00Z'),
     });
 
     await handler.handleCommand(createContext());
@@ -818,6 +826,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       logger,
       pendingKv: kv,
       pendingStore,
+      now: () => new Date('2024-01-01T00:00:00Z'),
     });
 
     await handler.handleCommand(createContext());
@@ -883,12 +892,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(firstAttempt).toBe('handled');
     expect(secondAttempt).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildExpectedTooLongMessage(1030),
-    });
-    expect(sendTextMock).toHaveBeenCalledTimes(4);
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
   });
 
   it('ignores messages while awaiting new text and refreshes rejection details', async () => {
@@ -912,18 +916,16 @@ describe('createTelegramBroadcastCommandHandler', () => {
       expect.objectContaining({ exceededBy: 2 }),
     );
 
+    const warningCallCount = sendTextMock.mock.calls.length;
+
     await handler.handleMessage(createIncomingMessage('tail payload'));
 
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    const awaitingCalls = logger.info.mock.calls.filter(([message]) => message === 'broadcast awaiting new text');
-
-    expect(awaitingCalls.length).toBeGreaterThanOrEqual(2);
-    expect(awaitingCalls.at(-1)?.[1]).toEqual(expect.objectContaining({ exceededBy: 2 }));
-    expect(sendTextMock).toHaveBeenLastCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildExpectedTooLongMessage(2),
-    });
+    expect(sendTextMock.mock.calls.length).toBe(warningCallCount);
+    expect(logger.info).toHaveBeenCalledWith(
+      'broadcast awaiting new text throttled',
+      expect.objectContaining({ exceededBy: 2 }),
+    );
 
     await handler.handleMessage(createIncomingMessage('/new_text'));
 
@@ -949,63 +951,69 @@ describe('createTelegramBroadcastCommandHandler', () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { kv } = createPendingKv();
     const initialPendingStore = new Map<string, PendingBroadcast>();
-    const { handler: initialHandler, sendBroadcastMock } = createHandler({
-      sendTextMock,
-      logger,
-      maxTextLength: 5,
-      pendingKv: kv,
-      pendingStore: initialPendingStore,
-    });
+    await withFakeTimers(async () => {
+      vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
-    await startBroadcastFlow(initialHandler);
-    await initialHandler.handleMessage(createIncomingMessage('123456'));
+      const { handler: initialHandler, sendBroadcastMock } = createHandler({
+        sendTextMock,
+        logger,
+        maxTextLength: 5,
+        pendingKv: kv,
+        pendingStore: initialPendingStore,
+      });
 
-    sendTextMock.mockClear();
-    logger.info.mockClear();
+      await startBroadcastFlow(initialHandler);
+      await initialHandler.handleMessage(createIncomingMessage('123456'));
 
-    const restoredPendingStore = new Map<string, PendingBroadcast>();
-    const { handler } = createHandler({
-      sendTextMock,
-      logger,
-      maxTextLength: 5,
-      pendingKv: kv,
-      pendingStore: restoredPendingStore,
-      sendBroadcastMock,
-    });
+      sendTextMock.mockClear();
+      logger.info.mockClear();
 
-    const ignoredResult = await handler.handleMessage(createIncomingMessage('tail after restore'));
+      vi.setSystemTime(new Date('2024-01-01T00:00:10Z'));
 
-    expect(ignoredResult).toBe('handled');
-    expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildExpectedTooLongMessage(1),
-    });
-    expect(logger.info).toHaveBeenCalledWith(
-      'broadcast awaiting new text',
-      expect.objectContaining({ exceededBy: 1 }),
-    );
+      const restoredPendingStore = new Map<string, PendingBroadcast>();
+      const { handler } = createHandler({
+        sendTextMock,
+        logger,
+        maxTextLength: 5,
+        pendingKv: kv,
+        pendingStore: restoredPendingStore,
+        sendBroadcastMock,
+      });
 
-    sendTextMock.mockClear();
+      const ignoredResult = await handler.handleMessage(createIncomingMessage('tail after restore'));
 
-    const promptResult = await handler.handleMessage(createIncomingMessage('/new_text'));
+      expect(ignoredResult).toBe('handled');
+      expect(sendBroadcastMock).not.toHaveBeenCalled();
+      expect(sendTextMock).toHaveBeenCalledWith({
+        chatId: 'chat-1',
+        threadId: 'thread-1',
+        text: buildExpectedTooLongMessage(1),
+      });
+      expect(logger.info).toHaveBeenCalledWith(
+        'broadcast awaiting new text',
+        expect.objectContaining({ exceededBy: 1 }),
+      );
 
-    expect(promptResult).toBe('handled');
-    expect(sendTextMock).toHaveBeenLastCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildBroadcastPromptMessage(3),
-    });
+      sendTextMock.mockClear();
 
-    const repeatResult = await handler.handleMessage(createIncomingMessage('abcdefg'));
+      const promptResult = await handler.handleMessage(createIncomingMessage('/new_text'));
 
-    expect(repeatResult).toBe('handled');
-    expect(restoredPendingStore.get('admin-1')?.lastExceededBy).toBe(2);
-    expect(sendTextMock).toHaveBeenLastCalledWith({
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildExpectedTooLongMessage(2),
+      expect(promptResult).toBe('handled');
+      expect(sendTextMock).toHaveBeenLastCalledWith({
+        chatId: 'chat-1',
+        threadId: 'thread-1',
+        text: buildBroadcastPromptMessage(3),
+      });
+
+      const repeatResult = await handler.handleMessage(createIncomingMessage('abcdefg'));
+
+      expect(repeatResult).toBe('handled');
+      expect(restoredPendingStore.get('admin-1')?.lastExceededBy).toBe(2);
+      expect(sendTextMock).toHaveBeenLastCalledWith({
+        chatId: 'chat-1',
+        threadId: 'thread-1',
+        text: buildExpectedTooLongMessage(2),
+      });
     });
   });
 
@@ -1025,12 +1033,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     expect(followUp).toBe('handled');
     expect(sendBroadcastMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenNthCalledWith(4, {
-      chatId: 'chat-1',
-      threadId: 'thread-1',
-      text: buildExpectedTooLongMessage(1030),
-    });
-    expect(sendTextMock).toHaveBeenCalledTimes(4);
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
   });
 
   it('allows restarting broadcast with /broadcast while awaiting new text', async () => {

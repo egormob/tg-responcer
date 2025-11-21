@@ -31,6 +31,7 @@ const PENDING_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const MINIMUM_KV_TTL_SECONDS = 60;
 const BROADCAST_EXPORT_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TEXT_CHUNK_DEBOUNCE_MS = 1000;
+const NEW_TEXT_WARNING_THROTTLE_MS = 5 * 1000;
 
 export const BROADCAST_AUDIENCE_PROMPT =
   'Шаг 1. Выберите получателей /everybody или пришлите список user_id / username через запятую или пробел. Дубликаты уберём автоматически.';
@@ -88,6 +89,7 @@ export interface PendingBroadcast {
   lastRejectedLength?: number;
   lastExceededBy?: number;
   lastWarningMessageId?: string;
+  lastWarningAt?: number;
   lastWarningText?: string;
   lastReceivedText?: string;
   lastReceivedLength?: number;
@@ -841,6 +843,7 @@ export const createTelegramBroadcastCommandHandler = (
       return;
     }
 
+    const warningTimestamp = now().getTime();
     const rejectionEntry: PendingBroadcast = {
       ...entry,
       stage: 'text',
@@ -848,6 +851,7 @@ export const createTelegramBroadcastCommandHandler = (
       awaitingNewTextPrompt: true,
       awaitingSendCommand: undefined,
       lastWarningMessageId: message.messageId,
+      lastWarningAt: warningTimestamp,
       lastWarningText: message.text ?? '',
       textChunks: undefined,
       chunkCount: undefined,
@@ -1359,6 +1363,7 @@ export const createTelegramBroadcastCommandHandler = (
       const rawLength = getRawTextLength(rawText);
       const visibleLength = getVisibleTextLength(rawText);
       const effectiveLength = Math.max(rawLength, visibleLength);
+      const warningTimestamp = now().getTime();
 
       const refreshedEntry: PendingBroadcast = {
         ...entry,
@@ -1373,6 +1378,11 @@ export const createTelegramBroadcastCommandHandler = (
             : 1),
       );
 
+      const alreadyWarnedRecently =
+        entry.awaitingNewTextPrompt === true &&
+        typeof entry.lastWarningAt === 'number' &&
+        warningTimestamp - entry.lastWarningAt < NEW_TEXT_WARNING_THROTTLE_MS;
+
       const isDuplicateWarning =
         (entry.awaitingNewTextPrompt === true || entry.awaitingNewText === true) &&
         entry.lastReceivedText === rawText &&
@@ -1385,6 +1395,7 @@ export const createTelegramBroadcastCommandHandler = (
         lastWarningText: rawText,
         lastReceivedText: rawText,
         lastReceivedLength: effectiveLength,
+        lastWarningAt: alreadyWarnedRecently ? entry.lastWarningAt : warningTimestamp,
       };
 
       await savePendingEntry(userKey, updatedEntry);
@@ -1436,6 +1447,17 @@ export const createTelegramBroadcastCommandHandler = (
 
           await handleMessagingFailure(message.user.userId, 'broadcast_new_text_prompt', error);
         }
+
+        return 'handled';
+      }
+
+      if (alreadyWarnedRecently) {
+        logger.info('broadcast awaiting new text throttled', {
+          userId: message.user.userId,
+          chatId: message.chat.id,
+          threadId: message.chat.threadId ?? null,
+          exceededBy: overflow,
+        });
 
         return 'handled';
       }
@@ -1587,6 +1609,7 @@ export const createTelegramBroadcastCommandHandler = (
 
     if (effectiveLength > maxTextLength) {
       const overflow = effectiveLength - maxTextLength;
+      const warningTimestamp = now().getTime();
       const refreshedEntry: PendingBroadcast = {
         ...entry,
         expiresAt: now().getTime() + pendingTtlMs,
@@ -1595,6 +1618,7 @@ export const createTelegramBroadcastCommandHandler = (
         lastRejectedLength: effectiveLength,
         lastExceededBy: overflow,
         lastWarningMessageId: message.messageId,
+        lastWarningAt: warningTimestamp,
         lastWarningText: rawText,
         lastReceivedText: rawText,
         lastReceivedLength: effectiveLength,
