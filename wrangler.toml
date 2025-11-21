@@ -30,6 +30,9 @@ id = "ec8ca40dbcca469fa73fe6f3850ef596"
 
 [[kv_namespaces]]
 binding = "BROADCAST_TELEMETRY_KV"
+# Рекурсируем привязку к тому же namespace, что и BROADCAST_PENDING_KV,
+# чтобы не заводить отдельное KV и использовать уже существующий ec8ca40d…
+# (указан владельцем как пустой, пригоден для телеметрии и pending-очереди).
 id = "ec8ca40dbcca469fa73fe6f3850ef596"
 
 [vars]
