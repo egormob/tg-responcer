@@ -89,6 +89,7 @@ export interface BroadcastProgressCheckpoint {
   delivered: number;
   failed: number;
   throttled429: number;
+  reason?: BroadcastAbortReason;
   total: number;
   text: string;
   textHash: string;
@@ -97,6 +98,8 @@ export interface BroadcastProgressCheckpoint {
   filters?: BroadcastAudienceFilter;
   source?: string | null;
   updatedAt: string;
+  ttlSeconds?: number;
+  expiresAt?: string;
 }
 
 export interface BroadcastAdminNotificationInput {
@@ -155,6 +158,7 @@ export interface CreateImmediateBroadcastSenderOptions {
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
   progressKv?: BroadcastProgressKvNamespace;
+  progressTtlSeconds?: number;
   batchSize?: number;
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
@@ -174,6 +178,7 @@ export interface CreateRegistryBroadcastSenderOptions {
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
   progressKv?: BroadcastProgressKvNamespace;
+  progressTtlSeconds?: number;
   batchSize?: number;
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
@@ -194,6 +199,8 @@ const DEFAULT_BROADCAST_MAX_TEXT_LENGTH = 3970;
 const DEFAULT_BATCH_SIZE = 50;
 const BROADCAST_PROGRESS_KV_VERSION = 1;
 const BROADCAST_PROGRESS_KEY_PREFIX = 'broadcast:progress:';
+const DEFAULT_PROGRESS_TTL_SECONDS = 24 * 60 * 60;
+const MIN_PROGRESS_TTL_SECONDS = 60;
 
 const createWait = (wait?: (ms: number) => Promise<void>) =>
   wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -405,7 +412,11 @@ const saveCheckpoint = async (
   }
 
   try {
-    await kv.put(buildProgressKey(checkpoint.jobId), serializeCheckpoint(checkpoint));
+    await kv.put(
+      buildProgressKey(checkpoint.jobId),
+      serializeCheckpoint(checkpoint),
+      checkpoint.ttlSeconds ? { expirationTtl: checkpoint.ttlSeconds } : undefined,
+    );
   } catch (error) {
     logger?.warn?.('broadcast_progress_save_failed', { error: toErrorDetails(error) });
   }
@@ -567,6 +578,7 @@ interface CreateBroadcastSenderOptions {
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
   progressKv?: BroadcastProgressKvNamespace;
+  progressTtlSeconds?: number;
   batchSize?: number;
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
@@ -718,6 +730,11 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       jobId,
     });
 
+    const progressTtlSeconds = Math.max(
+      MIN_PROGRESS_TTL_SECONDS,
+      Math.floor(input.resumeFrom?.ttlSeconds ?? options.progressTtlSeconds ?? DEFAULT_PROGRESS_TTL_SECONDS),
+    );
+
     let throttledErrors = input.resumeFrom?.throttled429 ?? 0;
     let deliveredCount = input.resumeFrom?.delivered ?? 0;
     let failedCount = input.resumeFrom?.failed ?? 0;
@@ -743,25 +760,49 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       seenKeys.add(key);
     }
 
-    const buildCheckpoint = (status: BroadcastProgressCheckpoint['status']): BroadcastProgressCheckpoint => ({
-      jobId,
-      status,
-      offset,
-      delivered: deliveredCount,
-      failed: failedCount,
-      throttled429: throttledErrors,
-      total: recipients.length,
-      text,
-      textHash,
-      audienceHash,
-      pool: { concurrency, maxRps },
-      filters: filters ?? undefined,
-      source: resolved.source ?? null,
-      updatedAt: new Date(now()).toISOString(),
-    });
+    const getCompletedOffset = (): number => {
+      let completedOffset = 0;
+      while (completedOffset < deliveries.length && deliveries[completedOffset]) {
+        completedOffset += 1;
+      }
 
-    const persistCheckpoint = async (status: BroadcastProgressCheckpoint['status']) => {
-      const checkpoint = buildCheckpoint(status);
+      return completedOffset;
+    };
+
+    const buildCheckpoint = (
+      status: BroadcastProgressCheckpoint['status'],
+      reason?: BroadcastAbortReason,
+    ): BroadcastProgressCheckpoint => {
+      const checkpointOffset = Math.max(offset, getCompletedOffset());
+      const expiresAt = new Date(now() + progressTtlSeconds * 1000).toISOString();
+      offset = checkpointOffset;
+
+      return {
+        jobId,
+        status,
+        offset: checkpointOffset,
+        delivered: deliveredCount,
+        failed: failedCount,
+        throttled429: throttledErrors,
+        total: recipients.length,
+        text,
+        textHash,
+        audienceHash,
+        pool: { concurrency, maxRps },
+        filters: filters ?? undefined,
+        source: resolved.source ?? null,
+        updatedAt: new Date(now()).toISOString(),
+        ttlSeconds: progressTtlSeconds,
+        expiresAt,
+        reason,
+      } satisfies BroadcastProgressCheckpoint;
+    };
+
+    const persistCheckpoint = async (
+      status: BroadcastProgressCheckpoint['status'],
+      reason?: BroadcastAbortReason,
+    ) => {
+      const checkpoint = buildCheckpoint(status, reason);
       await saveCheckpoint(options.progressKv, checkpoint, options.logger);
       return checkpoint;
     };
@@ -774,7 +815,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         return;
       }
 
-      const checkpoint = await persistCheckpoint(status);
+      const checkpoint = await persistCheckpoint(status, reason);
       notifiedAbort = true;
       await options.onAdminNotification({ jobId, status, reason, checkpoint, adminChat: input.adminChat });
     };
@@ -999,7 +1040,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
             error.reason === 'telegram_limit_exceeded' || error.reason === 'oom_signal'
               ? 'paused'
               : 'aborted';
-          const checkpoint = await persistCheckpoint(status);
+          const checkpoint = await persistCheckpoint(status, error.reason);
           if (options.onAdminNotification) {
             await options.onAdminNotification({
               jobId,
@@ -1124,6 +1165,7 @@ export const createImmediateBroadcastSender = (
     emergencyStop: options.emergencyStop,
     maxTextLength: options.maxTextLength,
     progressKv: options.progressKv,
+    progressTtlSeconds: options.progressTtlSeconds,
     batchSize: options.batchSize,
     jobIdGenerator: options.jobIdGenerator,
     onAdminNotification: options.onAdminNotification,
@@ -1182,6 +1224,7 @@ export const createRegistryBroadcastSender = (
     emergencyStop: options.emergencyStop,
     maxTextLength: options.maxTextLength,
     progressKv: options.progressKv,
+    progressTtlSeconds: options.progressTtlSeconds,
     batchSize: options.batchSize,
     jobIdGenerator: options.jobIdGenerator,
     onAdminNotification: options.onAdminNotification,

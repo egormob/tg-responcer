@@ -8,6 +8,7 @@ import {
   type PendingBroadcast,
 } from '../telegram-broadcast-command';
 import type { BroadcastPendingKvNamespace } from '../telegram-broadcast-command';
+import type { BroadcastProgressKvNamespace } from '../minimal-broadcast-service';
 import type { TelegramAdminCommandContext, TransformPayloadContext } from '../../../http';
 import type { MessagingPort } from '../../../ports';
 import type { IncomingMessage } from '../../../core';
@@ -103,6 +104,32 @@ const createPendingKv = () => {
   return { kv, store };
 };
 
+const createProgressKv = () => {
+  const store = new Map<string, { value: string; expiration?: number }>();
+
+  const kv: BroadcastProgressKvNamespace = {
+    async get(key) {
+      return store.get(key)?.value ?? null;
+    },
+    async put(key, value, options) {
+      const expiration = Math.floor(Date.now() / 1000) + (options?.expirationTtl ?? 0);
+      store.set(key, { value, expiration });
+    },
+    async delete(key) {
+      store.delete(key);
+    },
+    async list(options) {
+      const keys = Array.from(store.entries())
+        .filter(([name]) => (options?.prefix ? name.startsWith(options.prefix) : true))
+        .map(([name, entry]) => ({ name, expiration: entry.expiration }));
+
+      return { keys, list_complete: true, cursor: '' };
+    },
+  };
+
+  return { kv, store };
+};
+
 describe('createTelegramBroadcastCommandHandler', () => {
   const createHandler = ({
     isAdmin = true,
@@ -129,6 +156,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     pendingKv,
     sendAdminHelp = vi.fn().mockResolvedValue(undefined),
     now,
+    progressKv,
   }: {
     isAdmin?: boolean;
     sendTextMock?: ReturnType<typeof vi.fn>;
@@ -141,6 +169,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
     pendingKv?: BroadcastPendingKvNamespace;
     sendAdminHelp?: ReturnType<typeof vi.fn>;
     now?: () => Date;
+    progressKv?: BroadcastProgressKvNamespace;
   } = {}) => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(isAdmin) };
     const messaging: Pick<MessagingPort, 'sendText'> = {
@@ -166,6 +195,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
       pendingStore,
       pendingKv,
       sendAdminHelp,
+      progressKv,
     });
 
     return { handler, adminAccess, sendTextMock, sendBroadcastMock, logger, exportLogKv, sendAdminHelp };
@@ -204,6 +234,41 @@ describe('createTelegramBroadcastCommandHandler', () => {
       }
     });
   };
+
+  it('blocks parallel broadcast start when checkpoint is active', async () => {
+    const { kv: progressKv } = createProgressKv();
+    const checkpoint = {
+      jobId: 'job-active',
+      status: 'running',
+      offset: 2,
+      delivered: 2,
+      failed: 0,
+      throttled429: 0,
+      total: 5,
+      text: 'hello',
+      textHash: 'hash-text',
+      audienceHash: 'hash-audience',
+      pool: { concurrency: 1, maxRps: 28 },
+      filters: undefined,
+      source: 'D1',
+      updatedAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    };
+
+    await progressKv.put('broadcast:progress:job-active', JSON.stringify({ version: 1, checkpoint }));
+
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock, progressKv });
+
+    const response = await handler.handleCommand(createContext());
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: expect.stringContaining('jobId=job-active'),
+    });
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ status: 'job_active', jobId: 'job-active' });
+  });
 
   it('sends a single warning when the text is too long', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
@@ -345,11 +410,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     const sendResult = handler.handleMessage(createIncomingMessage('/send'), { waitUntil: sendWaitUntil });
     await expect(sendResult).resolves.toBe('handled');
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'hello everyone',
-      requestedBy: 'admin-1',
-      filters: undefined,
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'hello everyone',
+        requestedBy: 'admin-1',
+        filters: undefined,
+      }),
+    );
 
     expect(sendWaitUntil).toHaveBeenCalledTimes(1);
     const scheduled = sendWaitUntil.mock.calls[0]?.[0];
@@ -415,11 +482,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
       text: buildAwaitingSendPromptMessage({ mode: 'all', total: 3, notFound: [] }),
     });
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'Recovered text',
-      requestedBy: 'admin-1',
-      filters: undefined,
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Recovered text',
+        requestedBy: 'admin-1',
+        filters: undefined,
+      }),
+    );
 
     expect(pendingStore.has('admin-1')).toBe(false);
   });
@@ -488,11 +557,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     await completeBroadcast(handler, 'short');
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      filters: undefined,
-      requestedBy: 'admin-1',
-      text: 'short',
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: undefined,
+        requestedBy: 'admin-1',
+        text: 'short',
+      }),
+    );
   });
 
   it('writes broadcast log with d1 source and mode', async () => {
@@ -566,11 +637,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     await completeBroadcast(handler, 'Segmented message');
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'Segmented message',
-      requestedBy: 'admin-1',
-      filters: { chatIds: ['subscriber-2', 'subscriber-1'] },
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Segmented message',
+        requestedBy: 'admin-1',
+        filters: { chatIds: ['subscriber-2', 'subscriber-1'] },
+      }),
+    );
   });
 
   it('reports unknown audience entries and keeps them in prompt', async () => {
@@ -599,11 +672,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
 
     await completeBroadcast(handler, 'Check not found');
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'Check not found',
-      requestedBy: 'admin-1',
-      filters: { chatIds: ['subscriber-3'] },
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Check not found',
+        requestedBy: 'admin-1',
+        filters: { chatIds: ['subscriber-3'] },
+      }),
+    );
   });
 
   it('handles empty audience selection', async () => {
@@ -1078,11 +1153,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
       threadId: 'thread-1',
       text: buildBroadcastPromptMessage(3),
     });
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      filters: undefined,
-      requestedBy: 'admin-1',
-      text: 'short',
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: undefined,
+        requestedBy: 'admin-1',
+        text: 'short',
+      }),
+    );
   });
 
   it('runs broadcast after valid text following /new_text and logs flow', async () => {
@@ -1105,11 +1182,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(typeof scheduled?.then).toBe('function');
     await scheduled;
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'ок',
-      requestedBy: 'admin-1',
-      filters: undefined,
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'ок',
+        requestedBy: 'admin-1',
+        filters: undefined,
+      }),
+    );
 
     expect(logger.warn).toHaveBeenCalledWith(
       'broadcast text rejected',
@@ -1163,11 +1242,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
       sendContext: { waitUntil },
     });
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'готовый текст',
-      requestedBy: 'admin-1',
-      filters: undefined,
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'готовый текст',
+        requestedBy: 'admin-1',
+        filters: undefined,
+      }),
+    );
 
     const scheduled = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof scheduled?.then).toBe('function');
@@ -1199,11 +1280,13 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(typeof scheduled?.then).toBe('function');
     await scheduled;
 
-    expect(sendBroadcastMock).toHaveBeenCalledWith({
-      text: 'a'.repeat(3970),
-      requestedBy: 'admin-1',
-      filters: undefined,
-    });
+    expect(sendBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'a'.repeat(3970),
+        requestedBy: 'admin-1',
+        filters: undefined,
+      }),
+    );
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
@@ -1706,7 +1789,9 @@ describe('worker integration for broadcast command', () => {
     const backgroundTask = ctx.waitUntil.mock.calls.at(-1)?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
-    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'subscriber-1',
       threadId: undefined,
       text: 'Всем привет',
@@ -1943,7 +2028,9 @@ describe('worker integration for broadcast command', () => {
     const backgroundTask = ctx.waitUntil.mock.calls.at(-1)?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
-    expect(messaging.sendText).toHaveBeenNthCalledWith(2, {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'subscriber-1',
       threadId: undefined,
       text: 'Всем привет',
