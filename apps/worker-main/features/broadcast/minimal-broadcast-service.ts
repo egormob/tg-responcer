@@ -9,7 +9,12 @@ interface Logger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
-export type BroadcastAbortReason = 'telegram_limit_exceeded' | 'send_text_failed';
+export type BroadcastAbortReason =
+  | 'telegram_limit_exceeded'
+  | 'send_text_failed'
+  | 'aborted_by_admin'
+  | 'oom_signal'
+  | 'checkpoint_mismatch';
 
 export interface BroadcastEmergencyStopOptions {
   retryAfterMs?: number;
@@ -46,6 +51,11 @@ export interface BroadcastSendInput {
   text: string;
   requestedBy: string;
   filters?: BroadcastAudienceFilter;
+  jobId?: string;
+  resumeFrom?: BroadcastProgressCheckpoint;
+  adminChat?: { chatId: string; threadId?: string };
+  abortSignal?: AbortSignal;
+  oomSignal?: AbortSignal;
 }
 
 export interface BroadcastSendResultDelivery {
@@ -71,6 +81,33 @@ export interface BroadcastSendResult {
 }
 
 export type SendBroadcast = (input: BroadcastSendInput) => Promise<BroadcastSendResult>;
+
+export interface BroadcastProgressCheckpoint {
+  jobId: string;
+  status: 'running' | 'paused' | 'aborted' | 'completed';
+  offset: number;
+  delivered: number;
+  failed: number;
+  throttled429: number;
+  total: number;
+  text: string;
+  textHash: string;
+  audienceHash: string;
+  pool: Pick<Required<BroadcastPoolOptions>, 'concurrency' | 'maxRps'>;
+  filters?: BroadcastAudienceFilter;
+  source?: string | null;
+  updatedAt: string;
+}
+
+export interface BroadcastAdminNotificationInput {
+  jobId: string;
+  status: 'paused' | 'aborted';
+  reason: BroadcastAbortReason;
+  checkpoint: BroadcastProgressCheckpoint;
+  adminChat?: { chatId: string; threadId?: string };
+}
+
+export type BroadcastProgressKvNamespace = Pick<KVNamespace, 'get' | 'put' | 'delete' | 'list'>;
 
 export interface BroadcastPoolOptions {
   concurrency?: number;
@@ -117,6 +154,10 @@ export interface CreateImmediateBroadcastSenderOptions {
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
+  progressKv?: BroadcastProgressKvNamespace;
+  batchSize?: number;
+  jobIdGenerator?: () => string;
+  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
 }
 
 export interface BroadcastRecipientsRegistry {
@@ -132,6 +173,10 @@ export interface CreateRegistryBroadcastSenderOptions {
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
+  progressKv?: BroadcastProgressKvNamespace;
+  batchSize?: number;
+  jobIdGenerator?: () => string;
+  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
 }
 
 const DEFAULT_POOL_OPTIONS: Required<
@@ -146,12 +191,50 @@ const DEFAULT_POOL_OPTIONS: Required<
 };
 
 const DEFAULT_BROADCAST_MAX_TEXT_LENGTH = 3970;
+const DEFAULT_BATCH_SIZE = 50;
+const BROADCAST_PROGRESS_KV_VERSION = 1;
+const BROADCAST_PROGRESS_KEY_PREFIX = 'broadcast:progress:';
 
 const createWait = (wait?: (ms: number) => Promise<void>) =>
   wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
+
+const toHex = (buffer: ArrayBuffer): string =>
+  Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+
+const computeHash = async (value: string): Promise<string> => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(value);
+
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', data);
+      return toHex(digest);
+    } catch (error) {
+      // fall through to node:crypto
+      void error;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createHash } = require('node:crypto') as typeof import('node:crypto');
+  return createHash('sha256').update(data).digest('hex');
+};
+
+const buildProgressKey = (jobId: string): string => `${BROADCAST_PROGRESS_KEY_PREFIX}${jobId}`;
+
+const buildAudienceHash = async (recipients: readonly BroadcastRecipient[]): Promise<string> => {
+  const payload = recipients.map((recipient) => ({
+    chatId: recipient.chatId,
+    threadId: recipient.threadId ?? null,
+  }));
+
+  return computeHash(JSON.stringify(payload));
+};
 
 const computeDelay = (
   retryIndex: number,
@@ -274,6 +357,143 @@ const toErrorDetails = (error: unknown): { name: string; message: string } => {
   return { name: 'Error', message };
 };
 
+const serializeCheckpoint = (checkpoint: BroadcastProgressCheckpoint): string =>
+  JSON.stringify({ version: BROADCAST_PROGRESS_KV_VERSION, checkpoint });
+
+const parseCheckpoint = (raw: string | null): BroadcastProgressCheckpoint | undefined => {
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      checkpoint?: BroadcastProgressCheckpoint;
+    };
+
+    if (parsed.version !== BROADCAST_PROGRESS_KV_VERSION) {
+      return undefined;
+    }
+
+    if (!parsed.checkpoint?.jobId || typeof parsed.checkpoint.jobId !== 'string') {
+      return undefined;
+    }
+
+    if (
+      parsed.checkpoint.status !== 'running'
+      && parsed.checkpoint.status !== 'paused'
+      && parsed.checkpoint.status !== 'aborted'
+      && parsed.checkpoint.status !== 'completed'
+    ) {
+      return undefined;
+    }
+
+    return parsed.checkpoint;
+  } catch (error) {
+    void error;
+    return undefined;
+  }
+};
+
+const saveCheckpoint = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  checkpoint: BroadcastProgressCheckpoint,
+  logger?: Logger,
+): Promise<void> => {
+  if (!kv) {
+    return;
+  }
+
+  try {
+    await kv.put(buildProgressKey(checkpoint.jobId), serializeCheckpoint(checkpoint));
+  } catch (error) {
+    logger?.warn?.('broadcast_progress_save_failed', { error: toErrorDetails(error) });
+  }
+};
+
+const deleteCheckpoint = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  jobId: string,
+  logger?: Logger,
+): Promise<void> => {
+  if (!kv) {
+    return;
+  }
+
+  try {
+    await kv.delete(buildProgressKey(jobId));
+  } catch (error) {
+    logger?.warn?.('broadcast_progress_delete_failed', { error: toErrorDetails(error) });
+  }
+};
+
+const readCheckpoint = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  jobId: string,
+  logger?: Logger,
+): Promise<BroadcastProgressCheckpoint | undefined> => {
+  if (!kv) {
+    return undefined;
+  }
+
+  try {
+    const raw = await kv.get(buildProgressKey(jobId), 'text');
+    return parseCheckpoint(raw);
+  } catch (error) {
+    logger?.warn?.('broadcast_progress_read_failed', { error: toErrorDetails(error) });
+    return undefined;
+  }
+};
+
+export interface BroadcastCheckpointEntry {
+  jobId: string;
+  checkpoint: BroadcastProgressCheckpoint;
+}
+
+export const loadBroadcastCheckpoint = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  jobId: string,
+  logger?: Logger,
+): Promise<BroadcastProgressCheckpoint | undefined> => readCheckpoint(kv, jobId, logger);
+
+export const listBroadcastCheckpoints = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  logger?: Logger,
+): Promise<BroadcastCheckpointEntry[]> => {
+  if (!kv) {
+    return [];
+  }
+
+  try {
+    let cursor: string | undefined;
+    const checkpoints: BroadcastCheckpointEntry[] = [];
+
+    do {
+      const result = await kv.list({ prefix: BROADCAST_PROGRESS_KEY_PREFIX, cursor });
+      for (const key of result.keys) {
+        const jobId = key.name.slice(BROADCAST_PROGRESS_KEY_PREFIX.length);
+        const checkpoint = await readCheckpoint(kv, jobId, logger);
+        if (checkpoint) {
+          checkpoints.push({ jobId, checkpoint });
+        }
+      }
+
+      cursor = result.list_complete ? undefined : result.cursor;
+    } while (cursor);
+
+    return checkpoints;
+  } catch (error) {
+    logger?.warn?.('broadcast_progress_list_failed', { error: toErrorDetails(error) });
+    return [];
+  }
+};
+
+export const deleteBroadcastCheckpoint = async (
+  kv: BroadcastProgressKvNamespace | undefined,
+  jobId: string,
+  logger?: Logger,
+): Promise<void> => deleteCheckpoint(kv, jobId, logger);
+
 const deduplicateRecipients = (
   recipients: readonly BroadcastRecipient[],
 ): BroadcastRecipient[] => {
@@ -346,6 +566,10 @@ interface CreateBroadcastSenderOptions {
   telemetry?: BroadcastTelemetry;
   emergencyStop?: BroadcastEmergencyStopOptions;
   maxTextLength?: number;
+  progressKv?: BroadcastProgressKvNamespace;
+  batchSize?: number;
+  jobIdGenerator?: () => string;
+  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
@@ -362,6 +586,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
   const deliveryMessaging = options.messagingBroadcast ?? options.messaging;
   const maxTextLength = options.maxTextLength ?? DEFAULT_BROADCAST_MAX_TEXT_LENGTH;
+  const batchSize = Math.max(1, Math.floor(options.batchSize ?? DEFAULT_BATCH_SIZE));
   const rateLimiter = createRateLimiter(
     maxRps,
     poolOptions.rateJitterRatio,
@@ -380,7 +605,20 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     return result;
   };
 
-  return async ({ text, requestedBy, filters }) => {
+  const generateJobId = () => {
+    if (options.jobIdGenerator) {
+      return options.jobIdGenerator();
+    }
+
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID();
+    }
+
+    return `job-${now()}`;
+  };
+
+  return async (input) => {
+    const text = (input.resumeFrom?.text ?? input.text).trim();
     const rawLength = getRawTextLength(text);
     const visibleLength = getVisibleTextLength(text);
     const effectiveLength = Math.max(rawLength, visibleLength);
@@ -388,7 +626,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     if (effectiveLength > maxTextLength) {
       const exceededBy = effectiveLength - maxTextLength;
       const context = {
-        requestedBy,
+        requestedBy: input.requestedBy,
         rawLength,
         visibleLength,
         length: effectiveLength,
@@ -400,6 +638,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       throw new BroadcastAbortedError('telegram_limit_exceeded', context);
     }
 
+    const jobId = input.resumeFrom?.jobId ?? input.jobId ?? generateJobId();
+    const filters = input.resumeFrom?.filters ?? input.filters;
     const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
     const filtersToApply = filters;
     const recipients = deduplicateRecipients(
@@ -416,35 +656,56 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       languageCode: recipient.languageCode ?? null,
     }));
 
+    const textHash = await computeHash(text);
+    const audienceHash = await buildAudienceHash(recipients);
+
+    if (input.resumeFrom) {
+      if (
+        input.resumeFrom.jobId !== jobId
+        || input.resumeFrom.textHash !== textHash
+        || input.resumeFrom.audienceHash !== audienceHash
+      ) {
+        throw new BroadcastAbortedError('checkpoint_mismatch', {
+          jobId,
+          expectedText: input.resumeFrom.textHash,
+          actualText: textHash,
+          expectedAudience: input.resumeFrom.audienceHash,
+          actualAudience: audienceHash,
+        });
+      }
+    }
+
     options.logger?.info?.('broadcast_resolve', {
-      requestedBy,
+      requestedBy: input.requestedBy,
       filters: filters ?? null,
       source: resolved.source ?? null,
       recipients: recipients.length,
       sample: recipientsSample,
+      jobId,
     });
 
     if (recipients.length === 0) {
       options.logger?.warn?.('broadcast recipients list is empty', {
-        requestedBy,
+        requestedBy: input.requestedBy,
         filters: filters ?? null,
         source: resolved.source ?? null,
+        jobId,
       });
 
       return {
-        delivered: 0,
-        failed: 0,
+        delivered: input.resumeFrom?.delivered ?? 0,
+        failed: input.resumeFrom?.failed ?? 0,
         deliveries: [],
         recipients: 0,
         durationMs: 0,
         source: resolved.source ?? null,
         sample: recipientsSample,
-        throttled429: 0,
+        throttled429: input.resumeFrom?.throttled429 ?? 0,
       } satisfies BroadcastSendResult;
     }
 
     options.logger?.info?.('broadcast pool initialized', {
-      requestedBy,
+      requestedBy: input.requestedBy,
       recipients: recipients.length,
       filters: filters ?? null,
       source: resolved.source ?? null,
@@ -454,47 +715,122 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       jitterRatio: poolOptions.jitterRatio,
       maxRps,
       rateJitterRatio: poolOptions.rateJitterRatio,
+      jobId,
     });
 
-    let throttledErrors = 0;
-    const deliveries: BroadcastSendResultDelivery[] = new Array(recipients.length);
+    let throttledErrors = input.resumeFrom?.throttled429 ?? 0;
+    let deliveredCount = input.resumeFrom?.delivered ?? 0;
+    let failedCount = input.resumeFrom?.failed ?? 0;
+    let offset = Math.max(0, Math.min(input.resumeFrom?.offset ?? 0, recipients.length));
     let abortedError: BroadcastAbortedError | undefined;
+    let notifiedAbort = false;
+
+    const deliveries: BroadcastSendResultDelivery[] = Array.from(
+      { length: recipients.length },
+      (_, index) =>
+        index < offset
+          ? {
+              recipient: recipients[index],
+              error: { name: 'Skipped', message: 'already processed in checkpoint' },
+            }
+          : undefined as unknown as BroadcastSendResultDelivery,
+    );
+
+    const seenKeys = new Set<string>();
+    for (let index = 0; index < offset; index += 1) {
+      const recipient = recipients[index];
+      const key = `${recipient.chatId}:${recipient.threadId ?? ''}`;
+      seenKeys.add(key);
+    }
+
+    const buildCheckpoint = (status: BroadcastProgressCheckpoint['status']): BroadcastProgressCheckpoint => ({
+      jobId,
+      status,
+      offset,
+      delivered: deliveredCount,
+      failed: failedCount,
+      throttled429: throttledErrors,
+      total: recipients.length,
+      text,
+      textHash,
+      audienceHash,
+      pool: { concurrency, maxRps },
+      filters: filters ?? undefined,
+      source: resolved.source ?? null,
+      updatedAt: new Date(now()).toISOString(),
+    });
+
+    const persistCheckpoint = async (status: BroadcastProgressCheckpoint['status']) => {
+      const checkpoint = buildCheckpoint(status);
+      await saveCheckpoint(options.progressKv, checkpoint, options.logger);
+      return checkpoint;
+    };
+
+    const notifyAdmin = async (
+      status: 'paused' | 'aborted',
+      reason: BroadcastAbortReason,
+    ): Promise<void> => {
+      if (!options.onAdminNotification) {
+        return;
+      }
+
+      const checkpoint = await persistCheckpoint(status);
+      notifiedAbort = true;
+      await options.onAdminNotification({ jobId, status, reason, checkpoint, adminChat: input.adminChat });
+    };
 
     const ensureNotAborted = () => {
+      if (input.abortSignal?.aborted) {
+        abortedError = new BroadcastAbortedError('aborted_by_admin', { jobId });
+        throw abortedError;
+      }
+
+      if (input.oomSignal?.aborted) {
+        abortedError = new BroadcastAbortedError('oom_signal', { jobId });
+        throw abortedError;
+      }
+
       if (abortedError) {
         throw abortedError;
       }
     };
 
-    const abortBroadcast = (
+    const abortBroadcast = async (
       reason: BroadcastAbortReason,
       context: Record<string, unknown>,
       cause?: unknown,
-    ): never => {
+    ): Promise<never> => {
       if (!abortedError) {
         abortedError = new BroadcastAbortedError(reason, context, cause);
         options.logger?.error?.('broadcast pool aborted', {
-          requestedBy,
+          requestedBy: input.requestedBy,
           reason,
           context,
+          jobId,
         });
       }
+
+      const status =
+        reason === 'telegram_limit_exceeded' || reason === 'oom_signal' ? 'paused' : 'aborted';
+
+      await notifyAdmin(status, reason);
 
       throw abortedError;
     };
 
-    const handleEmergencyThrottle = (retryAfterMs?: number, cause?: unknown) => {
+    const handleEmergencyThrottle = async (retryAfterMs?: number, cause?: unknown) => {
       if (
         typeof emergencyStopThresholdMs === 'number'
         && typeof retryAfterMs === 'number'
         && retryAfterMs >= emergencyStopThresholdMs
       ) {
-        abortBroadcast(
+        await abortBroadcast(
           'telegram_limit_exceeded',
           {
             retryAfterMs,
             thresholdMs: emergencyStopThresholdMs,
-            requestedBy,
+            requestedBy: input.requestedBy,
+            jobId,
           },
           cause,
         );
@@ -507,7 +843,16 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       ensureNotAborted();
       let attempt = 0;
 
+      const recipientKey = `${recipient.chatId}:${recipient.threadId ?? ''}`;
+      if (seenKeys.has(recipientKey)) {
+        return {
+          recipient,
+          error: { name: 'Skipped', message: 'already processed in checkpoint' },
+        } satisfies BroadcastSendResultDelivery;
+      }
+
       while (attempt < maxAttempts) {
+        ensureNotAborted();
         try {
           await rateLimiter();
           const result = await deliveryMessaging.sendText({
@@ -517,12 +862,16 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
           });
 
           options.logger?.info?.('broadcast delivered', {
-            requestedBy,
+            requestedBy: input.requestedBy,
             chatId: recipient.chatId,
             threadId: recipient.threadId ?? null,
             messageId: result?.messageId ?? null,
             attempt: attempt + 1,
+            jobId,
           });
+
+          deliveredCount += 1;
+          seenKeys.add(recipientKey);
 
           return {
             recipient,
@@ -536,32 +885,37 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
           if (tooManyRequests) {
             throttledErrors += 1;
-            handleEmergencyThrottle(retryAfterMs, error);
+            await handleEmergencyThrottle(retryAfterMs, error);
           }
 
           if (!shouldRetry) {
             const details = toErrorDetails(error);
 
             if (!tooManyRequests && shouldAbortOnFailure(error)) {
-              abortBroadcast(
+              await abortBroadcast(
                 'send_text_failed',
                 {
-                  requestedBy,
+                  requestedBy: input.requestedBy,
                   chatId: recipient.chatId,
                   threadId: recipient.threadId ?? null,
                   status: getErrorStatus(error) ?? null,
+                  jobId,
                 },
                 error,
               );
             }
 
             options.logger?.error?.('broadcast delivery failed', {
-              requestedBy,
+              requestedBy: input.requestedBy,
               chatId: recipient.chatId,
               threadId: recipient.threadId ?? null,
               error: details,
               attempt: attempt + 1,
+              jobId,
             });
+
+            failedCount += 1;
+            seenKeys.add(recipientKey);
 
             return {
               recipient,
@@ -579,13 +933,14 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
           );
 
           options.logger?.warn?.('broadcast throttled', {
-            requestedBy,
+            requestedBy: input.requestedBy,
             chatId: recipient.chatId,
             threadId: recipient.threadId ?? null,
             attempt: attempt + 1,
             delayMs,
             retryAfterMs: retryAfterMs ?? null,
             poolSize: concurrency,
+            jobId,
           });
 
           await wait(delayMs);
@@ -594,6 +949,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       }
 
       const details = toErrorDetails(new Error('broadcast delivery exceeded retries'));
+      failedCount += 1;
+      seenKeys.add(recipientKey);
 
       return {
         recipient,
@@ -601,26 +958,58 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       } satisfies BroadcastSendResultDelivery;
     };
 
-    let nextIndex = 0;
-    const worker = async (): Promise<void> => {
-      while (true) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
+    const processBatch = async (startIndex: number, endIndex: number) => {
+      let nextIndex = startIndex;
 
-        if (currentIndex >= recipients.length) {
-          return;
+      const worker = async (): Promise<void> => {
+        while (true) {
+          ensureNotAborted();
+          const currentIndex = nextIndex;
+          nextIndex += 1;
+
+          if (currentIndex >= endIndex) {
+            return;
+          }
+
+          deliveries[currentIndex] = await sendWithRetry(recipients[currentIndex]);
         }
+      };
 
-        deliveries[currentIndex] = await sendWithRetry(recipients[currentIndex]);
-      }
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
     };
 
     let aborted = false;
     try {
-      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      const totalBatches = Math.ceil((recipients.length - offset) / batchSize);
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += 1) {
+        ensureNotAborted();
+        const startIndex = offset;
+        const endIndex = Math.min(recipients.length, startIndex + batchSize);
+
+        await processBatch(startIndex, endIndex);
+
+        offset = endIndex;
+        await persistCheckpoint('running');
+      }
     } catch (error) {
       if (error instanceof BroadcastAbortedError) {
         aborted = true;
+        if (!notifiedAbort) {
+          const status =
+            error.reason === 'telegram_limit_exceeded' || error.reason === 'oom_signal'
+              ? 'paused'
+              : 'aborted';
+          const checkpoint = await persistCheckpoint(status);
+          if (options.onAdminNotification) {
+            await options.onAdminNotification({
+              jobId,
+              status,
+              reason: error.reason,
+              checkpoint,
+              adminChat: input.adminChat,
+            });
+          }
+        }
         for (let index = 0; index < deliveries.length; index += 1) {
           if (!deliveries[index]) {
             deliveries[index] = {
@@ -637,39 +1026,32 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       }
     }
 
-    const delivered = deliveries.filter((entry) => !entry.error).length;
-    const failed = deliveries.length - delivered;
     const durationMs = now() - startedAt;
-
-    const errorCounts = deliveries.reduce((acc, entry) => {
-      if (!entry.error) {
-        return acc;
-      }
-
-      const key = `${entry.error.name}:${entry.error.message}`;
-      const current = acc.get(key);
-      const nextCount = (current?.count ?? 0) + 1;
-
-      acc.set(key, { name: entry.error.name, message: entry.error.message, count: nextCount });
-
-      return acc;
-    }, new Map<string, { name: string; message: string; count: number }>());
-
-    const topErrors = Array.from(errorCounts.values())
-      .sort((left, right) => right.count - left.count)
-      .slice(0, 3);
+    const topErrors = Object.entries(
+      deliveries
+        .filter((entry): entry is BroadcastSendResultDelivery & { error: { name: string } } => !!entry?.error)
+        .reduce<Record<string, number>>((acc, entry) => {
+          const key = `${entry.error.name}:${entry.error.message}`;
+          acc[key] = (acc[key] ?? 0) + 1;
+          return acc;
+        }, {}),
+    )
+      .sort(([, leftCount], [, rightCount]) => rightCount - leftCount)
+      .slice(0, 3)
+      .map(([error, count]) => ({ error, count }));
 
     const summaryDetails = {
-      requestedBy,
-      recipients: deliveries.length,
+      requestedBy: input.requestedBy,
+      recipients: recipients.length,
       filters: filters ?? null,
       source: resolved.source ?? null,
-      delivered,
-      failed,
+      delivered: deliveredCount,
+      failed: failedCount,
       poolSize: concurrency,
       throttled429: throttledErrors,
       durationMs,
       topErrors,
+      jobId,
     };
 
     if (aborted && abortedError) {
@@ -682,15 +1064,17 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       options.logger?.info?.('broadcast_summary', summaryDetails);
     }
 
+    const completedAt = new Date(startedAt + durationMs);
+
     await options.telemetry?.record({
-      requestedBy,
-      recipients: deliveries.length,
-      delivered,
-      failed,
+      requestedBy: input.requestedBy,
+      recipients: recipients.length,
+      delivered: deliveredCount,
+      failed: failedCount,
       throttled429: throttledErrors,
       durationMs,
       startedAt: new Date(startedAt),
-      completedAt: new Date(startedAt + durationMs),
+      completedAt,
       status: aborted && abortedError ? 'aborted' : 'ok',
       abortReason: abortedError?.reason,
       error: abortedError
@@ -699,15 +1083,19 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       filters,
     });
 
+    if (!aborted) {
+      await deleteCheckpoint(options.progressKv, jobId, options.logger);
+    }
+
     if (aborted && abortedError) {
       throw abortedError;
     }
 
     return {
-      delivered,
-      failed,
+      delivered: deliveredCount,
+      failed: failedCount,
       deliveries,
-      recipients: deliveries.length,
+      recipients: recipients.length,
       durationMs,
       source: resolved.source ?? null,
       sample: recipientsSample,
@@ -735,6 +1123,10 @@ export const createImmediateBroadcastSender = (
     telemetry: options.telemetry,
     emergencyStop: options.emergencyStop,
     maxTextLength: options.maxTextLength,
+    progressKv: options.progressKv,
+    batchSize: options.batchSize,
+    jobIdGenerator: options.jobIdGenerator,
+    onAdminNotification: options.onAdminNotification,
   });
 
 export const createRegistryBroadcastSender = (
@@ -789,5 +1181,9 @@ export const createRegistryBroadcastSender = (
     telemetry: options.telemetry,
     emergencyStop: options.emergencyStop,
     maxTextLength: options.maxTextLength,
+    progressKv: options.progressKv,
+    batchSize: options.batchSize,
+    jobIdGenerator: options.jobIdGenerator,
+    onAdminNotification: options.onAdminNotification,
   });
 };

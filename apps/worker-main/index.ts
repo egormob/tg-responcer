@@ -887,6 +887,22 @@ const createTransformPayload = (
         pool: poolOverrides,
         telemetry: broadcastTelemetry,
         emergencyStop,
+        progressKv: env.BROADCAST_PENDING_KV,
+        onAdminNotification: async ({ adminChat, jobId, status, reason }) => {
+          if (!adminChat) {
+            return;
+          }
+
+          const statusLabel = status === 'paused' ? '⏸ Пауза' : '❌ Прервано';
+          const reasonLabel = reason.replaceAll('_', ' ');
+          const message = `${statusLabel}: jobId=${jobId}\nПричина: ${reasonLabel}\nКоманды: /broadcast_resume ${jobId} или /cancel_broadcast`;
+
+          await composition.ports.messaging.sendText({
+            chatId: adminChat.chatId,
+            threadId: adminChat.threadId,
+            text: message,
+          });
+        },
       })
     : undefined;
 

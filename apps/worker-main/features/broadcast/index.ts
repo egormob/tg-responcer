@@ -32,6 +32,12 @@ export {
   type CreateRegistryBroadcastSenderOptions,
   type BroadcastEmergencyStopOptions,
   type BroadcastAbortReason,
+  type BroadcastProgressCheckpoint,
+  type BroadcastProgressKvNamespace,
+  type BroadcastCheckpointEntry,
+  loadBroadcastCheckpoint,
+  listBroadcastCheckpoints,
+  deleteBroadcastCheckpoint,
 } from './minimal-broadcast-service';
 export {
   createBroadcastRecipientsStore,

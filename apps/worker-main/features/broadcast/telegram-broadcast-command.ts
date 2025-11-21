@@ -10,10 +10,14 @@ import {
   extractTelegramErrorDetails,
   shouldInvalidateAdminAccess,
 } from '../admin-access/admin-messaging-errors';
-import type {
-  BroadcastSendInput,
-  BroadcastSendResult,
-  SendBroadcast,
+import {
+  listBroadcastCheckpoints,
+  loadBroadcastCheckpoint,
+  type BroadcastSendInput,
+  type BroadcastSendResult,
+  type SendBroadcast,
+  type BroadcastProgressKvNamespace,
+  type BroadcastProgressCheckpoint,
 } from './minimal-broadcast-service';
 import { createAdminHelpSender, type SendAdminHelp } from '../export/telegram-export-command';
 
@@ -153,6 +157,7 @@ export interface CreateTelegramBroadcastCommandHandlerOptions {
   adminErrorRecorder?: AdminCommandErrorRecorder;
   pendingStore?: Map<string, PendingBroadcast>;
   pendingKv?: BroadcastPendingKvNamespace;
+  progressKv?: BroadcastProgressKvNamespace;
   exportLogKv: Pick<KVNamespace, 'put'>;
   sendAdminHelp?: SendAdminHelp;
 }
@@ -172,6 +177,9 @@ const hasArgument = (value: string | undefined): value is string =>
 
 const isBroadcastCommand = (context: TelegramAdminCommandContext) =>
   context.command.toLowerCase() === '/broadcast' && !hasArgument(context.argument);
+
+const isBroadcastResumeCommand = (context: TelegramAdminCommandContext) =>
+  context.command.toLowerCase() === '/broadcast_resume' && hasArgument(context.argument);
 
 const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
   if (context.command.toLowerCase() !== '/admin') {
@@ -234,6 +242,7 @@ export const createTelegramBroadcastCommandHandler = (
 
   const pendingCache = options.pendingStore ?? new Map<string, PendingBroadcast>();
   const pendingKv = options.pendingKv;
+  const progressKv = options.progressKv ?? options.pendingKv;
   const sendAdminHelp =
     options.sendAdminHelp ??
     createAdminHelpSender({
@@ -246,6 +255,14 @@ export const createTelegramBroadcastCommandHandler = (
   const maintenanceState: { lastRunAt: number; promise?: Promise<void> } = { lastRunAt: 0 };
 
   const getUserKey = (userId: string | number | bigint): string => String(userId);
+
+  const generateJobId = () => {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID();
+    }
+
+    return `job-${now().getTime()}`;
+  };
 
   const cleanupExpiredCache = (timestamp: number) => {
     for (const [key, entry] of pendingCache.entries()) {
@@ -376,6 +393,16 @@ export const createTelegramBroadcastCommandHandler = (
       logger.warn('failed to parse broadcast pending entry', { error: toErrorDetails(error) });
       return undefined;
     }
+  };
+
+  const readActiveCheckpoint = async (): Promise<BroadcastProgressCheckpoint | undefined> => {
+    if (!progressKv) {
+      return undefined;
+    }
+
+    const checkpoints = await listBroadcastCheckpoints(progressKv, logger);
+    return checkpoints.find((entry) => entry.checkpoint.status === 'running' || entry.checkpoint.status === 'paused')
+      ?.checkpoint;
   };
 
   const savePendingEntry = async (userKey: string, entry: PendingBroadcast): Promise<void> => {
@@ -918,9 +945,10 @@ export const createTelegramBroadcastCommandHandler = (
     scheduleMaintenance('command');
 
     const broadcastRequested = isBroadcastCommand(context);
+    const resumeRequested = isBroadcastResumeCommand(context);
     const unsupportedAdminBroadcast = !broadcastRequested && isUnsupportedAdminBroadcast(context);
 
-    if (!broadcastRequested && !unsupportedAdminBroadcast) {
+    if (!broadcastRequested && !unsupportedAdminBroadcast && !resumeRequested) {
       const userKey = getUserKey(context.from.userId);
       const entry = await loadPendingEntry(userKey, currentTime);
       if (entry) {
@@ -941,6 +969,93 @@ export const createTelegramBroadcastCommandHandler = (
     const isAdmin = await options.adminAccess.isAdmin(context.from.userId);
     if (!isAdmin) {
       return undefined;
+    }
+
+    if (resumeRequested) {
+      const jobId = context.argument?.trim().split(/\s+/)[0];
+
+      if (!jobId) {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: 'Укажите jobId: /broadcast_resume <jobId>',
+        });
+
+        return json({ error: 'jobId_required' }, { status: 400 });
+      }
+
+      const checkpoint = await loadBroadcastCheckpoint(progressKv, jobId, logger);
+
+      if (!checkpoint) {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: `Не найдено сохранённое состояние для ${jobId}.`,
+        });
+
+        return json({ error: 'checkpoint_not_found' }, { status: 404 });
+      }
+
+      if (checkpoint.status === 'running') {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: `Задача ${jobId} уже выполняется.`,
+        });
+
+        return json({ status: 'already_running', jobId }, { status: 200 });
+      }
+
+      const payload: BroadcastSendInput = {
+        text: checkpoint.text,
+        requestedBy: String(context.from.userId),
+        filters: checkpoint.filters,
+        jobId: checkpoint.jobId,
+        resumeFrom: checkpoint,
+        adminChat: { chatId: context.chat.id, threadId: context.chat.threadId },
+      };
+
+      const startedAt = now();
+      const runBroadcast = async () => {
+        try {
+          await options.sendBroadcast(payload);
+
+          await options.messaging.sendText({
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+            text: `Возобновление ${jobId} завершено.`,
+          });
+        } catch (error) {
+          logger.error('broadcast resume failed', {
+            userId: context.from.userId,
+            chatId: context.chat.id,
+            threadId: context.chat.threadId ?? null,
+            jobId,
+            error: toErrorDetails(error),
+          });
+
+          await options.messaging.sendText({
+            chatId: context.chat.id,
+            threadId: context.chat.threadId,
+            text: `Не удалось возобновить ${jobId}. Попробуйте позже.`,
+          });
+        } finally {
+          await persistBroadcastLog({
+            audience: { mode: 'all', notFound: [], total: checkpoint.total },
+            requestedBy: context.from.userId,
+            startedAt,
+          });
+        }
+      };
+
+      const resumePromise = runBroadcast();
+      if (context.waitUntil) {
+        context.waitUntil(resumePromise);
+      } else {
+        await resumePromise;
+      }
+
+      return json({ status: 'resuming', jobId }, { status: 200 });
     }
 
     if (unsupportedAdminBroadcast) {
@@ -974,6 +1089,17 @@ export const createTelegramBroadcastCommandHandler = (
 
     const timestamp = now().getTime();
     cleanupExpiredCache(timestamp);
+
+    const activeCheckpoint = await readActiveCheckpoint();
+    if (activeCheckpoint) {
+      await options.messaging.sendText({
+        chatId: context.chat.id,
+        threadId: context.chat.threadId,
+        text: `Уже запущена рассылка jobId=${activeCheckpoint.jobId} (status=${activeCheckpoint.status}).\nИспользуйте /broadcast_resume ${activeCheckpoint.jobId} или /cancel_broadcast.`,
+      });
+
+      return json({ status: 'job_active', jobId: activeCheckpoint.jobId }, { status: 200 });
+    }
 
     const userKey = getUserKey(context.from.userId);
 
@@ -1180,10 +1306,13 @@ export const createTelegramBroadcastCommandHandler = (
           threadId: message.chat.threadId ?? null,
         });
 
+        const jobId = generateJobId();
         const payload: BroadcastSendInput = {
           text: textChunk,
           requestedBy,
           filters,
+          jobId,
+          adminChat: { chatId: message.chat.id, threadId: message.chat.threadId },
         };
 
         const startedAt = now();
