@@ -78,6 +78,7 @@ interface WorkerBindings {
   BROADCAST_RECIPIENTS_KV?: KVNamespace;
   BROADCAST_PENDING_KV?: BroadcastPendingKvNamespace;
   ADMIN_ACCESS_CACHE_TTL_MS?: string | number;
+  BROADCAST_TELEMETRY_KV?: KVNamespace;
   BROADCAST_ENABLED?: string;
   BROADCAST_MAX_PARALLEL?: string | number;
   BROADCAST_MAX_RPS?: string | number;
@@ -980,7 +981,16 @@ const createRequestHandler = async (env: WorkerEnv) => {
     limit: rateLimitConfig.limit,
     windowMs: rateLimitConfig.windowMs,
   });
-  const broadcastTelemetry = createBroadcastTelemetry();
+  const environmentVersion = getEnvironmentVersion(env);
+  const broadcastTelemetry = createBroadcastTelemetry({
+    logger: console,
+    storage: env.BROADCAST_TELEMETRY_KV
+      ? {
+          kv: env.BROADCAST_TELEMETRY_KV,
+          environment: environmentVersion === undefined ? 'default' : String(environmentVersion),
+        }
+      : undefined,
+  });
   const runtime = validateRuntimeConfig(env);
   const aiRuntime = await readAiConcurrencyConfig(env);
   const { overrides: adapters, broadcastMessaging } = createPortOverrides(

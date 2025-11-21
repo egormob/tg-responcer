@@ -682,7 +682,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       options.logger?.info?.('broadcast_summary', summaryDetails);
     }
 
-    options.telemetry?.record({
+    await options.telemetry?.record({
       requestedBy,
       recipients: deliveries.length,
       delivered,
