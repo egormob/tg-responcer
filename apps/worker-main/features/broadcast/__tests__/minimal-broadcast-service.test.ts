@@ -81,6 +81,60 @@ describe('createImmediateBroadcastSender', () => {
     );
   });
 
+  it('caps global send rate at 28 rps and respects retry_after windows', async () => {
+    const recipients = createRecipients(30);
+    const attempts = new Map<string, number>();
+    const waitCalls: number[] = [];
+    const timeline = { now: 0 };
+    const sentAt: number[] = [];
+
+    const wait = vi.fn(async (ms: number) => {
+      waitCalls.push(ms);
+      timeline.now += ms;
+    });
+
+    const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
+      const attempt = attempts.get(chatId) ?? 0;
+      attempts.set(chatId, attempt + 1);
+      sentAt.push(timeline.now);
+
+      if (chatId === 'chat-0' && attempt === 0) {
+        const error = new Error('Too many requests');
+        (error as Error & { status?: number; parameters?: { retry_after?: number } }).status = 429;
+        (error as Error & { status?: number; parameters?: { retry_after?: number } }).parameters = {
+          retry_after: 1,
+        };
+        throw error;
+      }
+
+      return { messageId: `${chatId}-${attempt}` };
+    });
+
+    const sendBroadcast = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      pool: {
+        concurrency: 10,
+        maxRps: 28,
+        rateJitterRatio: 0,
+        baseDelayMs: 10,
+        jitterRatio: 0,
+        wait,
+        random: () => 0,
+        now: () => timeline.now,
+      },
+    });
+
+    const result = await sendBroadcast({ text: 'hello', requestedBy: 'ops' });
+
+    expect(result.delivered).toBe(recipients.length);
+    expect(result.failed).toBe(0);
+    expect(sendText).toHaveBeenCalledTimes(recipients.length + 1);
+    expect(Math.max(...sentAt)).toBeGreaterThanOrEqual(1000);
+    expect(waitCalls.some((delay) => delay >= 1000)).toBe(true);
+  });
+
   it('aborts broadcast when sendText reports fatal error', async () => {
     const recipients = createRecipients(5);
     const sendText = vi.fn(async () => {

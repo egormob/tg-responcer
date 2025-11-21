@@ -87,6 +87,14 @@ export interface BroadcastPoolOptions {
    */
   jitterRatio?: number;
   /**
+   * Глобальный лимит отправок (сообщений в секунду).
+   */
+  maxRps?: number;
+  /**
+   * Джиттер для глобального лимитера отправок.
+   */
+  rateJitterRatio?: number;
+  /**
    * Позволяет подменить генератор случайных чисел (например, в тестах).
    */
   random?: () => number;
@@ -94,6 +102,10 @@ export interface BroadcastPoolOptions {
    * Позволяет переопределить ожидание (используется в тестах).
    */
   wait?: (ms: number) => Promise<void>;
+  /**
+   * Используется вместе с кастомным ожиданием для детерминированных тестов.
+   */
+  now?: () => number;
 }
 
 export interface CreateImmediateBroadcastSenderOptions {
@@ -122,11 +134,15 @@ export interface CreateRegistryBroadcastSenderOptions {
   maxTextLength?: number;
 }
 
-const DEFAULT_POOL_OPTIONS: Required<Omit<BroadcastPoolOptions, 'wait' | 'random'>> = {
+const DEFAULT_POOL_OPTIONS: Required<
+  Omit<BroadcastPoolOptions, 'wait' | 'random' | 'now'>
+> = {
   concurrency: 4,
   maxAttempts: 3,
   baseDelayMs: 1000,
   jitterRatio: 0.2,
+  maxRps: 28,
+  rateJitterRatio: 0.1,
 };
 
 const DEFAULT_BROADCAST_MAX_TEXT_LENGTH = 3970;
@@ -153,6 +169,38 @@ const computeDelay = (
   }
 
   return Math.max(computedDelay, retryAfterMs);
+};
+
+const createRateLimiter = (
+  maxRps: number,
+  rateJitterRatio: number,
+  random: () => number,
+  wait: (ms: number) => Promise<void>,
+  now: () => number,
+): (() => Promise<void>) => {
+  const intervalMs = Math.ceil(1000 / Math.max(1, Math.floor(maxRps)));
+  const jitterRatio = clamp(rateJitterRatio, 0, 1);
+  let nextSlotAt = 0;
+
+  return async () => {
+    const current = now();
+
+    if (nextSlotAt === 0) {
+      nextSlotAt = current + intervalMs;
+      return;
+    }
+
+    const slotAt = Math.max(current, nextSlotAt);
+    const jitterMs = intervalMs * jitterRatio * random();
+    const scheduledAt = slotAt + jitterMs;
+    const delayMs = Math.max(0, Math.floor(scheduledAt - current));
+
+    nextSlotAt = slotAt + intervalMs;
+
+    if (delayMs > 0) {
+      await wait(delayMs);
+    }
+  };
 };
 
 const isTooManyRequestsError = (error: unknown): error is Error & { status?: number } => {
@@ -304,14 +352,23 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const poolOptions = {
     ...DEFAULT_POOL_OPTIONS,
     ...options.pool,
-  } satisfies Required<Omit<BroadcastPoolOptions, 'wait' | 'random'>>;
+  } satisfies Required<Omit<BroadcastPoolOptions, 'wait' | 'random' | 'now'>>;
   const wait = createWait(options.pool?.wait);
   const random = options.pool?.random ?? Math.random;
+  const now = options.pool?.now ?? Date.now;
   const concurrency = Math.max(1, Math.floor(poolOptions.concurrency));
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
+  const maxRps = Math.max(1, Math.floor(poolOptions.maxRps));
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
   const deliveryMessaging = options.messagingBroadcast ?? options.messaging;
   const maxTextLength = options.maxTextLength ?? DEFAULT_BROADCAST_MAX_TEXT_LENGTH;
+  const rateLimiter = createRateLimiter(
+    maxRps,
+    poolOptions.rateJitterRatio,
+    random,
+    wait,
+    now,
+  );
 
   const normalizeResolveResult = (
     result: Awaited<ReturnType<ResolveRecipients>>,
@@ -351,7 +408,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         filtersToApply,
       ),
     );
-    const startedAt = Date.now();
+    const startedAt = now();
     const recipientsSample = recipients.slice(0, 5).map((recipient) => ({
       chatId: recipient.chatId,
       threadId: recipient.threadId ?? null,
@@ -395,6 +452,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       maxAttempts,
       baseDelayMs: poolOptions.baseDelayMs,
       jitterRatio: poolOptions.jitterRatio,
+      maxRps,
+      rateJitterRatio: poolOptions.rateJitterRatio,
     });
 
     let throttledErrors = 0;
@@ -450,6 +509,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
       while (attempt < maxAttempts) {
         try {
+          await rateLimiter();
           const result = await deliveryMessaging.sendText({
             chatId: recipient.chatId,
             threadId: recipient.threadId,
@@ -579,7 +639,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
     const delivered = deliveries.filter((entry) => !entry.error).length;
     const failed = deliveries.length - delivered;
-    const durationMs = Date.now() - startedAt;
+    const durationMs = now() - startedAt;
 
     const errorCounts = deliveries.reduce((acc, entry) => {
       if (!entry.error) {

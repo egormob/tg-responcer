@@ -119,6 +119,9 @@ interface BroadcastRuntimeConfig {
   maxParallel: number;
   maxRps: number;
   emergencyStopRetryAfterMs: number;
+  baseDelayMs: number;
+  jitterRatio: number;
+  rateJitterRatio: number;
 }
 
 const DEFAULT_AI_MAX_CONCURRENCY = 4;
@@ -130,6 +133,9 @@ const DEFAULT_AI_ENDPOINT_FAILOVER_THRESHOLD = 3;
 const DEFAULT_BROADCAST_MAX_PARALLEL = 4;
 const DEFAULT_BROADCAST_MAX_RPS = 28;
 const DEFAULT_BROADCAST_EMERGENCY_RETRY_AFTER_MS = 5_000;
+const DEFAULT_BROADCAST_BASE_DELAY_MS = 1_000;
+const DEFAULT_BROADCAST_JITTER_RATIO = 0.2;
+const DEFAULT_BROADCAST_RATE_JITTER_RATIO = 0.1;
 
 const toPositiveInteger = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -194,6 +200,30 @@ const toPositiveDurationMs = (value: unknown): number | undefined => {
     const parsed = Number.parseInt(trimmed, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
+    }
+  }
+
+  return undefined;
+};
+
+const toClampedRatio = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value < 0) {
+      return undefined;
+    }
+
+    return Math.min(1, value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+
+    const parsed = Number.parseFloat(trimmed);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.min(1, parsed);
     }
   }
 
@@ -292,6 +322,12 @@ const readBroadcastRuntimeConfig = (env: WorkerEnv): BroadcastRuntimeConfig => {
   const maxParallel = toPositiveInteger(env.BROADCAST_MAX_PARALLEL)
     ?? DEFAULT_BROADCAST_MAX_PARALLEL;
   const maxRps = toPositiveInteger(env.BROADCAST_MAX_RPS) ?? DEFAULT_BROADCAST_MAX_RPS;
+  const baseDelayMs = toPositiveDurationMs(env.BROADCAST_BASE_DELAY_MS)
+    ?? DEFAULT_BROADCAST_BASE_DELAY_MS;
+  const jitterRatio = toClampedRatio(env.BROADCAST_JITTER_RATIO)
+    ?? DEFAULT_BROADCAST_JITTER_RATIO;
+  const rateJitterRatio = toClampedRatio(env.BROADCAST_RATE_JITTER_RATIO)
+    ?? DEFAULT_BROADCAST_RATE_JITTER_RATIO;
   const emergencyStopRetryAfterMs = Math.max(
     DEFAULT_BROADCAST_EMERGENCY_RETRY_AFTER_MS,
     Math.ceil((1000 / Math.max(1, maxRps)) * 5),
@@ -301,6 +337,9 @@ const readBroadcastRuntimeConfig = (env: WorkerEnv): BroadcastRuntimeConfig => {
     maxParallel,
     maxRps,
     emergencyStopRetryAfterMs,
+    baseDelayMs,
+    jitterRatio,
+    rateJitterRatio,
   } satisfies BroadcastRuntimeConfig;
 };
 
@@ -826,7 +865,15 @@ const createTransformPayload = (
     && (typeof env.BROADCAST_ENABLED === 'undefined' ? true : isEnabledFlag(env.BROADCAST_ENABLED));
   const broadcastPendingStore = broadcastEnabled ? getBroadcastSessionStore(env) : undefined;
 
-  const poolOverrides = broadcastRuntime ? { concurrency: broadcastRuntime.maxParallel } : undefined;
+  const poolOverrides = broadcastRuntime
+    ? {
+        concurrency: broadcastRuntime.maxParallel,
+        maxRps: broadcastRuntime.maxRps,
+        baseDelayMs: broadcastRuntime.baseDelayMs,
+        jitterRatio: broadcastRuntime.jitterRatio,
+        rateJitterRatio: broadcastRuntime.rateJitterRatio,
+      }
+    : undefined;
   const emergencyStop = broadcastRuntime
     ? { retryAfterMs: broadcastRuntime.emergencyStopRetryAfterMs }
     : undefined;

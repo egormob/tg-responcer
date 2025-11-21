@@ -58,17 +58,18 @@ Tail [`diag-2025-11-30-broadcast-webhook.md`](../logs/diag-2025-11-30-broadcast-
 
 ### Ограничения и проверки
 - Длина сообщения — до 3970 видимых символов (порог в коде; тексты короче проходят без предупреждений и не требуют повторного вызова `/broadcast`). Более длинные тексты нужно разделять вручную.
-- Глобальная скорость отправки: придерживаться безопасного порога ≤28 сообщений/сек (жёсткий предел ≈30/сек) и контролировать фактический темп рассылки.
+- Глобальная скорость отправки: придерживаться безопасного порога ≤28 сообщений/сек (жёсткий предел ≈30/сек) и контролировать фактический темп рассылки. Значение зашито в конфиге (`BROADCAST_MAX_RPS=28` по умолчанию) и дополнительно логируется при инициализации пула.
+- Контроль 28/s проверяется юнит-тестом `minimal-broadcast-service` с `maxRps=28` и `retry_after=1s`; для локальной валидации гоняйте `npx vitest run broadcast --reporter basic --silent` (или без `--reporter`), т.к. `--reporter dot` в текущей версии Vitest падает `RangeError` и не является регрессией сервиса.
 - На каждый чат отправлять не более 1 сообщения в секунду; при необходимости растягивать рассылку по времени.
 - В текущей модели запрещены вложения и форматирование: отправляем только plain text/эмодзи.
 - Команда отклоняется для пользователей вне whitelist: бот отвечает `forbidden`/`access denied` и ничего не отправляет.
 - Повторное использование `/broadcast` требует повторного ввода команды и текста; промежуточных очередей нет.
 
 ### Управляемый пул отправок (2025-11-24)
-- `minimal-broadcast-service` отправляет сообщения через фиксированный пул. Дефолтные параметры: `poolSize=4`, `maxAttempts=3`, `baseDelayMs=1000`, `jitterRatio=0.2`.
+- `minimal-broadcast-service` отправляет сообщения через фиксированный пул. Дефолтные параметры: `poolSize=4`, `maxAttempts=3`, `baseDelayMs=1000`, `jitterRatio=0.2`, `maxRps=28`, `rateJitterRatio=0.1` (все значения можно переопределить через `BROADCAST_MAX_PARALLEL`, `BROADCAST_BASE_DELAY_MS`, `BROADCAST_JITTER_RATIO`, `BROADCAST_MAX_RPS`, `BROADCAST_RATE_JITTER_RATIO`).
 - При `429 Too Many Requests` считывается `retry_after` (если Telegram вернул его) и используется максимальное значение между `retry_after` и экспоненциальным бэкоффом.
 - Логи Cloudflare:
-  - `broadcast pool initialized` — фиксирует `requestedBy`, `recipients`, `poolSize`, `maxAttempts`, `baseDelayMs`, `jitterRatio`.
+  - `broadcast pool initialized` — фиксирует `requestedBy`, `recipients`, `poolSize`, `maxAttempts`, `baseDelayMs`, `jitterRatio`, `maxRps`, `rateJitterRatio`.
   - `broadcast throttled` — появляется на каждом `429`, показывает `attempt`, `delayMs`, `retryAfterMs` и `poolSize`.
   - `broadcast pool completed` — итог рассылки: `delivered`, `failed`, `throttled429`, `durationMs`.
 - Историю запусков (включая `delivered`, `failed`, `throttled429`, `durationMs`, `requestedBy`, статус `ok/aborted`) можно получить по
