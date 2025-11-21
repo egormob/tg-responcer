@@ -30,7 +30,7 @@ id = "ec8ca40dbcca469fa73fe6f3850ef596"
 
 [[kv_namespaces]]
 binding = "BROADCAST_TELEMETRY_KV"
-id = "cfb9a0f7e41e4a7eac09f2f83a3c70c1"
+id = "ec8ca40dbcca469fa73fe6f3850ef596"
 
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
