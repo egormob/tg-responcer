@@ -199,6 +199,29 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
   };
 
+  it('sends a single warning when the text is too long', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock, maxTextLength: 10 });
+
+    await startBroadcastFlow(handler);
+
+    const message = createIncomingMessage('x'.repeat(50));
+
+    const result = await handler.handleMessage(message);
+    const duplicateResult = await handler.handleMessage(message);
+
+    expect(result).toBe('handled');
+    expect(duplicateResult).toBe('handled');
+    expect(sendTextMock).toHaveBeenLastCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: buildExpectedTooLongMessage(40),
+    });
+    expect(
+      sendTextMock.mock.calls.filter(([payload]) => payload.text === buildExpectedTooLongMessage(40)).length,
+    ).toBe(1);
+  });
+
   const submitTextAndAwaitPrompt = async (
     handler: ReturnType<typeof createTelegramBroadcastCommandHandler>,
     text: string,
