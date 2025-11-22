@@ -94,7 +94,7 @@ const createStartDedupeStore = (kv?: StartDedupeKvNamespace): StartCommandDedupe
 
       if (kv) {
         try {
-          const existing = await kv.get(key);
+          const existing = await kv.get(key, 'text');
           if (existing !== null) {
             memoryCache.set(key, now + START_DEDUP_TTL_MS);
             return false;
