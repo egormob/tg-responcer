@@ -613,8 +613,10 @@ interface CreateBroadcastSenderOptions {
   progressKv?: BroadcastProgressKvNamespace;
   progressTtlSeconds?: number;
   batchSize?: number;
+  maxBatchTextBytes?: number;
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
+  watchdog?: BroadcastWatchdogOptions;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
