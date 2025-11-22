@@ -412,6 +412,17 @@ export const createRouter = (options: RouterOptions) => {
   const adminAiModes = new Map<string, 'on' | 'off'>();
   const isAdminAiModeOff = (userId?: string) =>
     typeof userId === 'string' && adminAiModes.get(userId) === 'off';
+  const allowScopedCommandsForUser = (userId: string) => {
+    if (typeof userId !== 'string' || userId.length === 0) {
+      return;
+    }
+
+    for (const descriptor of systemCommands.descriptors) {
+      if (isCommandAllowedForRole(descriptor, 'scoped')) {
+        systemCommands.register(descriptor.name, userId);
+      }
+    }
+  };
 
   systemCommandHandlers.set('/ai_admin_on', async ({ sendText, message }) => {
     if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
@@ -531,6 +542,7 @@ export const createRouter = (options: RouterOptions) => {
           const isAiEnableCommand = normalizedCommand === '/ai_admin_on';
 
           adminAiModes.set(systemCommand.userId, isAiEnableCommand ? 'on' : 'off');
+          allowScopedCommandsForUser(systemCommand.userId);
         }
 
         return (
@@ -740,11 +752,12 @@ export const createRouter = (options: RouterOptions) => {
         const isAiEnableCommand = matchedCommand.command === '/ai_admin_on';
 
         adminAiModes.set(message.user.userId, isAiEnableCommand ? 'on' : 'off');
+        allowScopedCommandsForUser(message.user.userId);
       }
 
       const handler = systemCommandHandlers.get(matchedCommand.command);
       if (!handler) {
-        return jsonResponse({ status: 'ok', messageId: null });
+        return undefined;
       }
 
       const sendSystemCommandText = async (payload: { text: string; route: string }) => {
