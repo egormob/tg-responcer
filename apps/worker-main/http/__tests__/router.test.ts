@@ -558,6 +558,153 @@ describe('http router', () => {
     await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: null });
   });
 
+  it('disables AI mode on /admin system command for scoped admin', async () => {
+    const handleMessage = vi.fn();
+    const messaging = createMessagingMock();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const systemCommands = createSystemCommandRegistry();
+    let currentText = '/admin';
+    const transformPayload = Object.assign(
+      vi.fn().mockImplementation(() => ({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-ai' },
+          chat: { id: 'chat-ai' },
+          text: currentText,
+          messageId: 'admin-msg-1',
+          receivedAt: new Date('2024-05-05T00:00:00.000Z'),
+        },
+      })),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const request = () =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+    const adminResponse = await router.handle(request());
+    expect(adminResponse.status).toBe(200);
+
+    currentText = 'hello after admin';
+    const dialogResponse = await router.handle(request());
+
+    expect(dialogResponse.status).toBe(200);
+    await expect(dialogResponse.json()).resolves.toEqual({ status: 'ok', messageId: null });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('processes dialog message after enabling AI mode via /AI_admin_on', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok' },
+    });
+    const messaging = createMessagingMock();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const systemCommands = createSystemCommandRegistry();
+    let currentText = '/ai_admin_on';
+    const transformPayload = Object.assign(
+      vi.fn().mockImplementation(() => ({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-ai-on' },
+          chat: { id: 'chat-ai-on' },
+          text: currentText,
+          messageId: 'admin-msg-2',
+          receivedAt: new Date('2024-05-05T01:00:00.000Z'),
+        },
+      })),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const request = () =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+    const enableResponse = await router.handle(request());
+    expect(enableResponse.status).toBe(200);
+
+    currentText = 'dialog after ai on';
+    const dialogResponse = await router.handle(request());
+
+    expect(dialogResponse.status).toBe(200);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('dialog after ai on');
+  });
+
+  it('turns AI mode off again after any other system command following /AI_admin_on', async () => {
+    const handleMessage = vi.fn();
+    const messaging = createMessagingMock();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const systemCommands = createSystemCommandRegistry();
+    let currentText = '/ai_admin_on';
+    const transformPayload = Object.assign(
+      vi.fn().mockImplementation(() => ({
+        kind: 'message',
+        message: {
+          user: { userId: 'admin-ai-off' },
+          chat: { id: 'chat-ai-off' },
+          text: currentText,
+          messageId: 'admin-msg-3',
+          receivedAt: new Date('2024-05-05T02:00:00.000Z'),
+        },
+      })),
+      { systemCommands },
+    );
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const request = () =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+    const enableResponse = await router.handle(request());
+    expect(enableResponse.status).toBe(200);
+
+    currentText = '/admin status';
+    const statusResponse = await router.handle(request());
+    expect(statusResponse.status).toBe(200);
+
+    currentText = 'dialog after status';
+    const dialogResponse = await router.handle(request());
+    expect(dialogResponse.status).toBe(200);
+    await expect(dialogResponse.json()).resolves.toEqual({ status: 'ok', messageId: null });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
   it('sends short denial for non-admin /admin commands', async () => {
     const handleMessage = vi.fn().mockResolvedValue({
       status: 'replied',

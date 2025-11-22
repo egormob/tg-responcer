@@ -407,6 +407,22 @@ export interface RouterHandleContext {
 export const createRouter = (options: RouterOptions) => {
   const defaultSystemCommands = createSystemCommandRegistry();
   const systemCommandHandlers = createDefaultSystemCommandHandlers();
+  const adminAiModes = new Map<string, 'on' | 'off'>();
+  const isAdminAiModeOff = (userId?: string) =>
+    typeof userId === 'string' && adminAiModes.get(userId) === 'off';
+
+  systemCommandHandlers.set('/ai_admin_on', async ({ sendText, message }) => {
+    if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
+      adminAiModes.set(message.user.userId, 'on');
+    }
+
+    const messageId = await sendText({
+      text: 'Режим ИИ включен',
+      route: 'system_command_ai_admin_on',
+    });
+
+    return { kind: 'handled', messageId };
+  });
   const defaultTransformPayload: TransformPayloadWithCommands = Object.assign(
     async (payload: unknown) => parseIncomingMessage(payload),
     { systemCommands: defaultSystemCommands },
@@ -709,6 +725,18 @@ export const createRouter = (options: RouterOptions) => {
         }
       }
 
+      const isScopedAdminCommand =
+        isCommandAllowedForRole(matchedCommand.descriptor, 'scoped') &&
+        matchedCommand.descriptor.bareName === '/admin';
+
+      if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
+        if (matchedCommand.command === '/ai_admin_on') {
+          adminAiModes.set(message.user.userId, 'on');
+        } else if (isScopedAdminCommand) {
+          adminAiModes.set(message.user.userId, 'off');
+        }
+      }
+
       const handler = systemCommandHandlers.get(matchedCommand.command);
       if (!handler) {
         return jsonResponse({ status: 'ok', messageId: null });
@@ -765,6 +793,10 @@ export const createRouter = (options: RouterOptions) => {
     const systemCommandResponse = await maybeHandleSystemCommand();
     if (systemCommandResponse) {
       return systemCommandResponse;
+    }
+
+    if (isAdminAiModeOff(message.user.userId)) {
+      return jsonResponse({ status: 'ok', messageId: null });
     }
 
     const runDialog = async () => {
