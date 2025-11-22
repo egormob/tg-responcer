@@ -917,7 +917,7 @@ const createTransformPayload = (
               ? `Курсор: offset=${checkpoint.offset}/${checkpoint.total}${remaining !== null ? `, remaining=${remaining}` : ''}`
               : null,
             ttlSeconds !== null ? `TTL чекпоинта: ${ttlSeconds}s` : null,
-            `Команды: /broadcast_resume ${jobId} или /cancel_broadcast`,
+            `Команды: /broadcast_resume ${jobId}, /broadcast_pause ${jobId}, /broadcast_status ${jobId}, /broadcast_end ${jobId}, /cancel_broadcast`,
           ].filter((line): line is string => Boolean(line));
 
           const message = lines.join('\n');

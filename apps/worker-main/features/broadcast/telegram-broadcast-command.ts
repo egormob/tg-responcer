@@ -82,6 +82,17 @@ export const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправле�
 const BROADCAST_CANCEL_COMMAND = '/cancel_broadcast';
 
 const buildResumeCommand = (jobId: string) => `/broadcast_resume ${jobId}`;
+const buildPauseCommand = (jobId: string) => `/broadcast_pause ${jobId}`;
+const buildStatusCommand = (jobId: string) => `/broadcast_status ${jobId}`;
+const buildEndCommand = (jobId: string) => `/broadcast_end ${jobId}`;
+const buildCommandsList = (jobId: string) =>
+  [
+    buildResumeCommand(jobId),
+    buildPauseCommand(jobId),
+    buildStatusCommand(jobId),
+    buildEndCommand(jobId),
+    BROADCAST_CANCEL_COMMAND,
+  ];
 
 export interface PendingBroadcast {
   chatId: string;
@@ -184,6 +195,15 @@ const isBroadcastCommand = (context: TelegramAdminCommandContext) =>
 const isBroadcastResumeCommand = (context: TelegramAdminCommandContext) =>
   context.command.toLowerCase() === '/broadcast_resume' && hasArgument(context.argument);
 
+const isBroadcastPauseCommand = (context: TelegramAdminCommandContext) =>
+  context.command.toLowerCase() === '/broadcast_pause';
+
+const isBroadcastStatusCommand = (context: TelegramAdminCommandContext) =>
+  context.command.toLowerCase() === '/broadcast_status';
+
+const isBroadcastEndCommand = (context: TelegramAdminCommandContext) =>
+  context.command.toLowerCase() === '/broadcast_end';
+
 const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
   if (context.command.toLowerCase() !== '/admin') {
     return false;
@@ -204,9 +224,9 @@ const createBroadcastResponse = (result: BroadcastSendResult, jobId: string | un
     return BROADCAST_SUCCESS_MESSAGE;
   }
 
-  const resumeCommand = buildResumeCommand(jobId);
+  const commands = buildCommandsList(jobId);
 
-  return [`✅ Рассылка отправлена: ${jobId}`, `Команды: ${resumeCommand}, ${BROADCAST_CANCEL_COMMAND}`].join('\n');
+  return [`✅ Рассылка отправлена: ${jobId}`, `Команды: ${commands.join(', ')}`].join('\n');
 };
 
 const parseList = (value: string): string[] =>
@@ -415,6 +435,27 @@ export const createTelegramBroadcastCommandHandler = (
       ?.checkpoint;
   };
 
+  const buildCheckpointStatusMessage = (
+    checkpoint: BroadcastProgressCheckpoint,
+    currentTimestamp: number,
+  ): { text: string; commands: string[] } => {
+    const ttlSecondsRemaining = checkpoint.expiresAt
+      ? Math.max(0, Math.floor((new Date(checkpoint.expiresAt).getTime() - currentTimestamp) / 1000))
+      : checkpoint.ttlSeconds ?? null;
+    const remaining = Math.max(0, checkpoint.total - checkpoint.offset);
+    const commands = buildCommandsList(checkpoint.jobId);
+
+    const lines = [
+      `Активный jobId=${checkpoint.jobId} (status=${checkpoint.status}${checkpoint.reason ? `, reason=${checkpoint.reason}` : ''})`,
+      `Курсор: offset=${checkpoint.offset}/${checkpoint.total}, remaining=${remaining}`,
+      `Доставлено=${checkpoint.delivered}, ошибки=${checkpoint.failed}, throttled429=${checkpoint.throttled429}`,
+      ttlSecondsRemaining !== null ? `TTL чекпоинта: ${ttlSecondsRemaining}s` : null,
+      `Команды: ${commands.join(', ')}`,
+    ].filter(Boolean) as string[];
+
+    return { text: lines.join('\n'), commands };
+  };
+
   const savePendingEntry = async (userKey: string, entry: PendingBroadcast): Promise<void> => {
     pendingCache.set(userKey, entry);
 
@@ -435,6 +476,22 @@ export const createTelegramBroadcastCommandHandler = (
         error: toErrorDetails(error),
       });
     }
+  };
+
+  let activeJobId: string | undefined;
+  let activeBroadcastAbortController: AbortController | undefined;
+
+  const markActiveBroadcast = (jobId: string): AbortSignal => {
+    const controller = new AbortController();
+    activeJobId = jobId;
+    activeBroadcastAbortController = controller;
+
+    return controller.signal;
+  };
+
+  const clearActiveBroadcast = () => {
+    activeJobId = undefined;
+    activeBroadcastAbortController = undefined;
   };
 
   const deletePendingEntry = async (userKey: string): Promise<void> => {
@@ -956,9 +1013,12 @@ export const createTelegramBroadcastCommandHandler = (
 
     const broadcastRequested = isBroadcastCommand(context);
     const resumeRequested = isBroadcastResumeCommand(context);
+    const pauseRequested = isBroadcastPauseCommand(context);
+    const statusRequested = isBroadcastStatusCommand(context);
+    const endRequested = isBroadcastEndCommand(context);
     const unsupportedAdminBroadcast = !broadcastRequested && isUnsupportedAdminBroadcast(context);
 
-    if (!broadcastRequested && !unsupportedAdminBroadcast && !resumeRequested) {
+    if (!broadcastRequested && !unsupportedAdminBroadcast && !resumeRequested && !pauseRequested && !statusRequested && !endRequested) {
       const userKey = getUserKey(context.from.userId);
       const entry = await loadPendingEntry(userKey, currentTime);
       if (entry) {
@@ -979,6 +1039,59 @@ export const createTelegramBroadcastCommandHandler = (
     const isAdmin = await options.adminAccess.isAdmin(context.from.userId);
     if (!isAdmin) {
       return undefined;
+    }
+
+    if (pauseRequested || statusRequested || endRequested) {
+      const checkpoint = await readActiveCheckpoint();
+
+      if (!checkpoint) {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: 'Активная рассылка не найдена. Запустите /broadcast.',
+        });
+
+        return json({ status: 'job_not_found' }, { status: 404 });
+      }
+
+      const jobIdArgument = context.argument?.trim().split(/\s+/)[0];
+      if (hasArgument(jobIdArgument) && jobIdArgument !== checkpoint.jobId) {
+        await options.messaging.sendText({
+          chatId: context.chat.id,
+          threadId: context.chat.threadId,
+          text: `Активный jobId=${checkpoint.jobId}, указанный jobId=${jobIdArgument} не совпадает.`,
+        });
+
+        return json({ status: 'job_mismatch', jobId: checkpoint.jobId }, { status: 409 });
+      }
+
+      if (
+        (pauseRequested || endRequested)
+        && checkpoint.jobId === activeJobId
+        && activeBroadcastAbortController
+        && !activeBroadcastAbortController.signal.aborted
+      ) {
+        activeBroadcastAbortController.abort();
+
+        logger.info('broadcast abort requested via command', {
+          userId: context.from.userId,
+          chatId: context.chat.id,
+          threadId: context.chat.threadId ?? null,
+          jobId: checkpoint.jobId,
+          command: context.command,
+        });
+      }
+
+      const { text } = buildCheckpointStatusMessage(checkpoint, currentTime);
+      const prefix = pauseRequested ? '⏸ Запрос паузы' : endRequested ? '⏹ Запрос завершения' : 'ℹ️ Статус рассылки';
+
+      await options.messaging.sendText({
+        chatId: context.chat.id,
+        threadId: context.chat.threadId,
+        text: [prefix, text].join('\n'),
+      });
+
+      return json({ status: pauseRequested ? 'pause_ack' : endRequested ? 'end_ack' : 'status', jobId: checkpoint.jobId }, { status: 200 });
     }
 
     if (resumeRequested) {
@@ -1023,6 +1136,7 @@ export const createTelegramBroadcastCommandHandler = (
         jobId: checkpoint.jobId,
         resumeFrom: checkpoint,
         adminChat: { chatId: context.chat.id, threadId: context.chat.threadId },
+        abortSignal: markActiveBroadcast(checkpoint.jobId),
       };
 
       const startedAt = now();
@@ -1050,6 +1164,7 @@ export const createTelegramBroadcastCommandHandler = (
             text: `Не удалось возобновить ${jobId}. Попробуйте позже.`,
           });
         } finally {
+          clearActiveBroadcast();
           await persistBroadcastLog({
             audience: { mode: 'all', notFound: [], total: checkpoint.total },
             requestedBy: context.from.userId,
@@ -1102,10 +1217,12 @@ export const createTelegramBroadcastCommandHandler = (
 
     const activeCheckpoint = await readActiveCheckpoint();
     if (activeCheckpoint) {
+      const { text } = buildCheckpointStatusMessage(activeCheckpoint, timestamp);
+
       await options.messaging.sendText({
         chatId: context.chat.id,
         threadId: context.chat.threadId,
-        text: `Уже запущена рассылка jobId=${activeCheckpoint.jobId} (status=${activeCheckpoint.status}).\nИспользуйте /broadcast_resume ${activeCheckpoint.jobId} или /cancel_broadcast.`,
+        text: [`Уже запущена рассылка:`, text].join('\n'),
       });
 
       return json({ status: 'job_active', jobId: activeCheckpoint.jobId }, { status: 200 });
@@ -1323,6 +1440,7 @@ export const createTelegramBroadcastCommandHandler = (
           filters,
           jobId,
           adminChat: { chatId: message.chat.id, threadId: message.chat.threadId },
+          abortSignal: markActiveBroadcast(jobId),
         };
 
         const startedAt = now();
@@ -1381,6 +1499,8 @@ export const createTelegramBroadcastCommandHandler = (
               await handleMessagingFailure(requestedBy, 'broadcast_failure_notice', sendError);
             }
           }
+
+          clearActiveBroadcast();
 
           await persistBroadcastLog({
             audience,

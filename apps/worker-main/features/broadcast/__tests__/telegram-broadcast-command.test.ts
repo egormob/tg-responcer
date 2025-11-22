@@ -19,7 +19,13 @@ const createContext = ({
   command = '/broadcast',
   argument,
 }: {
-  command?: '/broadcast' | '/admin';
+  command?:
+    | '/broadcast'
+    | '/broadcast_status'
+    | '/broadcast_pause'
+    | '/broadcast_end'
+    | '/broadcast_resume'
+    | '/admin';
   argument?: string;
 } = {}): TelegramAdminCommandContext => {
   const trimmedArgument = argument?.trim();
@@ -131,7 +137,10 @@ const createProgressKv = () => {
 };
 
 const buildBroadcastSuccessMessage = (jobId = 'job-123') =>
-  [`✅ Рассылка отправлена: ${jobId}`, `Команды: /broadcast_resume ${jobId}, /cancel_broadcast`].join('\n');
+  [
+    `✅ Рассылка отправлена: ${jobId}`,
+    `Команды: /broadcast_resume ${jobId}, /broadcast_pause ${jobId}, /broadcast_status ${jobId}, /broadcast_end ${jobId}, /cancel_broadcast`,
+  ].join('\n');
 
 const assertBroadcastSuccessText = (value: unknown, jobId?: string) => {
   expect(typeof value).toBe('string');
@@ -144,7 +153,7 @@ const assertBroadcastSuccessText = (value: unknown, jobId?: string) => {
   }
 
   expect(message).toMatch(
-    /^✅ Рассылка отправлена: ([\w-]+)\nКоманды: \/broadcast_resume \1, \/cancel_broadcast$/, // eslint-disable-line prefer-regex-literals
+    /^✅ Рассылка отправлена: ([\w-]+)\nКоманды: \/broadcast_resume \1, \/broadcast_pause \1, \/broadcast_status \1, \/broadcast_end \1, \/cancel_broadcast$/, // eslint-disable-line prefer-regex-literals
   );
 };
 
@@ -296,6 +305,161 @@ describe('createTelegramBroadcastCommandHandler', () => {
     });
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toEqual({ status: 'job_active', jobId: 'job-active' });
+  });
+
+  it('returns status summary for active checkpoint when /broadcast_status is used', async () => {
+    const { kv: progressKv } = createProgressKv();
+    const checkpoint = {
+      jobId: 'job-status',
+      status: 'paused',
+      offset: 3,
+      delivered: 2,
+      failed: 1,
+      throttled429: 0,
+      total: 10,
+      text: 'paused run',
+      textHash: 'hash-text',
+      audienceHash: 'hash-audience',
+      pool: { concurrency: 2, maxRps: 28 },
+      filters: undefined,
+      source: 'D1',
+      updatedAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      ttlSeconds: 60,
+      expiresAt: new Date('2025-01-01T00:01:00Z').toISOString(),
+    };
+
+    await progressKv.put('broadcast:progress:job-status', JSON.stringify({ version: 1, checkpoint }));
+
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock, progressKv, now: () => new Date('2025-01-01T00:00:10Z') });
+
+    const response = await handler.handleCommand(createContext({ command: '/broadcast_status' }));
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: expect.stringContaining('/broadcast_end job-status'),
+    });
+    expect(await response?.json()).toEqual({ status: 'status', jobId: 'job-status' });
+  });
+
+  it('validates jobId argument for pause command', async () => {
+    const { kv: progressKv } = createProgressKv();
+    const checkpoint = {
+      jobId: 'job-pause',
+      status: 'running',
+      offset: 1,
+      delivered: 1,
+      failed: 0,
+      throttled429: 0,
+      total: 5,
+      text: 'pause me',
+      textHash: 'hash-text',
+      audienceHash: 'hash-audience',
+      pool: { concurrency: 1, maxRps: 28 },
+      filters: undefined,
+      source: 'D1',
+      updatedAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    };
+
+    await progressKv.put('broadcast:progress:job-pause', JSON.stringify({ version: 1, checkpoint }));
+
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock, progressKv });
+
+    const response = await handler.handleCommand(
+      createContext({ command: '/broadcast_pause', argument: 'job-other' }),
+    );
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Активный jobId=job-pause, указанный jobId=job-other не совпадает.',
+    });
+    expect(response?.status).toBe(409);
+    await expect(response?.json()).resolves.toEqual({ status: 'job_mismatch', jobId: 'job-pause' });
+  });
+
+  it('informs when pause/status/end are requested without checkpoint', async () => {
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const { handler } = createHandler({ sendTextMock });
+
+    const response = await handler.handleCommand(createContext({ command: '/broadcast_pause' }));
+
+    expect(sendTextMock).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      text: 'Активная рассылка не найдена. Запустите /broadcast.',
+    });
+    expect(response?.status).toBe(404);
+    await expect(response?.json()).resolves.toEqual({ status: 'job_not_found' });
+  });
+
+  it('aborts active broadcast when pause is requested', async () => {
+    const { kv: progressKv } = createProgressKv();
+    const checkpoint = {
+      jobId: 'job-123',
+      status: 'paused' as const,
+      offset: 0,
+      delivered: 0,
+      failed: 0,
+      throttled429: 0,
+      total: 3,
+      text: 'pause me',
+      textHash: 'hash-text',
+      audienceHash: 'hash-audience',
+      pool: { concurrency: 1, maxRps: 28 },
+      filters: undefined,
+      source: 'D1',
+      updatedAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    };
+
+    await progressKv.put('broadcast:progress:job-123', JSON.stringify({ version: 1, checkpoint }));
+
+    const abortDeferred = createDeferred<void>();
+    const sendBroadcastMock = vi.fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockImplementation(async (input) => {
+        input.abortSignal?.addEventListener('abort', () => abortDeferred.resolve());
+
+        await abortDeferred.promise;
+
+        return {
+          delivered: 0,
+          failed: 0,
+          deliveries: [],
+          recipients: 3,
+          durationMs: 0,
+          source: 'D1',
+          sample: [],
+          throttled429: 0,
+        } satisfies BroadcastSendResult;
+      });
+
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const resumeWaitUntil = vi.fn();
+
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, progressKv });
+
+    const resumeResponse = await handler.handleCommand(
+      { ...createContext({ command: '/broadcast_resume', argument: 'job-123' }), waitUntil: resumeWaitUntil },
+    );
+
+    expect(resumeResponse?.status).toBe(200);
+    await expect(resumeResponse?.json()).resolves.toEqual({ status: 'resuming', jobId: 'job-123' });
+
+    expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
+
+    const pauseResponse = await handler.handleCommand(createContext({ command: '/broadcast_pause' }));
+    expect(pauseResponse?.status).toBe(200);
+    await expect(pauseResponse?.json()).resolves.toEqual({ status: 'pause_ack', jobId: 'job-123' });
+
+    const abortSignal = sendBroadcastMock.mock.calls[0]?.[0]?.abortSignal;
+    expect(abortSignal?.aborted).toBe(true);
+
+    abortDeferred.resolve();
+    if (resumeWaitUntil.mock.calls[0]?.[0]) {
+      await resumeWaitUntil.mock.calls[0][0];
+    }
   });
 
   it('sends a single warning when the text is too long', async () => {
