@@ -52,6 +52,17 @@
 - Карточки `progress`/`resumeCommand`/`cancelCommand` в ответе отсутствуют: активных пауз не было, команды возобновления не требовались.
 - Tail фиксирует только `broadcast pool initialized`/`broadcast delivered`/`broadcast delivery failed`/`broadcast pool completed` для того же `jobId`; событий paused/retry_after/checkpoint не появлялось. Подробный лог: [`diag-2025-12-05-broadcast-smoke`](../logs/diag-2025-12-05-broadcast-smoke.md).
 
+### 2025-12-06 — Подтверждение с jobId и подсказкой команд
+- `telegram-broadcast-command` возвращает `✅ Рассылка отправлена: <jobId>` и список команд управления текущей отправкой: `/broadcast_resume`, `/broadcast_pause`, `/broadcast_status`, `/broadcast_end`, `/cancel_broadcast` с подстановкой активного jobId.
+- Inline-кнопки не используются: команды выдаются текстом и срабатывают для активной рассылки (при отсутствии чекпоинта бот отвечает, что активная рассылка не найдена).
+- Тесты (`telegram-broadcast-command.test.ts`) покрывают формирование сообщения и команды для одного активного `jobId`.
+
+### 2025-11-22 — Guardrail smoke 5 адресатов
+- Сценарий: `/broadcast → /everybody → короткий текст → /send`, затем `/broadcast_pause` → `/broadcast_resume`; команды `/status` и `/end` вернули техсообщение «Не успел ответить вовремя…».
+- Диагностика: `totalRuns` вырос с 11 до 12; `lastRun: delivered 2 / failed 3 / throttled429 0 / durationMs 222`, `status: ok`, `progress: null`.
+- Tail: `jobId 6b0361f8-875f-419f-ba84-eddc63a11665`, события init/delivered/failed/summary без `broadcast_watchdog*` или pause/resume; ошибки — `TelegramApiError: Forbidden: bot was blocked by the user` (3 шт.).
+- Вывод: пул и лимиты работают на малой аудитории, но карточка `progress`/команды pause/resume не surfaced в `/diag`, команды `/status`/`/end` недоступны при завершившейся очереди. Лог: [`diag-2025-11-22-broadcast-guardrail`](../logs/diag-2025-11-22-broadcast-guardrail.md).
+
 ## Флаги и токены
 - `TELEGRAM_BOT_TOKEN` — обязателен для обработки команд и отправки сообщений.
 - `ADMIN_TG_IDS` — KV-namespace с whitelisted Telegram ID (`{"whitelist":["123","456"]}` или актуальный формат). Только эти ID могут завершить сценарий рассылки.
@@ -62,7 +73,7 @@
 1. От whitelisted администратора приходит `/broadcast` → бот отвечает «Шаг 1…» и ждёт `/everybody` или явный список user_id/username (через пробел/запятую). Дубликаты и недоступных адресатов бот фиксирует в резюме, пустой ответ повторно вызывает подсказку.
 2. После выбора аудитории бот объявляет «Шаг 2» и ждёт текст (до 3970 видимых символов). Любой короткий или длинный текст попадает в 1000 мс окно ожидания: пока Telegram не закончит доставку, бот не показывает предпросмотр. Если в окне появился единственный фрагмент, бот возвращает предпросмотр и кнопки-подсказки с командами `/send`, `/new_text`, `/cancel_broadcast`.
 3. Если Telegram дробит ввод на несколько сообщений, бот уведомляет «текст отклонён» и просит повторить шаг текста. Только после повторной попытки и успешного шлагбаума администратор может подтвердить `/send`.
-4. `/send` всегда относится к последнему предпросмотру. После подтверждения запуск отправки происходит немедленно (через `waitUntil`), бот фиксирует статус в KV и присылает «✅ Рассылка отправлена!». `/new_text` позволяет заменить текст без выхода, а `/cancel_broadcast` возвращает чат в штатный диалоговый режим и очищает pending-сессию.
+4. `/send` всегда относится к последнему предпросмотру. После подтверждения запуск отправки происходит немедленно (через `waitUntil`), бот фиксирует статус в KV и присылает `✅ Рассылка отправлена: <jobId>` и подсказку команд `/broadcast_resume <jobId>`, `/broadcast_pause <jobId>`, `/broadcast_status <jobId>`, `/broadcast_end <jobId>`, `/cancel_broadcast`. `/new_text` позволяет заменить текст без выхода, а `/cancel_broadcast` возвращает чат в штатный диалоговый режим и очищает pending-сессию.
 
 ### 2025-11-30 — подтверждение шага М8.Ш1
 Tail [`diag-2025-11-30-broadcast-webhook.md`](../logs/diag-2025-11-30-broadcast-webhook.md#tail-успешного-webhook-и-broadcast) фиксирует `/broadcast → /everybody → текст → /send` с успешным шлагбаумом (1000 мс окно, один текстовый пакет), `broadcast recipients resolved (source=d1, recipients>0)` и финальный `broadcast pool completed`. Этот хвост подтверждает, что сценарий М8.Ш1 (мгновенная отправка с новым шлагбаумом и командами `/send`/`/new_text`/`/cancel_broadcast`) отрабатывает без регрессий.
