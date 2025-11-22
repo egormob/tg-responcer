@@ -725,16 +725,10 @@ export const createRouter = (options: RouterOptions) => {
         }
       }
 
-      const isScopedAdminCommand =
-        isCommandAllowedForRole(matchedCommand.descriptor, 'scoped') &&
-        matchedCommand.descriptor.bareName === '/admin';
-
       if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
-        if (matchedCommand.command === '/ai_admin_on') {
-          adminAiModes.set(message.user.userId, 'on');
-        } else if (isScopedAdminCommand) {
-          adminAiModes.set(message.user.userId, 'off');
-        }
+        const isAiEnableCommand = matchedCommand.command === '/ai_admin_on';
+
+        adminAiModes.set(message.user.userId, isAiEnableCommand ? 'on' : 'off');
       }
 
       const handler = systemCommandHandlers.get(matchedCommand.command);

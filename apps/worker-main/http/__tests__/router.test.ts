@@ -694,11 +694,11 @@ describe('http router', () => {
     const enableResponse = await router.handle(request());
     expect(enableResponse.status).toBe(200);
 
-    currentText = '/admin status';
-    const statusResponse = await router.handle(request());
-    expect(statusResponse.status).toBe(200);
+    currentText = '/broadcast';
+    const broadcastResponse = await router.handle(request());
+    expect(broadcastResponse.status).toBe(200);
 
-    currentText = 'dialog after status';
+    currentText = 'dialog after broadcast';
     const dialogResponse = await router.handle(request());
     expect(dialogResponse.status).toBe(200);
     await expect(dialogResponse.json()).resolves.toEqual({ status: 'ok', messageId: null });
