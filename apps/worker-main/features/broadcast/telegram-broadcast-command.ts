@@ -79,6 +79,9 @@ const BROADCAST_CANCEL_MESSAGE =
   '❌ Рассылка отменена. Чтобы отправить новое сообщение, снова выполните /broadcast.';
 
 export const BROADCAST_SUCCESS_MESSAGE = '✅ Рассылка отправлена!';
+const BROADCAST_CANCEL_COMMAND = '/cancel_broadcast';
+
+const buildResumeCommand = (jobId: string) => `/broadcast_resume ${jobId}`;
 
 export interface PendingBroadcast {
   chatId: string;
@@ -194,9 +197,16 @@ const isUnsupportedAdminBroadcast = (context: TelegramAdminCommandContext) => {
   return parts[0]?.toLowerCase() === 'broadcast';
 };
 
-const createBroadcastResponse = (result: BroadcastSendResult) => {
+const createBroadcastResponse = (result: BroadcastSendResult, jobId: string | undefined) => {
   void result;
-  return BROADCAST_SUCCESS_MESSAGE;
+
+  if (!jobId) {
+    return BROADCAST_SUCCESS_MESSAGE;
+  }
+
+  const resumeCommand = buildResumeCommand(jobId);
+
+  return [`✅ Рассылка отправлена: ${jobId}`, `Команды: ${resumeCommand}, ${BROADCAST_CANCEL_COMMAND}`].join('\n');
 };
 
 const parseList = (value: string): string[] =>
@@ -1334,7 +1344,7 @@ export const createTelegramBroadcastCommandHandler = (
               await options.messaging.sendText({
                 chatId: message.chat.id,
                 threadId: message.chat.threadId,
-                text: createBroadcastResponse(result),
+                text: createBroadcastResponse(result, payload.jobId),
               });
             } catch (error) {
               logger.error('failed to send broadcast confirmation', {

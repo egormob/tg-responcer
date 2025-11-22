@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BROADCAST_AUDIENCE_PROMPT,
@@ -130,7 +130,35 @@ const createProgressKv = () => {
   return { kv, store };
 };
 
+const buildBroadcastSuccessMessage = (jobId = 'job-123') =>
+  [`✅ Рассылка отправлена: ${jobId}`, `Команды: /broadcast_resume ${jobId}, /cancel_broadcast`].join('\n');
+
+const assertBroadcastSuccessText = (value: unknown, jobId?: string) => {
+  expect(typeof value).toBe('string');
+
+  const message = String(value);
+
+  if (jobId) {
+    expect(message).toBe(buildBroadcastSuccessMessage(jobId));
+    return;
+  }
+
+  expect(message).toMatch(
+    /^✅ Рассылка отправлена: ([\w-]+)\nКоманды: \/broadcast_resume \1, \/cancel_broadcast$/, // eslint-disable-line prefer-regex-literals
+  );
+};
+
 describe('createTelegramBroadcastCommandHandler', () => {
+  let randomUuidSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    randomUuidSpy = vi.spyOn(crypto, 'randomUUID').mockReturnValue('job-123');
+  });
+
+  afterEach(() => {
+    randomUuidSpy?.mockRestore();
+  });
+
   const createHandler = ({
     isAdmin = true,
     sendTextMock = vi.fn().mockResolvedValue({ messageId: 'sent-1' }),
@@ -415,6 +443,7 @@ describe('createTelegramBroadcastCommandHandler', () => {
         text: 'hello everyone',
         requestedBy: 'admin-1',
         filters: undefined,
+        jobId: 'job-123',
       }),
     );
 
@@ -437,8 +466,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: '✅ Рассылка отправлена!',
+      text: expect.any(String),
     });
+
+    assertBroadcastSuccessText(sendTextMock.mock.calls.at(-1)?.[0]?.text, 'job-123');
   });
 
   it('finalizes collecting_text entries when debounce already elapsed after restart', async () => {
@@ -1290,8 +1321,10 @@ describe('createTelegramBroadcastCommandHandler', () => {
     expect(sendTextMock).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: 'thread-1',
-      text: '✅ Рассылка отправлена!',
+      text: expect.any(String),
     });
+
+    assertBroadcastSuccessText(sendTextMock.mock.calls.at(-1)?.[0]?.text, 'job-123');
   });
 
   it('records diagnostics when prompt delivery fails', async () => {
@@ -1803,8 +1836,10 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: '77',
-      text: '✅ Рассылка отправлена!',
+      text: expect.any(String),
     });
+
+    assertBroadcastSuccessText(messaging.sendText.mock.calls.at(-1)?.[0]?.text);
 
     expect(adminKv.get).toHaveBeenCalledWith('whitelist', 'text');
 
@@ -2042,8 +2077,10 @@ describe('worker integration for broadcast command', () => {
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: 'chat-1',
       threadId: undefined,
-      text: '✅ Рассылка отправлена!',
+      text: expect.any(String),
     });
+
+    assertBroadcastSuccessText(messaging.sendText.mock.calls.at(-1)?.[0]?.text);
 
     vi.resetModules();
   });
