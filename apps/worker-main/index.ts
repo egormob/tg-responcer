@@ -1107,6 +1107,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     transformPayload,
     systemCommands: transformPayload.systemCommands,
     determineCommandRole,
+    startDedupeKv: env.ADMIN_EXPORT_LOG,
     admin: adminRoutes,
   });
 

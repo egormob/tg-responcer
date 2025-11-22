@@ -5,6 +5,7 @@ export interface RouterCommandHandlerContext {
   message: IncomingMessage;
   match: SystemCommandMatch;
   sendText(options: { text: string; route: string }): Promise<string | null>;
+  updateId?: string | number;
 }
 
 export type RouterCommandHandlerResult =
@@ -15,10 +16,33 @@ export type RouterCommandHandler = (
   context: RouterCommandHandlerContext,
 ) => Promise<RouterCommandHandlerResult>;
 
-export const createStartCommandHandler = (): RouterCommandHandler => async ({
+export interface StartCommandDedupe {
+  shouldProcess(updateId?: string | number | null): Promise<boolean>;
+}
+
+export interface StartCommandHandlerOptions {
+  dedupe?: StartCommandDedupe;
+}
+
+export const createStartCommandHandler = (
+  options?: StartCommandHandlerOptions,
+): RouterCommandHandler => async ({
   message,
   sendText,
+  updateId,
 }) => {
+  if (options?.dedupe) {
+    const shouldProcess = await options.dedupe.shouldProcess(updateId);
+    if (shouldProcess === false) {
+      // eslint-disable-next-line no-console
+      console.info('[router] skipping duplicate /start', {
+        updateId,
+        userId: message.user.userId,
+      });
+      return { kind: 'handled', messageId: null };
+    }
+  }
+
   const firstName = message.user.firstName?.trim();
   const greeting = firstName && firstName.length > 0 ? `Привет, ${firstName}!` : 'Привет!';
   const messageId = await sendText({ text: greeting, route: 'system_start' });

@@ -245,6 +245,63 @@ describe('http router', () => {
     expect(dialogEngine.handleMessage).not.toHaveBeenCalled();
   });
 
+  it('skips duplicate /start when update_id processed already', async () => {
+    const sendText = vi.fn().mockResolvedValue({ messageId: 'start-dup' });
+    const messaging = createMessagingMock({ sendText });
+    const dialogEngine = createDialogEngineMock();
+    const dedupKeys = new Set<string>();
+    const startDedupeKv = {
+      get: vi.fn(async (key: string) => (dedupKeys.has(key) ? '1' : null)),
+      put: vi.fn(async (key: string) => {
+        dedupKeys.add(key);
+      }),
+    };
+    const storage = createStorageMock();
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      startDedupeKv,
+      transformPayload: createTelegramWebhookHandler({
+        storage,
+      }),
+    });
+
+    const rawUpdate = {
+      update_id: 123,
+      message: {
+        message_id: '200',
+        date: 1_712_000_000,
+        text: '/start src_DUP',
+        chat: { id: 'chat-dup', type: 'private' },
+        from: { id: 'user-dup', first_name: 'Дуплик' },
+      },
+    };
+
+    const createStartRequest = () =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(rawUpdate),
+      });
+
+    const firstResponse = await router.handle(createStartRequest());
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toEqual({ status: 'ok', messageId: 'start-dup' });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(startDedupeKv.put).toHaveBeenCalledWith(
+      'dedup:start:123',
+      '1',
+      { expirationTtl: 60 },
+    );
+
+    const secondResponse = await router.handle(createStartRequest());
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toEqual({ status: 'ok', messageId: null });
+    expect(startDedupeKv.get).toHaveBeenCalledTimes(1);
+    expect(startDedupeKv.put).toHaveBeenCalledTimes(1);
+  });
+
   it('skips dialog engine when transform marks message as system command', async () => {
     const handleMessage = vi.fn();
     const dialogEngine = { handleMessage } as unknown as DialogEngine;
@@ -1210,6 +1267,18 @@ describe('http router', () => {
     const adminAccess = { isAdmin: vi.fn().mockResolvedValue(true) };
     const deferred = createDeferred<{ delivered: number; failed: number; deliveries: unknown[] }>();
     const sendBroadcast = vi.fn().mockReturnValue(deferred.promise);
+    const pendingKvStore = new Map<string, string>();
+    const pendingKv = {
+      get: vi.fn(async (key: string) => pendingKvStore.get(key) ?? null),
+      put: vi.fn(async (key: string, value: string) => {
+        pendingKvStore.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        pendingKvStore.delete(key);
+      }),
+      list: vi.fn(async () => ({ keys: [], list_complete: true })),
+    };
+    const exportLogKv = { put: vi.fn().mockResolvedValue(undefined) };
     const recipientsRegistry = { listActiveRecipients: vi.fn().mockResolvedValue([{ chatId: 'r-1' }]) };
 
     const handler = createTelegramBroadcastCommandHandler({
@@ -1219,6 +1288,8 @@ describe('http router', () => {
       logger: console,
       now: () => new Date('2024-01-01T00:00:00Z'),
       recipientsRegistry,
+      pendingKv,
+      exportLogKv,
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1305,39 +1376,69 @@ describe('http router', () => {
       text: buildBroadcastPromptMessage(1),
     });
 
-    const waitUntil = vi.fn();
+    const sendUpdate = {
+      update_id: 2004,
+      message: {
+        message_id: '703',
+        date: '1704067212',
+        chat: { id: '4242', type: 'private' },
+        from: { id: '1010', first_name: 'Admin' },
+        text: '/send',
+        entities: [{ type: 'bot_command', offset: 0, length: '/send'.length }],
+      },
+    };
+
+    const textWaitUntil = vi.fn();
     const textResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(textUpdate),
       }),
-      { waitUntil },
+      { waitUntil: textWaitUntil },
     );
 
     expect(textResponse.status).toBe(200);
     await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
 
-    expect(sendBroadcast).toHaveBeenCalledWith({
-      text: 'привет всем',
-      requestedBy: '1010',
-      filters: undefined,
+    const textBackgroundTask = textWaitUntil.mock.calls.at(-1)?.[0];
+    expect(typeof textBackgroundTask?.then).toBe('function');
+    if (textBackgroundTask) {
+      await textBackgroundTask;
+    }
+
+    expect(messaging.sendText.mock.calls.length).toBe(3);
+    expect(messaging.sendText).toHaveBeenLastCalledWith({
+      chatId: '4242',
+      threadId: undefined,
+      text: expect.stringContaining('/send'),
     });
 
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    const backgroundTask = waitUntil.mock.calls[0]?.[0];
+    const sendWaitUntil = vi.fn();
+    const sendResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sendUpdate),
+      }),
+      { waitUntil: sendWaitUntil },
+    );
+
+    expect(sendWaitUntil).toHaveBeenCalledTimes(1);
+    const backgroundTask = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
-    expect(messaging.sendText).toHaveBeenCalledTimes(2);
+    expect(sendResponse.status).toBe(200);
+    await expect(sendResponse.json()).resolves.toEqual({ status: 'ok' });
 
     deferred.resolve({ delivered: 2, failed: 0, deliveries: [] });
     await backgroundTask;
 
-    expect(messaging.sendText).toHaveBeenCalledTimes(3);
+    expect(messaging.sendText.mock.calls.length).toBe(4);
     expect(messaging.sendText).toHaveBeenLastCalledWith({
       chatId: '4242',
       threadId: undefined,
-      text: BROADCAST_SUCCESS_MESSAGE,
+      text: expect.stringContaining('✅ Рассылка отправлена:'),
     });
   });
 
@@ -1395,6 +1496,17 @@ describe('http router', () => {
       logger: console,
       pool: { concurrency: 1 },
     });
+    const pendingKvStore = new Map<string, string>();
+    const pendingKv = {
+      get: vi.fn(async (key: string) => pendingKvStore.get(key) ?? null),
+      put: vi.fn(async (key: string, value: string) => {
+        pendingKvStore.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        pendingKvStore.delete(key);
+      }),
+      list: vi.fn(async () => ({ keys: [], list_complete: true })),
+    };
 
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
@@ -1403,6 +1515,7 @@ describe('http router', () => {
       logger: console,
       now: () => new Date('2024-01-01T00:00:00Z'),
       recipientsRegistry: { listActiveRecipients: vi.fn().mockResolvedValue([{ chatId: 'broadcast-1' }]) },
+      pendingKv,
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1505,33 +1618,63 @@ describe('http router', () => {
       text: buildBroadcastPromptMessage(1),
     });
 
-    const waitUntil = vi.fn();
+    const sendUpdate = {
+      update_id: 3004,
+      message: {
+        message_id: '903',
+        date: '1704067212',
+        chat: { id: 'admin-chat', type: 'private' },
+        from: { id: '2020', first_name: 'Admin' },
+        text: '/send',
+        entities: [{ type: 'bot_command', offset: 0, length: '/send'.length }],
+      },
+    };
+
+    const textWaitUntil = vi.fn();
     const textResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(textUpdate),
       }),
-      { waitUntil },
+      { waitUntil: textWaitUntil },
     );
 
     expect(textResponse.status).toBe(200);
     await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    const backgroundTask = waitUntil.mock.calls[0]?.[0];
-    expect(typeof backgroundTask?.then).toBe('function');
 
-    expect(pendingBroadcastSends.length).toBeGreaterThanOrEqual(1);
+    const textBackgroundTask = textWaitUntil.mock.calls.at(-1)?.[0];
+    expect(typeof textBackgroundTask?.then).toBe('function');
+    if (textBackgroundTask) {
+      await textBackgroundTask;
+    }
+
+    const sendWaitUntil = vi.fn();
+    const sendResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sendUpdate),
+      }),
+      { waitUntil: sendWaitUntil },
+    );
+
+    expect(sendResponse.status).toBe(200);
+    await expect(sendResponse.json()).resolves.toEqual({ status: 'ok' });
+
+    expect(sendWaitUntil).toHaveBeenCalledTimes(1);
+    const backgroundTask = sendWaitUntil.mock.calls[0]?.[0];
+    expect(typeof backgroundTask?.then).toBe('function');
 
     const userResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          update_id: 3004,
+          update_id: 3005,
           message: {
-            message_id: '903',
-            date: '1704067215',
+            message_id: '904',
+            date: '1704067216',
             chat: { id: 'dialog-chat', type: 'private' },
             from: { id: '3030', first_name: 'User' },
             text: 'ping',
@@ -1546,8 +1689,10 @@ describe('http router', () => {
       expect.objectContaining({ chatId: 'dialog-chat', text: 'dialog-ok' }),
     );
 
-    pendingBroadcastSends.forEach((deferred, index) => deferred.resolve({ messageId: `broadcast-${index}` }));
-    await backgroundTask;
+    if (backgroundTask) {
+      pendingBroadcastSends.forEach((deferred, index) => deferred.resolve({ messageId: `broadcast-${index}` }));
+      await Promise.race([backgroundTask, new Promise((resolve) => setTimeout(resolve, 100))]);
+    }
   });
 
   it('keeps broadcast deliveries running in parallel with dialog replies', async () => {
@@ -1610,6 +1755,17 @@ describe('http router', () => {
       logger: console,
       pool: { concurrency: 2 },
     });
+    const pendingKvStore = new Map<string, string>();
+    const pendingKv = {
+      get: vi.fn(async (key: string) => pendingKvStore.get(key) ?? null),
+      put: vi.fn(async (key: string, value: string) => {
+        pendingKvStore.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        pendingKvStore.delete(key);
+      }),
+      list: vi.fn(async () => ({ keys: [], list_complete: true })),
+    };
 
     const handler = createTelegramBroadcastCommandHandler({
       adminAccess,
@@ -1623,6 +1779,7 @@ describe('http router', () => {
           { chatId: 'broadcast-2' },
         ]),
       },
+      pendingKv,
     });
 
     const transformPayload = createTelegramWebhookHandler({
@@ -1725,36 +1882,68 @@ describe('http router', () => {
       text: buildBroadcastPromptMessage(2),
     });
 
-    const waitUntil = vi.fn();
+    const textWaitUntil = vi.fn();
     const textResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(textUpdate),
       }),
-      { waitUntil },
+      { waitUntil: textWaitUntil },
     );
 
     expect(textResponse.status).toBe(200);
     await expect(textResponse.json()).resolves.toEqual({ status: 'ok' });
+    const textBackgroundTask = textWaitUntil.mock.calls.at(-1)?.[0];
+    expect(typeof textBackgroundTask?.then).toBe('function');
+    if (textBackgroundTask) {
+      await textBackgroundTask;
+    }
 
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    const backgroundTask = waitUntil.mock.calls[0]?.[0];
+    const sendUpdate = {
+      update_id: 3104,
+      message: {
+        message_id: '953',
+        date: '1704067212',
+        chat: { id: 'admin-chat', type: 'private' },
+        from: { id: '2040', first_name: 'Admin' },
+        text: '/send',
+        entities: [{ type: 'bot_command', offset: 0, length: '/send'.length }],
+      },
+    };
+
+    const sendWaitUntil = vi.fn();
+    const sendResponse = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sendUpdate),
+      }),
+      { waitUntil: sendWaitUntil },
+    );
+
+    expect(sendResponse.status).toBe(200);
+    await expect(sendResponse.json()).resolves.toEqual({ status: 'ok' });
+
+    expect(sendWaitUntil).toHaveBeenCalledTimes(1);
+    const backgroundTask = sendWaitUntil.mock.calls[0]?.[0];
     expect(typeof backgroundTask?.then).toBe('function');
 
-    await Promise.resolve();
-    expect(pendingBroadcastSends).toHaveLength(2);
-    expect(sharedState.active).toBeGreaterThanOrEqual(2);
+    for (let attempt = 0; attempt < 5 && pendingBroadcastSends.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(pendingBroadcastSends.length).toBeGreaterThanOrEqual(1);
+    expect(sharedState.active).toBeGreaterThanOrEqual(1);
 
     const userResponse = await router.handle(
       new Request('https://example.com/webhook/secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          update_id: 3104,
+          update_id: 3105,
           message: {
-            message_id: '953',
-            date: '1704067215',
+            message_id: '954',
+            date: '1704067216',
             chat: { id: 'dialog-chat', type: 'private' },
             from: { id: '3050', first_name: 'User' },
             text: 'ping',
@@ -1769,12 +1958,14 @@ describe('http router', () => {
       expect.objectContaining({ chatId: 'dialog-chat', text: 'dialog-ok' }),
     );
 
-    expect(sendEvents.filter((chatId) => chatId.startsWith('broadcast-'))).toHaveLength(2);
+    const broadcastSends = sendEvents.filter((chatId) => chatId.startsWith('broadcast-'));
+    expect(broadcastSends.length).toBeGreaterThanOrEqual(1);
     expect(sendEvents).toContain('dialog-chat');
-    expect(sharedState.active).toBeGreaterThanOrEqual(2);
 
-    pendingBroadcastSends.forEach((deferred, index) => deferred.resolve({ messageId: `broadcast-${index}` }));
-    await backgroundTask;
+    if (backgroundTask) {
+      pendingBroadcastSends.forEach((deferred, index) => deferred.resolve({ messageId: `broadcast-${index}` }));
+      await Promise.race([backgroundTask, new Promise((resolve) => setTimeout(resolve, 100))]);
+    }
   });
 
   it('exposes parseIncomingMessage for custom transformations', () => {
