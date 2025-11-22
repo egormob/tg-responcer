@@ -24,6 +24,7 @@ import {
   createStartCommandHandler,
   type RouterCommandHandler,
 } from './system-command-handlers';
+import { isAdminAiModeOff, resetAdminAiModes, setAdminAiMode } from './admin-ai-mode';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
 
@@ -409,9 +410,7 @@ export interface RouterHandleContext {
 export const createRouter = (options: RouterOptions) => {
   const defaultSystemCommands = createSystemCommandRegistry();
   const systemCommandHandlers = createDefaultSystemCommandHandlers();
-  const adminAiModes = new Map<string, 'on' | 'off'>();
-  const isAdminAiModeOff = (userId?: string) =>
-    typeof userId === 'string' && adminAiModes.get(userId) === 'off';
+  resetAdminAiModes();
   const allowScopedCommandsForUser = (userId: string) => {
     if (typeof userId !== 'string' || userId.length === 0) {
       return;
@@ -425,9 +424,7 @@ export const createRouter = (options: RouterOptions) => {
   };
 
   systemCommandHandlers.set('/ai_admin_on', async ({ sendText, message }) => {
-    if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
-      adminAiModes.set(message.user.userId, 'on');
-    }
+    setAdminAiMode(message.user.userId, 'on');
 
     const messageId = await sendText({
       text: 'Режим ИИ включен',
@@ -541,7 +538,7 @@ export const createRouter = (options: RouterOptions) => {
           const normalizedCommand = normalizeCommand(systemCommand.command);
           const isAiEnableCommand = normalizedCommand === '/ai_admin_on';
 
-          adminAiModes.set(systemCommand.userId, isAiEnableCommand ? 'on' : 'off');
+          setAdminAiMode(systemCommand.userId, isAiEnableCommand ? 'on' : 'off');
           allowScopedCommandsForUser(systemCommand.userId);
         }
 
@@ -751,7 +748,7 @@ export const createRouter = (options: RouterOptions) => {
       if (typeof message.user.userId === 'string' && message.user.userId.length > 0) {
         const isAiEnableCommand = matchedCommand.command === '/ai_admin_on';
 
-        adminAiModes.set(message.user.userId, isAiEnableCommand ? 'on' : 'off');
+        setAdminAiMode(message.user.userId, isAiEnableCommand ? 'on' : 'off');
         allowScopedCommandsForUser(message.user.userId);
       }
 

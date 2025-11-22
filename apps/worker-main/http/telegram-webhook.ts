@@ -13,6 +13,7 @@ import {
   toTelegramIdString,
 } from './telegram-ids';
 import { normalizeCommand } from './system-commands';
+import { setAdminAiMode } from './admin-ai-mode';
 
 export type TelegramSnapshotRoute = 'user' | 'admin' | 'safe';
 
@@ -575,6 +576,12 @@ const handleAdminCommand = async (
 
   const response = await handler(context);
 
+  const normalizedCommand = normalizeCommand(context.command);
+  if (normalizedCommand) {
+    const mode = normalizedCommand === '/ai_admin_on' ? 'on' : 'off';
+    setAdminAiMode(context.from.userId, mode);
+  }
+
   if (response instanceof Response) {
     options.onSystemCommand?.(context.command, context.from.userId);
     return toHandledResult(response, {
@@ -859,6 +866,16 @@ export const transformTelegramUpdate = async (
     ?? extractStartPayloadFromWebAppData();
 
   let startPayload: string | undefined = startPayloadFromMiniApp;
+
+  const handledByFeature = await options.features?.handleMessage?.(incoming);
+
+  if (handledByFeature === 'handled') {
+    return toHandledResult();
+  }
+
+  if (handledByFeature instanceof Response) {
+    return toHandledResult(handledByFeature);
+  }
 
   if (
     commandEntity
