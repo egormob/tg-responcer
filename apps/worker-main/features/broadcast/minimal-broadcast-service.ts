@@ -95,6 +95,8 @@ export interface BroadcastProgressCheckpoint {
   textHash: string;
   audienceHash: string;
   pool: Pick<Required<BroadcastPoolOptions>, 'concurrency' | 'maxRps'>;
+  batchSize?: number;
+  maxBatchTextBytes?: number;
   filters?: BroadcastAudienceFilter;
   source?: string | null;
   updatedAt: string;
@@ -148,10 +150,15 @@ export interface BroadcastPoolOptions {
   now?: () => number;
 }
 
-export interface CreateImmediateBroadcastSenderOptions {
+export interface BroadcastWatchdogOptions {
+  memoryLimitBytes?: number;
+  memoryUsage?: () => number;
+  logIntervalMs?: number;
+}
+
+type CommonBroadcastSenderOptions = {
   messaging: Pick<MessagingPort, 'sendText'>;
   messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
-  recipients: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
@@ -160,28 +167,22 @@ export interface CreateImmediateBroadcastSenderOptions {
   progressKv?: BroadcastProgressKvNamespace;
   progressTtlSeconds?: number;
   batchSize?: number;
+  maxBatchTextBytes?: number;
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
+  watchdog?: BroadcastWatchdogOptions;
+};
+
+export interface CreateImmediateBroadcastSenderOptions extends CommonBroadcastSenderOptions {
+  recipients: readonly BroadcastRecipient[];
 }
 
 export interface BroadcastRecipientsRegistry {
   listActiveRecipients(filter?: BroadcastAudienceFilter): Promise<BroadcastRecipient[]>;
 }
 
-export interface CreateRegistryBroadcastSenderOptions {
-  messaging: Pick<MessagingPort, 'sendText'>;
-  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
+export interface CreateRegistryBroadcastSenderOptions extends CommonBroadcastSenderOptions {
   registry: BroadcastRecipientsRegistry;
-  logger?: Logger;
-  pool?: BroadcastPoolOptions;
-  telemetry?: BroadcastTelemetry;
-  emergencyStop?: BroadcastEmergencyStopOptions;
-  maxTextLength?: number;
-  progressKv?: BroadcastProgressKvNamespace;
-  progressTtlSeconds?: number;
-  batchSize?: number;
-  jobIdGenerator?: () => string;
-  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
 }
 
 const DEFAULT_POOL_OPTIONS: Required<
@@ -197,10 +198,12 @@ const DEFAULT_POOL_OPTIONS: Required<
 
 const DEFAULT_BROADCAST_MAX_TEXT_LENGTH = 3970;
 const DEFAULT_BATCH_SIZE = 50;
+const DEFAULT_BATCH_TEXT_BYTES = DEFAULT_BROADCAST_MAX_TEXT_LENGTH * DEFAULT_BATCH_SIZE;
 const BROADCAST_PROGRESS_KV_VERSION = 1;
 const BROADCAST_PROGRESS_KEY_PREFIX = 'broadcast:progress:';
 const DEFAULT_PROGRESS_TTL_SECONDS = 24 * 60 * 60;
 const MIN_PROGRESS_TTL_SECONDS = 60;
+const THROTTLE_DEGRADE_THRESHOLD = 5;
 
 const createWait = (wait?: (ms: number) => Promise<void>) =>
   wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -259,6 +262,25 @@ const computeDelay = (
   }
 
   return Math.max(computedDelay, retryAfterMs);
+};
+
+const tryGetMemoryUsage = (): number | undefined => {
+  const performanceMemory = globalThis.performance?.memory as
+    | { usedJSHeapSize?: number }
+    | undefined;
+
+  if (typeof performanceMemory?.usedJSHeapSize === 'number') {
+    return performanceMemory.usedJSHeapSize;
+  }
+
+  if (
+    typeof process !== 'undefined'
+    && typeof (process as { memoryUsage?: () => { heapUsed: number } }).memoryUsage === 'function'
+  ) {
+    return (process as { memoryUsage: () => { heapUsed: number } }).memoryUsage().heapUsed;
+  }
+
+  return undefined;
 };
 
 const createRateLimiter = (
@@ -568,20 +590,8 @@ type ResolveRecipients = (
   | readonly BroadcastRecipient[]
   | ResolveRecipientsResult;
 
-interface CreateBroadcastSenderOptions {
-  messaging: Pick<MessagingPort, 'sendText'>;
-  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
+interface CreateBroadcastSenderOptions extends CommonBroadcastSenderOptions {
   resolveRecipients: ResolveRecipients;
-  logger?: Logger;
-  pool?: BroadcastPoolOptions;
-  telemetry?: BroadcastTelemetry;
-  emergencyStop?: BroadcastEmergencyStopOptions;
-  maxTextLength?: number;
-  progressKv?: BroadcastProgressKvNamespace;
-  progressTtlSeconds?: number;
-  batchSize?: number;
-  jobIdGenerator?: () => string;
-  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
@@ -592,20 +602,17 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
   const wait = createWait(options.pool?.wait);
   const random = options.pool?.random ?? Math.random;
   const now = options.pool?.now ?? Date.now;
-  const concurrency = Math.max(1, Math.floor(poolOptions.concurrency));
+  const configuredConcurrency = Math.max(1, Math.floor(poolOptions.concurrency));
   const maxAttempts = Math.max(1, Math.floor(poolOptions.maxAttempts));
-  const maxRps = Math.max(1, Math.floor(poolOptions.maxRps));
+  const configuredMaxRps = Math.max(1, Math.floor(poolOptions.maxRps));
   const emergencyStopThresholdMs = sanitizeEmergencyStopThreshold(options.emergencyStop?.retryAfterMs);
   const deliveryMessaging = options.messagingBroadcast ?? options.messaging;
   const maxTextLength = options.maxTextLength ?? DEFAULT_BROADCAST_MAX_TEXT_LENGTH;
-  const batchSize = Math.max(1, Math.floor(options.batchSize ?? DEFAULT_BATCH_SIZE));
-  const rateLimiter = createRateLimiter(
-    maxRps,
-    poolOptions.rateJitterRatio,
-    random,
-    wait,
-    now,
-  );
+  const configuredBatchSize = Math.max(1, Math.floor(options.batchSize ?? DEFAULT_BATCH_SIZE));
+  const maxBatchTextBytes = Math.max(1, Math.floor(options.maxBatchTextBytes ?? DEFAULT_BATCH_TEXT_BYTES));
+  const watchdogMemoryLimitBytes = options.watchdog?.memoryLimitBytes;
+  const watchdogMemoryUsage = options.watchdog?.memoryUsage ?? tryGetMemoryUsage;
+  const watchdogLogIntervalMs = Math.max(1000, options.watchdog?.logIntervalMs ?? 30_000);
 
   const normalizeResolveResult = (
     result: Awaited<ReturnType<ResolveRecipients>>,
@@ -651,6 +658,30 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
     }
 
     const jobId = input.resumeFrom?.jobId ?? input.jobId ?? generateJobId();
+    let currentConcurrency = Math.max(
+      1,
+      Math.floor(input.resumeFrom?.pool?.concurrency ?? configuredConcurrency),
+    );
+    let currentMaxRps = Math.max(
+      1,
+      Math.floor(input.resumeFrom?.pool?.maxRps ?? configuredMaxRps),
+    );
+    let rateLimiter = createRateLimiter(
+      currentMaxRps,
+      poolOptions.rateJitterRatio,
+      random,
+      wait,
+      now,
+    );
+    const resolveBatchSize = () => {
+      const limitByText = Math.max(1, Math.floor(maxBatchTextBytes / Math.max(1, effectiveLength)));
+      return Math.max(1, Math.min(configuredBatchSize, limitByText));
+    };
+    let effectiveBatchSize = resolveBatchSize();
+    if (typeof input.resumeFrom?.batchSize === 'number') {
+      effectiveBatchSize = Math.max(1, Math.min(effectiveBatchSize, Math.floor(input.resumeFrom.batchSize)));
+    }
+    let lastWatchdogLogAt = now();
     const filters = input.resumeFrom?.filters ?? input.filters;
     const resolved = normalizeResolveResult(await options.resolveRecipients(filters));
     const filtersToApply = filters;
@@ -670,6 +701,65 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
 
     const textHash = await computeHash(text);
     const audienceHash = await buildAudienceHash(recipients);
+
+    const downgradePool = (reason: 'throttled429' | 'memory') => {
+      const nextConcurrency = Math.max(1, Math.floor(currentConcurrency / 2));
+      const nextMaxRps = Math.max(1, Math.floor(currentMaxRps / 2));
+
+      if (nextConcurrency === currentConcurrency && nextMaxRps === currentMaxRps) {
+        return;
+      }
+
+      currentConcurrency = nextConcurrency;
+      currentMaxRps = nextMaxRps;
+      rateLimiter = createRateLimiter(
+        currentMaxRps,
+        poolOptions.rateJitterRatio,
+        random,
+        wait,
+        now,
+      );
+
+      options.logger?.warn?.('broadcast pool degraded', {
+        reason,
+        concurrency: currentConcurrency,
+        maxRps: currentMaxRps,
+        jobId,
+      });
+    };
+
+    const runWatchdog = (phase: 'start' | 'batch') => {
+      const usedMemory = watchdogMemoryUsage?.();
+
+      if (usedMemory === undefined) {
+        return;
+      }
+
+      if (typeof watchdogMemoryLimitBytes === 'number' && usedMemory > watchdogMemoryLimitBytes) {
+        options.logger?.warn?.('broadcast_watchdog_memory', {
+          jobId,
+          phase,
+          usedMemory,
+          limit: watchdogMemoryLimitBytes,
+          concurrency: currentConcurrency,
+          maxRps: currentMaxRps,
+        });
+        downgradePool('memory');
+        lastWatchdogLogAt = now();
+        return;
+      }
+
+      if (now() - lastWatchdogLogAt >= watchdogLogIntervalMs) {
+        options.logger?.info?.('broadcast_watchdog', {
+          jobId,
+          phase,
+          usedMemory,
+          concurrency: currentConcurrency,
+          maxRps: currentMaxRps,
+        });
+        lastWatchdogLogAt = now();
+      }
+    };
 
     if (input.resumeFrom) {
       if (
@@ -721,14 +811,18 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       recipients: recipients.length,
       filters: filters ?? null,
       source: resolved.source ?? null,
-      poolSize: concurrency,
+      poolSize: currentConcurrency,
       maxAttempts,
       baseDelayMs: poolOptions.baseDelayMs,
       jitterRatio: poolOptions.jitterRatio,
-      maxRps,
+      maxRps: currentMaxRps,
       rateJitterRatio: poolOptions.rateJitterRatio,
+      batchSize: effectiveBatchSize,
+      maxBatchTextBytes,
       jobId,
     });
+
+    runWatchdog('start');
 
     const progressTtlSeconds = Math.max(
       MIN_PROGRESS_TTL_SECONDS,
@@ -773,7 +867,8 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       status: BroadcastProgressCheckpoint['status'],
       reason?: BroadcastAbortReason,
     ): BroadcastProgressCheckpoint => {
-      const checkpointOffset = Math.max(offset, getCompletedOffset());
+      const processedCount = deliveredCount + failedCount;
+      const checkpointOffset = Math.max(offset, getCompletedOffset(), processedCount);
       const expiresAt = new Date(now() + progressTtlSeconds * 1000).toISOString();
       offset = checkpointOffset;
 
@@ -788,7 +883,9 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         text,
         textHash,
         audienceHash,
-        pool: { concurrency, maxRps },
+        pool: { concurrency: currentConcurrency, maxRps: currentMaxRps },
+        batchSize: effectiveBatchSize,
+        maxBatchTextBytes,
         filters: filters ?? undefined,
         source: resolved.source ?? null,
         updatedAt: new Date(now()).toISOString(),
@@ -927,6 +1024,13 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
           if (tooManyRequests) {
             throttledErrors += 1;
             await handleEmergencyThrottle(retryAfterMs, error);
+            if (
+              throttledErrors % THROTTLE_DEGRADE_THRESHOLD === 0
+              || (retryAfterMs ?? 0) >= poolOptions.baseDelayMs * 2
+            ) {
+              downgradePool('throttled429');
+              throttledErrors = 0;
+            }
           }
 
           if (!shouldRetry) {
@@ -980,7 +1084,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
             attempt: attempt + 1,
             delayMs,
             retryAfterMs: retryAfterMs ?? null,
-            poolSize: concurrency,
+            poolSize: currentConcurrency,
             jobId,
           });
 
@@ -1016,16 +1120,18 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
         }
       };
 
-      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      await Promise.all(Array.from({ length: currentConcurrency }, () => worker()));
     };
 
     let aborted = false;
     try {
-      const totalBatches = Math.ceil((recipients.length - offset) / batchSize);
-      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += 1) {
+      while (offset < recipients.length) {
         ensureNotAborted();
+        effectiveBatchSize = Math.max(1, resolveBatchSize());
         const startIndex = offset;
-        const endIndex = Math.min(recipients.length, startIndex + batchSize);
+        const endIndex = Math.min(recipients.length, startIndex + effectiveBatchSize);
+
+        runWatchdog('batch');
 
         await processBatch(startIndex, endIndex);
 
@@ -1088,7 +1194,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       source: resolved.source ?? null,
       delivered: deliveredCount,
       failed: failedCount,
-      poolSize: concurrency,
+      poolSize: currentConcurrency,
       throttled429: throttledErrors,
       durationMs,
       topErrors,
@@ -1167,8 +1273,10 @@ export const createImmediateBroadcastSender = (
     progressKv: options.progressKv,
     progressTtlSeconds: options.progressTtlSeconds,
     batchSize: options.batchSize,
+    maxBatchTextBytes: options.maxBatchTextBytes,
     jobIdGenerator: options.jobIdGenerator,
     onAdminNotification: options.onAdminNotification,
+    watchdog: options.watchdog,
   });
 
 export const createRegistryBroadcastSender = (
@@ -1226,7 +1334,9 @@ export const createRegistryBroadcastSender = (
     progressKv: options.progressKv,
     progressTtlSeconds: options.progressTtlSeconds,
     batchSize: options.batchSize,
+    maxBatchTextBytes: options.maxBatchTextBytes,
     jobIdGenerator: options.jobIdGenerator,
     onAdminNotification: options.onAdminNotification,
+    watchdog: options.watchdog,
   });
 };

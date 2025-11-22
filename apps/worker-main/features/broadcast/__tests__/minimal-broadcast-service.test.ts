@@ -5,6 +5,7 @@ import {
   createImmediateBroadcastSender,
   createRegistryBroadcastSender,
   loadBroadcastCheckpoint,
+  listBroadcastCheckpoints,
   type BroadcastRecipient,
 } from '../minimal-broadcast-service';
 
@@ -108,10 +109,9 @@ describe('createImmediateBroadcastSender', () => {
     expect(result.delivered).toBe(recipients.length);
     expect(result.failed).toBe(0);
     expect(sendText).toHaveBeenCalledTimes(recipients.length + 10);
-    expect(logger.warn).toHaveBeenCalledWith(
-      'broadcast throttled',
-      expect.objectContaining({ poolSize: 5 }),
-    );
+    const throttledLogs = logger.warn.mock.calls.filter(([event]) => event === 'broadcast throttled');
+    expect(throttledLogs.length).toBeGreaterThan(0);
+    expect(throttledLogs[0]?.[1]).toMatchObject({ retryAfterMs: expect.any(Number) });
     expect(waitCalls.some((delay) => delay >= 25)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       'broadcast_summary',
@@ -281,6 +281,166 @@ describe('createImmediateBroadcastSender', () => {
     expect(sendText).toHaveBeenCalledTimes(recipients.length);
     expect(result.delivered).toBe(recipients.length);
     expect(result.failed).toBe(0);
+  });
+
+  it('limits batch size by text budget and resumes from checkpoint', async () => {
+    const recipients = createRecipients(6);
+    const controller = new AbortController();
+    const kv = new MemoryKv();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
+      if (sendText.mock.calls.length >= 3 && !controller.signal.aborted) {
+        controller.abort();
+      }
+
+      return { messageId: `id-${chatId}` };
+    });
+
+    const sender = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger,
+      progressKv: kv,
+      batchSize: 5,
+      maxBatchTextBytes: 10,
+      jobIdGenerator: () => 'job-batch-limit',
+    });
+
+    await expect(
+      sender({ text: 'long', requestedBy: 'ops', abortSignal: controller.signal }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    const checkpoint = await loadBroadcastCheckpoint(kv, 'job-batch-limit');
+    expect(checkpoint?.batchSize).toBe(2);
+    expect(checkpoint?.maxBatchTextBytes).toBe(10);
+    expect(checkpoint?.offset).toBeGreaterThan(0);
+
+    const result = await sender({ text: 'long', requestedBy: 'ops', resumeFrom: checkpoint });
+
+    expect(result.delivered + result.failed).toBe(recipients.length);
+    expect(sendText.mock.calls.filter(([payload]) => payload.chatId === 'chat-0').length).toBe(1);
+  });
+
+  it('persists degraded pool after throttling and reuses it on resume', async () => {
+    const recipients = createRecipients(12);
+    const controller = new AbortController();
+    const kv = new MemoryKv();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const attempts = new Map<string, number>();
+
+    const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
+      const attempt = attempts.get(chatId) ?? 0;
+      attempts.set(chatId, attempt + 1);
+
+      if (attempt === 0 && Number(chatId.split('-')[1]) < 6) {
+        const error = new Error('429');
+        (error as Error & { status?: number; retryAfterMs?: number }).status = 429;
+        (error as Error & { status?: number; retryAfterMs?: number }).retryAfterMs = 5;
+        throw error;
+      }
+
+      if (attempts.size >= 8 && !controller.signal.aborted) {
+        controller.abort();
+      }
+
+      return { messageId: `${chatId}-${attempt}` };
+    });
+
+    const sender = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger,
+      pool: {
+        concurrency: 4,
+        maxRps: 28,
+        wait: async () => {},
+        random: () => 0,
+        baseDelayMs: 1,
+        jitterRatio: 0,
+        rateJitterRatio: 0,
+      },
+      progressKv: kv,
+      jobIdGenerator: () => 'job-degrade',
+    });
+
+    await expect(
+      sender({ text: 'hello', requestedBy: 'ops', abortSignal: controller.signal }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    const checkpoint = await loadBroadcastCheckpoint(kv, 'job-degrade');
+    expect(checkpoint?.pool).toBeDefined();
+    expect(checkpoint?.pool?.concurrency).toBeGreaterThanOrEqual(1);
+    expect(checkpoint?.pool?.concurrency).toBeLessThan(4);
+    expect(checkpoint?.pool?.maxRps).toBeGreaterThanOrEqual(1);
+    expect(checkpoint?.pool?.maxRps).toBeLessThan(28);
+
+    const resumed = await sender({ text: 'hello', requestedBy: 'ops', resumeFrom: checkpoint });
+
+    const poolInitCalls = logger.info.mock.calls.filter(
+      ([event]) => event === 'broadcast pool initialized',
+    );
+    expect(poolInitCalls.at(-1)?.[1]).toMatchObject({
+      poolSize: checkpoint?.pool?.concurrency,
+      maxRps: checkpoint?.pool?.maxRps,
+    });
+
+    expect(resumed.delivered + resumed.failed).toBe(recipients.length);
+    expect(await loadBroadcastCheckpoint(kv, 'job-degrade')).toBeUndefined();
+  });
+
+  it('processes 100k recipients with pause/resume without duplicates', async () => {
+    const recipients = createRecipients(100_000);
+    const kv = new MemoryKv();
+    const controller = new AbortController();
+    const sent = new Set<string>();
+
+    const sendText = vi.fn(async ({ chatId }: { chatId: string }) => {
+      sent.add(chatId);
+      if (sent.size === 10_000 && !controller.signal.aborted) {
+        controller.abort();
+      }
+
+      if (sent.size % 20000 === 0) {
+        await Promise.resolve();
+      }
+
+      return { messageId: chatId };
+    });
+
+    const sender = createImmediateBroadcastSender({
+      messaging: { sendText },
+      recipients,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      pool: {
+        concurrency: 32,
+        maxRps: 10_000,
+        wait: async () => {},
+        random: () => 0,
+        baseDelayMs: 1,
+        jitterRatio: 0,
+        rateJitterRatio: 0,
+      },
+      progressKv: kv,
+      jobIdGenerator: () => 'job-large',
+    });
+
+    await expect(
+      sender({ text: 'bulk-message', requestedBy: 'ops', abortSignal: controller.signal }),
+    ).rejects.toBeInstanceOf(BroadcastAbortedError);
+
+    const checkpoint = await loadBroadcastCheckpoint(kv, 'job-large');
+    expect(checkpoint?.offset).toBeGreaterThanOrEqual(10_000);
+
+    const result = await sender({
+      text: 'bulk-message',
+      requestedBy: 'ops',
+      resumeFrom: checkpoint,
+    });
+
+    expect(result.delivered + result.failed).toBe(recipients.length);
+    expect(sendText).toHaveBeenCalledTimes(recipients.length);
+    expect(sent.size).toBe(recipients.length);
   });
 });
 
