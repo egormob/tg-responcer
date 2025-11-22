@@ -156,10 +156,9 @@ export interface BroadcastWatchdogOptions {
   logIntervalMs?: number;
 }
 
-export interface CreateImmediateBroadcastSenderOptions {
+type CommonBroadcastSenderOptions = {
   messaging: Pick<MessagingPort, 'sendText'>;
   messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
-  recipients: readonly BroadcastRecipient[];
   logger?: Logger;
   pool?: BroadcastPoolOptions;
   telemetry?: BroadcastTelemetry;
@@ -172,28 +171,18 @@ export interface CreateImmediateBroadcastSenderOptions {
   jobIdGenerator?: () => string;
   onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
   watchdog?: BroadcastWatchdogOptions;
+};
+
+export interface CreateImmediateBroadcastSenderOptions extends CommonBroadcastSenderOptions {
+  recipients: readonly BroadcastRecipient[];
 }
 
 export interface BroadcastRecipientsRegistry {
   listActiveRecipients(filter?: BroadcastAudienceFilter): Promise<BroadcastRecipient[]>;
 }
 
-export interface CreateRegistryBroadcastSenderOptions {
-  messaging: Pick<MessagingPort, 'sendText'>;
-  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
+export interface CreateRegistryBroadcastSenderOptions extends CommonBroadcastSenderOptions {
   registry: BroadcastRecipientsRegistry;
-  logger?: Logger;
-  pool?: BroadcastPoolOptions;
-  telemetry?: BroadcastTelemetry;
-  emergencyStop?: BroadcastEmergencyStopOptions;
-  maxTextLength?: number;
-  progressKv?: BroadcastProgressKvNamespace;
-  progressTtlSeconds?: number;
-  batchSize?: number;
-  maxBatchTextBytes?: number;
-  jobIdGenerator?: () => string;
-  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
-  watchdog?: BroadcastWatchdogOptions;
 }
 
 const DEFAULT_POOL_OPTIONS: Required<
@@ -601,22 +590,8 @@ type ResolveRecipients = (
   | readonly BroadcastRecipient[]
   | ResolveRecipientsResult;
 
-interface CreateBroadcastSenderOptions {
-  messaging: Pick<MessagingPort, 'sendText'>;
-  messagingBroadcast?: Pick<MessagingPort, 'sendText'>;
+interface CreateBroadcastSenderOptions extends CommonBroadcastSenderOptions {
   resolveRecipients: ResolveRecipients;
-  logger?: Logger;
-  pool?: BroadcastPoolOptions;
-  telemetry?: BroadcastTelemetry;
-  emergencyStop?: BroadcastEmergencyStopOptions;
-  maxTextLength?: number;
-  progressKv?: BroadcastProgressKvNamespace;
-  progressTtlSeconds?: number;
-  batchSize?: number;
-  maxBatchTextBytes?: number;
-  jobIdGenerator?: () => string;
-  onAdminNotification?: (input: BroadcastAdminNotificationInput) => Promise<void> | void;
-  watchdog?: BroadcastWatchdogOptions;
 }
 
 const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroadcast => {
