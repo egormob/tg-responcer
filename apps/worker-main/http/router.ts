@@ -22,6 +22,8 @@ import {
   createAdminStatusCommandHandler,
   createStartCommandHandler,
   type RouterCommandHandler,
+  type StartCommandDedupe,
+  type StartCommandHandlerOptions,
 } from './system-command-handlers';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
@@ -47,12 +49,74 @@ const formatAdminUsageMessage = (examples?: readonly string[]): string => {
   return lines.join('\n');
 };
 
-const createDefaultSystemCommandHandlers = (): Map<string, RouterCommandHandler> =>
+interface DefaultSystemCommandHandlersOptions {
+  startCommandOptions?: StartCommandHandlerOptions;
+}
+
+const createDefaultSystemCommandHandlers = (
+  options?: DefaultSystemCommandHandlersOptions,
+): Map<string, RouterCommandHandler> =>
   new Map([
-    ['/start', createStartCommandHandler()],
+    ['/start', createStartCommandHandler(options?.startCommandOptions)],
     ['/admin status', createAdminStatusCommandHandler()],
     ['/admin', createAdminCommandInvalidUsageHandler(ADMIN_COMMAND_EXAMPLES)],
   ]);
+
+const START_DEDUP_TTL_SECONDS = 60;
+const START_DEDUP_TTL_MS = START_DEDUP_TTL_SECONDS * 1000;
+type StartDedupeKvNamespace = Pick<KVNamespace, 'get' | 'put'>;
+
+const createStartDedupeStore = (kv?: StartDedupeKvNamespace): StartCommandDedupe => {
+  const memoryCache = new Map<string, number>();
+
+  const cleanup = (now: number) => {
+    for (const [key, expiresAt] of memoryCache.entries()) {
+      if (expiresAt <= now) {
+        memoryCache.delete(key);
+      }
+    }
+  };
+
+  return {
+    async shouldProcess(updateId?: string | number | null) {
+      if (updateId === undefined || updateId === null) {
+        return true;
+      }
+
+      const key = `dedup:start:${String(updateId)}`;
+      const now = Date.now();
+      cleanup(now);
+
+      const expiresAt = memoryCache.get(key);
+      if (expiresAt && expiresAt > now) {
+        return false;
+      }
+
+      if (kv) {
+        try {
+          const existing = await kv.get(key, 'text');
+          if (existing !== null) {
+            memoryCache.set(key, now + START_DEDUP_TTL_MS);
+            return false;
+          }
+
+          await kv.put(key, '1', { expirationTtl: START_DEDUP_TTL_SECONDS });
+          memoryCache.set(key, now + START_DEDUP_TTL_MS);
+          return true;
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn('[router] start dedupe KV failed, falling back to memory', {
+            updateId: key,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      memoryCache.set(key, now + START_DEDUP_TTL_MS);
+      return true;
+    },
+  };
+};
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -368,6 +432,7 @@ export interface RouterOptions {
       threadId?: string;
     }): Promise<{ handled: boolean }>;
   };
+  startDedupeKv?: StartDedupeKvNamespace;
   admin?: {
     token: string;
     exportToken?: string;
@@ -406,7 +471,10 @@ export interface RouterHandleContext {
 
 export const createRouter = (options: RouterOptions) => {
   const defaultSystemCommands = createSystemCommandRegistry();
-  const systemCommandHandlers = createDefaultSystemCommandHandlers();
+  const startDedupeStore = createStartDedupeStore(options.startDedupeKv);
+  const systemCommandHandlers = createDefaultSystemCommandHandlers({
+    startCommandOptions: { dedupe: startDedupeStore },
+  });
   const defaultTransformPayload: TransformPayloadWithCommands = Object.assign(
     async (payload: unknown) => parseIncomingMessage(payload),
     { systemCommands: defaultSystemCommands },
@@ -741,6 +809,7 @@ export const createRouter = (options: RouterOptions) => {
         match: matchedCommand,
         message,
         sendText: sendSystemCommandText,
+        updateId,
       });
 
       if (handlerResult.kind === 'handled') {
