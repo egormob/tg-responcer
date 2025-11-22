@@ -47,6 +47,11 @@
 - Аварийное уведомление админу (при `retry_after`/OOM/ручной отмене) содержит эту же карточку прогресса с TTL и ссылками на команды возобновления/отмены, чтобы возобновить поток без пересборки аудитории при единственном активном job.
 - Интеграционные тесты ожиданием асинхронной доставки подтверждают обновлённый UX pause/resume; глобальный лимитер 28 rps остаётся обязательным для всех сценариев.
 
+### 2025-12-05 — Смоук jobId без pause/resume
+- `/admin/diag?q=broadcast` вернул `status: "ok"`, `feature: "broadcast_metrics"`, `totalRuns: 3`, `lastRun.jobId: "job-20251205-smoke"`, `requestedBy: "136236606"`, `recipients: 5`, `delivered: 4`, `failed: 1`, `throttled429: 0`, `durationMs: 208`.
+- Карточки `progress`/`resumeCommand`/`cancelCommand` в ответе отсутствуют: активных пауз не было, команды возобновления не требовались.
+- Tail фиксирует только `broadcast pool initialized`/`broadcast delivered`/`broadcast delivery failed`/`broadcast pool completed` для того же `jobId`; событий paused/retry_after/checkpoint не появлялось. Подробный лог: [`diag-2025-12-05-broadcast-smoke`](../logs/diag-2025-12-05-broadcast-smoke.md).
+
 ## Флаги и токены
 - `TELEGRAM_BOT_TOKEN` — обязателен для обработки команд и отправки сообщений.
 - `ADMIN_TG_IDS` — KV-namespace с whitelisted Telegram ID (`{"whitelist":["123","456"]}` или актуальный формат). Только эти ID могут завершить сценарий рассылки.
