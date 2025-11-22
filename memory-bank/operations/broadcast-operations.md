@@ -42,6 +42,10 @@
 - Добавлены лимиты на объём текста в батче (`maxBatchTextBytes`) и фиксируются фактические `batchSize`/параметры пула в чекпоинтах и `/admin/diag?q=broadcast`.
 - При сериях 429 или росте потребления памяти watchdog автоматически понижает `concurrency/maxRps` и логирует событие `broadcast pool degraded`/`broadcast_watchdog_memory`.
 - Регрессия pause/resume на очередях 100k+ адресатов закрыта юнит-тестом (`minimal-broadcast-service.test.ts`), отправка завершается без дублей.
+### 2025-12-02 — Диагностика pause/resume (PR #332)
+- `/admin/diag?q=broadcast` дополняется карточкой `progress`: активный/paused `jobId`, remaining/total, delivered/failed/throttled429, причина остановки, TTL чекпоинта (`expiresAt`/`ttlSecondsRemaining`) и готовые команды `/broadcast_resume <jobId>`/`/cancel_broadcast` из KV-чекпоинта.
+- Аварийное уведомление админу (при `retry_after`/OOM/ручной отмене) содержит эту же карточку прогресса с TTL и ссылками на команды возобновления/отмены, чтобы возобновить поток без пересборки аудитории при единственном активном job.
+- Интеграционные тесты ожиданием асинхронной доставки подтверждают обновлённый UX pause/resume; глобальный лимитер 28 rps остаётся обязательным для всех сценариев.
 
 ## Флаги и токены
 - `TELEGRAM_BOT_TOKEN` — обязателен для обработки команд и отправки сообщений.
