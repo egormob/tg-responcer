@@ -72,7 +72,7 @@ const formatDuration = (ms: number): string => {
 
 const defaultMessage = (details: RateLimitNotificationDetails): string => {
   const readableTtl = formatDuration(details.ttlMs);
-  return `🥶⌛️ ${readableTtl}`;
+  return `🥶⌛️ ${readableTtl} Лимит доступных запросов исчерпан, диалог временно приостановален. Продолжение диалога доступно завтра.`;
 };
 
 const createLogger = (logger?: RateLimitNotifierLogger) => {

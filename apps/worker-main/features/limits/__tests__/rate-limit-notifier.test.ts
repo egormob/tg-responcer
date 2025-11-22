@@ -27,7 +27,8 @@ describe('rate limit notifier', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-1',
       threadId: undefined,
-      text: '🥶⌛️ 30m',
+      text:
+        '🥶⌛️ 30m Лимит доступных запросов исчерпан, диалог временно приостановален. Продолжение диалога доступно завтра.',
     });
     expect(logger.info).toHaveBeenCalledWith('rate limit notification sent', {
       userId: 'user-1',
@@ -107,7 +108,8 @@ describe('rate limit notifier', () => {
     expect(messaging.sendText).toHaveBeenCalledWith({
       chatId: 'chat-0',
       threadId: undefined,
-      text: '🥶⌛️ 0s',
+      text:
+        '🥶⌛️ 0s Лимит доступных запросов исчерпан, диалог временно приостановален. Продолжение диалога доступно завтра.',
     });
   });
 });
