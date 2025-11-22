@@ -12,6 +12,7 @@ import {
   createSystemCommandRegistry,
   isCommandAllowedForRole,
   matchSystemCommand,
+  normalizeCommand,
   type SystemCommandDescriptor,
   type SystemCommandMatch,
   type SystemCommandRegistry,
@@ -88,6 +89,7 @@ const isIncomingMessageCandidate = (value: unknown): value is IncomingMessage =>
 export interface HandledWebhookResult {
   kind: 'handled';
   response?: Response;
+  systemCommand?: { command: string; userId?: string };
 }
 
 export interface MessageWebhookResult {
@@ -522,6 +524,15 @@ export const createRouter = (options: RouterOptions) => {
       const transformed = await transformPayload(payload, context);
 
       if (isHandledWebhookResult(transformed)) {
+        const { systemCommand } = transformed;
+
+        if (systemCommand && typeof systemCommand.userId === 'string') {
+          const normalizedCommand = normalizeCommand(systemCommand.command);
+          const isAiEnableCommand = normalizedCommand === '/ai_admin_on';
+
+          adminAiModes.set(systemCommand.userId, isAiEnableCommand ? 'on' : 'off');
+        }
+
         return (
           transformed.response ?? jsonResponse({ status: 'ignored' }, { status: 200 })
         );

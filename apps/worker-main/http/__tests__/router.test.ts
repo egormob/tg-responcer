@@ -705,6 +705,68 @@ describe('http router', () => {
     expect(handleMessage).not.toHaveBeenCalled();
   });
 
+  it('turns off AI mode when admin commands are handled before router system handlers', async () => {
+    const handleMessage = vi.fn();
+    const messaging = createMessagingMock();
+    const dialogEngine = { handleMessage } as unknown as DialogEngine;
+    const handleAdminCommand = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }));
+    const transformPayload = createTelegramWebhookHandler({
+      storage: createStorageMock(),
+      features: { handleAdminCommand },
+      systemCommands: createSystemCommandRegistry(),
+    });
+
+    const router = createRouter({
+      dialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      transformPayload,
+      systemCommands: transformPayload.systemCommands,
+      determineCommandRole: () => 'scoped',
+    });
+
+    const request = (text: string) =>
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          update_id: Math.floor(Math.random() * 10_000),
+          message: {
+            message_id: text,
+            date: 0,
+            text,
+            chat: { id: 'chat-admin' },
+            from: { id: 'admin-user' },
+            entities: [
+              {
+                type: 'bot_command',
+                offset: 0,
+                length: text.split(' ')[0]?.length ?? text.length,
+              },
+            ],
+          },
+        }),
+      });
+
+    const adminResponse = await router.handle(request('/admin status'));
+    expect(adminResponse.status).toBe(200);
+    expect(handleAdminCommand).toHaveBeenCalledTimes(1);
+
+    const dialogSkipResponse = await router.handle(request('dialog after admin status'));
+    expect(dialogSkipResponse.status).toBe(200);
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    const enableResponse = await router.handle(request('/ai_admin_on'));
+    expect(enableResponse.status).toBe(200);
+
+    const dialogResponse = await router.handle(request('dialog after ai on again'));
+    expect(dialogResponse.status).toBe(200);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage.mock.calls[0]?.[0]?.text).toBe('dialog after ai on again');
+  });
+
   it('sends short denial for non-admin /admin commands', async () => {
     const handleMessage = vi.fn().mockResolvedValue({
       status: 'replied',

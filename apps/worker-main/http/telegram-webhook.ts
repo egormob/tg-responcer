@@ -516,9 +516,13 @@ const isAdminCommandHandlerResult = (
   value !== null &&
   ('response' in value || 'confirmSystemCommand' in value);
 
-const toHandledResult = (response?: Response): HandledWebhookResult => ({
+const toHandledResult = (
+  response?: Response,
+  systemCommand?: { command: string; userId?: string },
+): HandledWebhookResult => ({
   kind: 'handled',
   response: response ?? jsonResponse({ status: 'ok' }, { status: 200 }),
+  ...(systemCommand ? { systemCommand } : {}),
 });
 
 const buildIncomingMessage = (
@@ -573,7 +577,10 @@ const handleAdminCommand = async (
 
   if (response instanceof Response) {
     options.onSystemCommand?.(context.command, context.from.userId);
-    return toHandledResult(response);
+    return toHandledResult(response, {
+      command: context.command,
+      userId: context.from.userId,
+    });
   }
 
   if (!isAdminCommandHandlerResult(response)) {
@@ -586,7 +593,10 @@ const handleAdminCommand = async (
   }
 
   if (response.response instanceof Response) {
-    return toHandledResult(response.response);
+    return toHandledResult(response.response, {
+      command: context.command,
+      userId: context.from.userId,
+    });
   }
 
   return undefined;
