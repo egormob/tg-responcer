@@ -395,6 +395,73 @@ describe('createTelegramBroadcastCommandHandler', () => {
     await expect(response?.json()).resolves.toEqual({ status: 'job_not_found' });
   });
 
+  it('aborts active broadcast when pause is requested', async () => {
+    const { kv: progressKv } = createProgressKv();
+    const checkpoint = {
+      jobId: 'job-123',
+      status: 'paused' as const,
+      offset: 0,
+      delivered: 0,
+      failed: 0,
+      throttled429: 0,
+      total: 3,
+      text: 'pause me',
+      textHash: 'hash-text',
+      audienceHash: 'hash-audience',
+      pool: { concurrency: 1, maxRps: 28 },
+      filters: undefined,
+      source: 'D1',
+      updatedAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    };
+
+    await progressKv.put('broadcast:progress:job-123', JSON.stringify({ version: 1, checkpoint }));
+
+    const abortDeferred = createDeferred<void>();
+    const sendBroadcastMock = vi.fn<Parameters<SendBroadcast>, ReturnType<SendBroadcast>>()
+      .mockImplementation(async (input) => {
+        input.abortSignal?.addEventListener('abort', () => abortDeferred.resolve());
+
+        await abortDeferred.promise;
+
+        return {
+          delivered: 0,
+          failed: 0,
+          deliveries: [],
+          recipients: 3,
+          durationMs: 0,
+          source: 'D1',
+          sample: [],
+          throttled429: 0,
+        } satisfies BroadcastSendResult;
+      });
+
+    const sendTextMock = vi.fn().mockResolvedValue({});
+    const resumeWaitUntil = vi.fn();
+
+    const { handler } = createHandler({ sendTextMock, sendBroadcastMock, progressKv });
+
+    const resumeResponse = await handler.handleCommand(
+      { ...createContext({ command: '/broadcast_resume', argument: 'job-123' }), waitUntil: resumeWaitUntil },
+    );
+
+    expect(resumeResponse?.status).toBe(200);
+    await expect(resumeResponse?.json()).resolves.toEqual({ status: 'resuming', jobId: 'job-123' });
+
+    expect(sendBroadcastMock).toHaveBeenCalledTimes(1);
+
+    const pauseResponse = await handler.handleCommand(createContext({ command: '/broadcast_pause' }));
+    expect(pauseResponse?.status).toBe(200);
+    await expect(pauseResponse?.json()).resolves.toEqual({ status: 'pause_ack', jobId: 'job-123' });
+
+    const abortSignal = sendBroadcastMock.mock.calls[0]?.[0]?.abortSignal;
+    expect(abortSignal?.aborted).toBe(true);
+
+    abortDeferred.resolve();
+    if (resumeWaitUntil.mock.calls[0]?.[0]) {
+      await resumeWaitUntil.mock.calls[0][0];
+    }
+  });
+
   it('sends a single warning when the text is too long', async () => {
     const sendTextMock = vi.fn().mockResolvedValue({});
     const { handler } = createHandler({ sendTextMock, maxTextLength: 10 });
