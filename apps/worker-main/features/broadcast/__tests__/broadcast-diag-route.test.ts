@@ -95,6 +95,8 @@ describe('createBroadcastDiagRoute', () => {
       textHash: 'text-hash',
       audienceHash: 'aud-hash',
       pool: { concurrency: 2, maxRps: 28 },
+      batchSize: 5,
+      maxBatchTextBytes: 10_000,
       filters: undefined,
       source: 'D1' as const,
       updatedAt: '2025-01-01T00:00:00.000Z',
@@ -131,6 +133,9 @@ describe('createBroadcastDiagRoute', () => {
       ttlSeconds: 600,
       commands: { resume: '/broadcast_resume job-42', cancel: '/cancel_broadcast' },
       reason: 'telegram_limit_exceeded',
+      pool: { concurrency: 2, maxRps: 28 },
+      batchSize: 5,
+      maxBatchTextBytes: 10_000,
     });
     expect(body.progress.ttlSecondsRemaining).toBeGreaterThanOrEqual(594);
   });
