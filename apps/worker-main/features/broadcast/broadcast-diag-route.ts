@@ -62,6 +62,9 @@ export const createBroadcastDiagRoute = (
       ttlSecondsRemaining,
       commands: {
         resume: `/broadcast_resume ${checkpoint.jobId}`,
+        pause: `/broadcast_pause ${checkpoint.jobId}`,
+        status: `/broadcast_status ${checkpoint.jobId}`,
+        end: `/broadcast_end ${checkpoint.jobId}`,
         cancel: '/cancel_broadcast',
       },
     };
