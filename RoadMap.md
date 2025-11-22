@@ -40,6 +40,7 @@
     - [x] Смоук-тест отправки для whitelisted-пользователя (команда работает, данные пишутся) — сценарий `/broadcast` выполнен админом `136236606`, состояния pending/confirmation в логах (см. [diag](memory-bank/diagnostics.md#diag-20251201)).
     - [x] Расширить проверку лимитов на текст и тип сообщений (в боевом режиме, диаг) — отклонён текст 4085 символов с подсказкой на лимит 3970, подтверждён переход к повторному вводу (см. [diag](memory-bank/diagnostics.md#diag-20251201)).
     - [x] Нагрузочная регрессия ≥100k адресатов: лимиты `maxBatchTextBytes`/батчей и watchdog памяти логируются, авто-деградация темпа при 429/росте памяти подтверждена, pause/resume отработал без дублей ([тест 100k pause/resume](apps/worker-main/features/broadcast/__tests__/minimal-broadcast-service.test.ts), см. `memory-bank/operations/broadcast-operations.md`).
+    - [x] Смоук jobId без pause/resume-индикаторов — `/broadcast → /everybody → текст → /send` вернул `totalRuns: 3`, `lastRun: job-20251205-smoke` (`delivered: 4`, `failed: 1`, `throttled429: 0`), `/admin/diag?q=broadcast` не показывает карточку progress/resume/cancel, tail содержит только `broadcast pool initialized/delivered/failed/completed` (см. [diag](memory-bank/diagnostics.md#diag-20251205), [операционный лог](memory-bank/operations/broadcast-operations.md)).
     - [ ] Восстановить первый прогон рассылки после нагрузки; при необходимости отделить правила для ML.
 
 - **Промежуточный майлстоун «Фиксы и редизайн» (привязать к М9)**
