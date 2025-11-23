@@ -77,6 +77,7 @@ export const createQueuedMessagingPort = (
   const resolvedMaxRps = state.limits.maxRps;
 
   const reserveRateSlot = async () => {
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const timestamp = now();
       const windowStart = timestamp - 1000;

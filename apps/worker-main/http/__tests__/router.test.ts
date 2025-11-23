@@ -7,7 +7,6 @@ import { createTelegramWebhookHandler } from '../../features';
 import {
   createTelegramBroadcastCommandHandler,
   BROADCAST_AUDIENCE_PROMPT,
-  BROADCAST_SUCCESS_MESSAGE,
   buildBroadcastPromptMessage,
   createImmediateBroadcastSender,
 } from '../../features/broadcast';

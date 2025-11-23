@@ -10,7 +10,7 @@ export const sanitizeVisibleText = (text: string): string =>
   stripControlCharacters(text).trim();
 
 const STRIP_MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\([^)]*\)/gu;
-const STRIP_MARKDOWN_ESCAPES_PATTERN = /\\([_*\[\]()~`>#+\-=|{}.!])/gu;
+const STRIP_MARKDOWN_ESCAPES_PATTERN = /\\([_*[\]()~`>#+\-=|{}.!])/gu;
 const STRIP_MARKDOWN_CONTROL_PATTERN = /[_*~`>]/gu;
 const STRIP_HTML_TAG_PATTERN = /<[^>]+>/gu;
 

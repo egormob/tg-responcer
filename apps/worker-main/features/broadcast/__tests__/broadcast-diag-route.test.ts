@@ -7,7 +7,7 @@ class MemoryKv implements KVNamespace {
 
   private readonly store = new Map<string, { value: string; expiration?: number }>();
 
-  async get(key: string, type: 'text'): Promise<string | null> {
+  async get(key: string): Promise<string | null> {
     const entry = this.store.get(key);
     if (!entry) {
       return null;
