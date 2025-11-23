@@ -553,7 +553,12 @@ describe('worker integration with cached router', () => {
       ENV_VERSION: '1',
     } as Record<string, unknown>;
 
-    const ctx = { waitUntil: vi.fn() } as { waitUntil(promise: Promise<unknown>): void };
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    };
 
     const startUpdate: TelegramUpdate = {
       ...baseUpdate,
@@ -596,6 +601,8 @@ describe('worker integration with cached router', () => {
     );
 
     expect(composeWorkerMock).toHaveBeenCalledTimes(1);
+
+    await Promise.all(waitUntilPromises);
     expect(handleMessage).toHaveBeenCalledTimes(1);
     expect(handleMessage.mock.calls[0]?.[0]?.user.utmSource).toBe('src_DEMO');
     expect(storage.saveUser).toHaveBeenCalledTimes(1);

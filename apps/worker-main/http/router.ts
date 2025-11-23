@@ -435,6 +435,11 @@ export interface RouterOptions {
     }): Promise<{ handled: boolean }>;
   };
   aiGuard?: AiBackpressureGuard;
+  /**
+   * Если не false, диалог с ИИ уходит в фон: Telegram получает ack сразу,
+   * обработка выполняется через waitUntil/без ожидания HTTP-ответа.
+   */
+  asyncDialogProcessing?: boolean;
   startDedupeKv?: StartDedupeKvNamespace;
   admin?: {
     token: string;
@@ -996,11 +1001,32 @@ export const createRouter = (options: RouterOptions) => {
       return processCurrent(message, ticket);
     };
 
-    if (!options.aiGuard) {
-      return safeRunDialog(message);
+    const runDialogAsync = () => (options.aiGuard ? processWithGuard() : safeRunDialog(message));
+
+    if (options.asyncDialogProcessing === true) {
+      const run = async () => {
+        try {
+          await runDialogAsync();
+        } catch (error) {
+          const normalizedError =
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : { message: String(error) };
+          // eslint-disable-next-line no-console
+          console.error('[router] async dialog failed', normalizedError);
+        }
+      };
+
+      if (context?.waitUntil) {
+        context.waitUntil(run());
+      } else {
+        void run();
+      }
+
+      return jsonResponse({ status: 'queued' }, { status: 200 });
     }
 
-    return processWithGuard();
+    return runDialogAsync();
   };
 
   return {

@@ -947,6 +947,40 @@ describe('http router', () => {
     expect(messaging.sendText).not.toHaveBeenCalled();
   });
 
+  it('acks immediately and runs dialog in background when async processing is enabled', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      status: 'replied',
+      response: { text: 'ok', messageId: 'bg-1' },
+    });
+    const messaging = createMessagingMock();
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      asyncDialogProcessing: true,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-bg' },
+          chat: { id: 'chat-bg' },
+          text: 'async hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+      { waitUntil: (promise) => waitUntilPromises.push(promise) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'queued' });
+
+    await Promise.all(waitUntilPromises);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('promotes buffered message after processing the active one', async () => {
     const handleMessage = vi
       .fn()
