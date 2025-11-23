@@ -252,12 +252,6 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
         return { status: 'blocked', reason: 'over_limit' };
       }
 
-      if (kvStatus === 'error') {
-        blockedSinceBoot += 1;
-        lastBlockedAt = now();
-        return { status: 'blocked', reason: 'kv_error', kvError: true };
-      }
-
       ticketSeq += 1;
       const ticket: GuardTicket = { chatKey, ticketId: ticketSeq, kvCounted: kvStatus !== 'error' };
       const buffer: BufferEntry = {
@@ -278,12 +272,6 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
       blockedSinceBoot += 1;
       lastBlockedAt = now();
       return { status: 'blocked', reason: 'over_limit' };
-    }
-
-    if (kvStatus === 'error') {
-      blockedSinceBoot += 1;
-      lastBlockedAt = now();
-      return { status: 'blocked', reason: 'kv_error', kvError: true };
     }
 
     ticketSeq += 1;
