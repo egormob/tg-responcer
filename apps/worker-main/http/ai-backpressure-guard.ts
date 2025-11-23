@@ -8,6 +8,7 @@ export interface AiBackpressureGuardStats {
   blockedSinceBoot: number;
   mergedSinceBoot: number;
   truncatedSinceBoot: number;
+  kvErrorsSinceBoot: number;
   lastBlockedAt: number | null;
 }
 
@@ -28,10 +29,11 @@ export type GuardDecision =
     }
   | {
       status: 'blocked';
-      reason: 'over_limit';
+      reason: 'over_limit' | 'kv_error';
       merged?: boolean;
       truncated?: boolean;
       parts?: number;
+      kvError?: boolean;
     };
 
 export interface AiBackpressureGuardOptions {
@@ -151,6 +153,7 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
   let blockedSinceBoot = 0;
   let mergedSinceBoot = 0;
   let truncatedSinceBoot = 0;
+  let kvErrorsSinceBoot = 0;
   let lastBlockedAt: number | null = null;
   let ticketSeq = 0;
 
@@ -177,6 +180,7 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
         chatKey,
         error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
       });
+      kvErrorsSinceBoot += 1;
       return 'error';
     }
   };
@@ -201,6 +205,7 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
         chatKey,
         error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
       });
+      kvErrorsSinceBoot += 1;
     }
   };
 
@@ -322,6 +327,7 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
       blockedSinceBoot,
       mergedSinceBoot,
       truncatedSinceBoot,
+      kvErrorsSinceBoot,
       lastBlockedAt,
     };
   };

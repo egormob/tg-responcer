@@ -939,6 +939,7 @@ export const createRouter = (options: RouterOptions) => {
         merged: decision.merged ?? false,
         truncated: decision.truncated ?? false,
         parts: decision.parts,
+        kvError: decision.kvError ?? false,
         updateId,
       });
 

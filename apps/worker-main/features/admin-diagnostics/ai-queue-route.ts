@@ -111,6 +111,7 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
         blockedSinceBoot: guardStats.blockedSinceBoot,
         mergedSinceBoot: guardStats.mergedSinceBoot,
         truncatedSinceBoot: guardStats.truncatedSinceBoot,
+        kvErrorsSinceBoot: guardStats.kvErrorsSinceBoot,
         lastBlockedAt: guardStats.lastBlockedAt
           ? new Date(guardStats.lastBlockedAt).toISOString()
           : null,
