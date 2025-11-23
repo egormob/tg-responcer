@@ -1118,6 +1118,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     webhookSecret: composition.webhookSecret,
     typingIndicator,
     aiGuard,
+    asyncDialogProcessing: true,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
     transformPayload,
     systemCommands: transformPayload.systemCommands,
