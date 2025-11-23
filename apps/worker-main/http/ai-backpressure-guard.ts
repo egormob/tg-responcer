@@ -16,6 +16,7 @@ export interface GuardTicket {
   chatKey: string;
   ticketId: number;
   kvCounted: boolean;
+  kvToken?: string;
 }
 
 export type GuardDecision =
@@ -37,10 +38,6 @@ export type GuardDecision =
     };
 
 export interface AiBackpressureGuardOptions {
-  /**
-   * Максимальное количество сообщений (active + buffered) на чат до блокировки.
-   */
-  maxInFlightPerChat?: number;
   /**
    * KV для меж-инстансового подсчёта in-flight. Необязательный, деградирует в локальный режим.
    */
@@ -78,6 +75,7 @@ interface BufferEntry extends GuardEntry {
 const DEFAULT_MAX_IN_FLIGHT = 2;
 const DEFAULT_KV_TTL_SECONDS = 60;
 const DEFAULT_MAX_BUFFERED_TEXT_LENGTH = 3_900;
+const DEFAULT_KV_TOKEN_LENGTH = 12;
 
 const toChatKey = (message: IncomingMessage): string =>
   `${message.chat.id}::${message.chat.threadId ?? ''}`;
@@ -120,23 +118,10 @@ const mergeBufferedText = (buffer: BufferEntry): BufferEntry => ({
   },
 });
 
-const parseCounter = (raw: string | null): number => {
-  if (typeof raw !== 'string') {
-    return 0;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return 0;
-  }
-
-  return parsed;
-};
-
 export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) => {
-  const maxInFlight = Math.max(1, Math.floor(options.maxInFlightPerChat ?? DEFAULT_MAX_IN_FLIGHT));
   const now = options.now ?? (() => Date.now());
   const maxBufferedTextLength = Math.max(1, Math.floor(options.maxBufferedTextLength ?? DEFAULT_MAX_BUFFERED_TEXT_LENGTH));
+  const kvTokenLength = DEFAULT_KV_TOKEN_LENGTH;
 
   const kvNamespace = options.kv?.namespace;
   const kvPrefix = options.kv?.prefix ?? 'ai_guard';
@@ -159,49 +144,70 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
 
   const kvKey = (chatKey: string) => `${kvPrefix}:${chatKey}`;
 
-  const incrementKv = async (chatKey: string): Promise<'ok' | 'blocked' | 'error'> => {
+  const generateToken = (): string => {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < kvTokenLength; i += 1) {
+      result += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+    }
+    return result;
+  };
+
+  const acquireKvLock = async (chatKey: string): Promise<{ status: 'ok' | 'blocked' | 'error'; token?: string }> => {
     if (!kvNamespace) {
-      return 'ok';
+      return { status: 'ok' };
     }
 
     try {
       const raw = await kvNamespace.get(kvKey(chatKey), 'text');
-      const current = parseCounter(raw);
-
-      if (current >= maxInFlight) {
-        return 'blocked';
+      if (typeof raw === 'string' && raw.trim().length > 0) {
+        return { status: 'blocked' };
       }
 
-      const nextValue = current + 1;
-      await kvNamespace.put(kvKey(chatKey), String(nextValue), { expirationTtl: kvTtlSeconds });
-      return 'ok';
+      const token = generateToken();
+      await kvNamespace.put(kvKey(chatKey), token, { expirationTtl: kvTtlSeconds });
+      return { status: 'ok', token };
     } catch (error) {
-      kvWarn('kv increment failed, degrading to local guard', {
+      kvWarn('kv lock acquire failed', {
         chatKey,
         error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
       });
       kvErrorsSinceBoot += 1;
-      return 'error';
+      return { status: 'error' };
     }
   };
 
-  const decrementKv = async (chatKey: string) => {
+  const refreshKvLock = async (chatKey: string, token: string) => {
     if (!kvNamespace) {
       return;
     }
 
     try {
-      const raw = await kvNamespace.get(kvKey(chatKey), 'text');
-      const current = parseCounter(raw);
-      const nextValue = Math.max(0, current - 1);
-
-      if (nextValue === 0) {
-        await kvNamespace.delete(kvKey(chatKey));
-      } else {
-        await kvNamespace.put(kvKey(chatKey), String(nextValue), { expirationTtl: kvTtlSeconds });
-      }
+      await kvNamespace.put(kvKey(chatKey), token, { expirationTtl: kvTtlSeconds });
     } catch (error) {
-      kvWarn('kv decrement failed', {
+      kvWarn('kv lock refresh failed', {
+        chatKey,
+        error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
+      });
+      kvErrorsSinceBoot += 1;
+    }
+  };
+
+  const releaseKvLock = async (chatKey: string, token?: string) => {
+    if (!kvNamespace) {
+      return;
+    }
+
+    try {
+      if (token) {
+        const current = await kvNamespace.get(kvKey(chatKey), 'text');
+        if (current !== token) {
+          return;
+        }
+      }
+      await kvNamespace.delete(kvKey(chatKey));
+    } catch (error) {
+      kvWarn('kv lock release failed', {
         chatKey,
         error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
       });
@@ -238,22 +244,20 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     const bufferedCount = state.buffer ? 1 : 0;
     const inFlight = activeCount + bufferedCount;
 
-    if (inFlight >= maxInFlight) {
+    if (inFlight >= DEFAULT_MAX_IN_FLIGHT) {
       blockedSinceBoot += 1;
       lastBlockedAt = now();
       return { status: 'blocked', reason: 'over_limit' };
     }
 
     if (inFlight === 1) {
-      const kvStatus = await incrementKv(chatKey);
-      if (kvStatus === 'blocked') {
-        blockedSinceBoot += 1;
-        lastBlockedAt = now();
-        return { status: 'blocked', reason: 'over_limit' };
-      }
-
       ticketSeq += 1;
-      const ticket: GuardTicket = { chatKey, ticketId: ticketSeq, kvCounted: kvStatus !== 'error' };
+      const ticket: GuardTicket = {
+        chatKey,
+        ticketId: ticketSeq,
+        kvCounted: state.active?.ticket.kvCounted ?? false,
+        kvToken: state.active?.ticket.kvToken,
+      };
       const buffer: BufferEntry = {
         ticket,
         message: { ...message },
@@ -267,15 +271,29 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
       return { status: 'buffered', ticket };
     }
 
-    const kvStatus = await incrementKv(chatKey);
-    if (kvStatus === 'blocked') {
+    const kvStatus = await acquireKvLock(chatKey);
+    if (kvStatus.status === 'blocked') {
       blockedSinceBoot += 1;
       lastBlockedAt = now();
       return { status: 'blocked', reason: 'over_limit' };
     }
 
+    if (kvStatus.status === 'error') {
+      blockedSinceBoot += 1;
+      lastBlockedAt = now();
+      return { status: 'blocked', reason: 'kv_error', kvError: true };
+    }
+
     ticketSeq += 1;
-    const ticket: GuardTicket = { chatKey, ticketId: ticketSeq, kvCounted: kvStatus !== 'error' };
+    const ticket: GuardTicket = {
+      chatKey,
+      ticketId: ticketSeq,
+      kvCounted: true,
+      kvToken: kvStatus.token,
+    };
+    if (kvStatus.token) {
+      await refreshKvLock(chatKey, kvStatus.token);
+    }
     state.active = { ticket, message };
     chats.set(chatKey, state);
 
@@ -291,10 +309,6 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     const kvCounted = state.active.ticket.kvCounted;
     state.active = undefined;
 
-    if (kvCounted) {
-      await decrementKv(ticket.chatKey);
-    }
-
     if (state.buffer) {
       const promoted = mergeBufferedText(state.buffer);
       state.active = {
@@ -304,6 +318,10 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
       state.buffer = undefined;
       chats.set(ticket.chatKey, state);
       return { ticket: promoted.ticket, message: promoted.message };
+    }
+
+    if (kvCounted) {
+      await releaseKvLock(ticket.chatKey, ticket.kvToken);
     }
 
     if (!state.active && !state.buffer) {
