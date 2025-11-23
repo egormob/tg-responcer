@@ -119,7 +119,7 @@ describe('DialogEngine', () => {
 
     expect(storage.getRecentMessages).toHaveBeenCalledWith({
       userId: 'user-1',
-      limit: 15,
+      limit: 40,
     });
 
     expect(messaging.sendTyping).toHaveBeenCalledWith({

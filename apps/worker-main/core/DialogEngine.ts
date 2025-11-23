@@ -57,7 +57,7 @@ export class DialogEngine {
   private readonly now: () => Date;
 
   constructor(private readonly deps: DialogEngineDeps, options: DialogEngineOptions = {}) {
-    this.recentMessagesLimit = options.recentMessagesLimit ?? 15;
+    this.recentMessagesLimit = options.recentMessagesLimit ?? 40;
     this.now = deps.now ?? (() => new Date());
   }
 
