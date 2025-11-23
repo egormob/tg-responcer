@@ -1063,6 +1063,12 @@ const createRequestHandler = async (env: WorkerEnv) => {
           logger: console,
         }
       : undefined,
+    kvStats: env.AI_CONTROL_KV
+      ? {
+          namespace: env.AI_CONTROL_KV,
+          logger: console,
+        }
+      : undefined,
   });
 
   const adminAccess = createAdminAccessIfConfigured(env);

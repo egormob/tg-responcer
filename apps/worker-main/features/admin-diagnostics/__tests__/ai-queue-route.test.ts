@@ -133,6 +133,49 @@ describe('createAiQueueDiagRoute', () => {
     });
   });
 
+  it('prefers aggregated guard stats when available', async () => {
+    const ai = createAiPort({
+      getQueueStats: () => createQueueStats(),
+    });
+
+    const route = createAiQueueDiagRoute({
+      ai,
+      guard: {
+        getStats: () => ({
+          activeChats: 1,
+          bufferedChats: 1,
+          blockedSinceBoot: 1,
+          mergedSinceBoot: 1,
+          truncatedSinceBoot: 0,
+          kvErrorsSinceBoot: 0,
+          lastBlockedAt: 1_700_000_000_000,
+        }),
+        getAggregatedStats: async () => ({
+          activeChats: 5,
+          bufferedChats: 4,
+          blockedSinceBoot: 10,
+          mergedSinceBoot: 8,
+          truncatedSinceBoot: 2,
+          kvErrorsSinceBoot: 1,
+          lastBlockedAt: 1_800_000_000_000,
+        }),
+      },
+    });
+
+    const response = await route(new Request('https://example.test/admin/diag?q=ai-queue'));
+    const body = await response.json() as { guard: Record<string, unknown> };
+
+    expect(body.guard).toMatchObject({
+      activeChats: 5,
+      bufferedChats: 4,
+      blockedSinceBoot: 10,
+      mergedSinceBoot: 8,
+      truncatedSinceBoot: 2,
+      kvErrorsSinceBoot: 1,
+    });
+    expect(typeof body.guard?.lastBlockedAt).toBe('string');
+  });
+
   it('marks warning when queue usage crosses the threshold', async () => {
     const ai = createAiPort({
       getQueueStats: () =>
