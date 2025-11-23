@@ -73,6 +73,27 @@ describe('composeWorker', () => {
     expect(composition.ports.messaging).toBeDefined();
   });
 
+  it('uses default dialog history limit', async () => {
+    const adapters = createPortOverrides();
+
+    const composition = composeWorker({
+      env: {},
+      adapters,
+    });
+
+    await composition.dialogEngine.handleMessage({
+      user: { userId: 'user-history' },
+      chat: { id: 'chat-history' },
+      text: 'hello',
+      receivedAt: new Date(),
+    });
+
+    expect(adapters.storage.getRecentMessages).toHaveBeenCalledWith({
+      userId: 'user-history',
+      limit: 40,
+    });
+  });
+
   it('prefers provided adapters over noop defaults', async () => {
     const adapters = createPortOverrides();
 

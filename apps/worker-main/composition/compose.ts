@@ -32,6 +32,11 @@ export interface CompositionResult {
   webhookSecret?: string;
 }
 
+const DEFAULT_DIALOG_OPTIONS: DialogEngineOptions = {
+  // Keep a reasonably long history (~20 user + 20 assistant messages) without extra guards.
+  recentMessagesLimit: 40,
+};
+
 const mergePorts = (
   overrides: Partial<PortOverrides> | undefined,
   fallback: NoopPorts,
@@ -69,7 +74,7 @@ export const composeWorker = (options: ComposeOptions): CompositionResult => {
       rateLimit: ports.rateLimit,
       now: options.now,
     },
-    options.dialogOptions,
+    { ...DEFAULT_DIALOG_OPTIONS, ...options.dialogOptions },
   );
 
   return {
