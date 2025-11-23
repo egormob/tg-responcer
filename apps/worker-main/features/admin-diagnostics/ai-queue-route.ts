@@ -6,6 +6,7 @@ export interface CreateAiQueueDiagRouteOptions {
   ai: AiPort;
   guard?: {
     getStats(): AiBackpressureGuardStats;
+    getAggregatedStats?(): Promise<AiBackpressureGuardStats> | AiBackpressureGuardStats;
   };
 }
 
@@ -104,7 +105,9 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
     };
 
     if (options.guard) {
-      const guardStats = options.guard.getStats();
+      const guardStats = typeof options.guard.getAggregatedStats === 'function'
+        ? await options.guard.getAggregatedStats()
+        : options.guard.getStats();
       body.guard = {
         activeChats: guardStats.activeChats,
         bufferedChats: guardStats.bufferedChats,

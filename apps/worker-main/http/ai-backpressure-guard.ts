@@ -50,6 +50,16 @@ export interface AiBackpressureGuardOptions {
     };
   };
   /**
+   * KV для агрегации статистики guard между инстансами. Необязательный блок.
+   */
+  kvStats?: {
+    namespace: KvNamespace;
+    key?: string;
+    logger?: {
+      warn?: (message: string, details?: Record<string, unknown>) => void;
+    };
+  };
+  /**
    * Максимальная длина склеенного буфера (для длинных сообщений Telegram).
    */
   maxBufferedTextLength?: number;
@@ -133,6 +143,12 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     // eslint-disable-next-line no-console
     console.warn(`[ai-guard] ${message}`, details);
   });
+  const kvStatsNamespace = options.kvStats?.namespace;
+  const kvStatsKey = options.kvStats?.key ?? `${kvPrefix}:stats`;
+  const kvStatsWarn = options.kvStats?.logger?.warn ?? ((message: string, details?: Record<string, unknown>) => {
+    // eslint-disable-next-line no-console
+    console.warn(`[ai-guard][stats] ${message}`, details);
+  });
 
   const chats = new Map<string, ChatState>();
   let blockedSinceBoot = 0;
@@ -141,6 +157,54 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
   let kvErrorsSinceBoot = 0;
   let lastBlockedAt: number | null = null;
   let ticketSeq = 0;
+
+  const updateAggregatedStats = (delta: Partial<AiBackpressureGuardStats>) => {
+    if (!kvStatsNamespace) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const raw = await kvStatsNamespace.get(kvStatsKey, 'json');
+        const base: AiBackpressureGuardStats = {
+          activeChats: 0,
+          bufferedChats: 0,
+          blockedSinceBoot: 0,
+          mergedSinceBoot: 0,
+          truncatedSinceBoot: 0,
+          kvErrorsSinceBoot: 0,
+          lastBlockedAt: null,
+        };
+        const current = (raw && typeof raw === 'object') ? (raw as Partial<AiBackpressureGuardStats>) : {};
+        const next: AiBackpressureGuardStats = {
+          ...base,
+          ...current,
+        };
+
+        if (typeof delta.blockedSinceBoot === 'number') {
+          next.blockedSinceBoot += delta.blockedSinceBoot;
+        }
+        if (typeof delta.mergedSinceBoot === 'number') {
+          next.mergedSinceBoot += delta.mergedSinceBoot;
+        }
+        if (typeof delta.truncatedSinceBoot === 'number') {
+          next.truncatedSinceBoot += delta.truncatedSinceBoot;
+        }
+        if (typeof delta.kvErrorsSinceBoot === 'number') {
+          next.kvErrorsSinceBoot += delta.kvErrorsSinceBoot;
+        }
+        if (typeof delta.lastBlockedAt === 'number') {
+          next.lastBlockedAt = Math.max(next.lastBlockedAt ?? 0, delta.lastBlockedAt);
+        }
+
+        await kvStatsNamespace.put(kvStatsKey, JSON.stringify(next));
+      } catch (error) {
+        kvStatsWarn('kv stats update failed', {
+          error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
+        });
+      }
+    })();
+  };
 
   const kvKey = (chatKey: string) => `${kvPrefix}:${chatKey}`;
 
@@ -230,6 +294,12 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
         truncatedSinceBoot += 1;
       }
       lastBlockedAt = now();
+      updateAggregatedStats({
+        blockedSinceBoot: 1,
+        mergedSinceBoot: 1,
+        truncatedSinceBoot: nextBuffer.truncated ? 1 : 0,
+        lastBlockedAt,
+      });
 
       return {
         status: 'blocked',
@@ -247,6 +317,7 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     if (inFlight >= DEFAULT_MAX_IN_FLIGHT) {
       blockedSinceBoot += 1;
       lastBlockedAt = now();
+      updateAggregatedStats({ blockedSinceBoot: 1, lastBlockedAt });
       return { status: 'blocked', reason: 'over_limit' };
     }
 
@@ -275,12 +346,14 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     if (kvStatus.status === 'blocked') {
       blockedSinceBoot += 1;
       lastBlockedAt = now();
+      updateAggregatedStats({ blockedSinceBoot: 1, lastBlockedAt });
       return { status: 'blocked', reason: 'over_limit' };
     }
 
     if (kvStatus.status === 'error') {
       blockedSinceBoot += 1;
       lastBlockedAt = now();
+      updateAggregatedStats({ blockedSinceBoot: 1, kvErrorsSinceBoot: 1, lastBlockedAt });
       return { status: 'blocked', reason: 'kv_error', kvError: true };
     }
 
@@ -350,10 +423,39 @@ export const createAiBackpressureGuard = (options: AiBackpressureGuardOptions) =
     };
   };
 
+  const getAggregatedStats = async (): Promise<AiBackpressureGuardStats> => {
+    if (!kvStatsNamespace) {
+      return getStats();
+    }
+
+    try {
+      const raw = await kvStatsNamespace.get(kvStatsKey, 'json');
+      if (raw && typeof raw === 'object') {
+        const candidate = raw as Partial<AiBackpressureGuardStats>;
+        return {
+          activeChats: 0,
+          bufferedChats: 0,
+          blockedSinceBoot: candidate.blockedSinceBoot ?? 0,
+          mergedSinceBoot: candidate.mergedSinceBoot ?? 0,
+          truncatedSinceBoot: candidate.truncatedSinceBoot ?? 0,
+          kvErrorsSinceBoot: candidate.kvErrorsSinceBoot ?? 0,
+          lastBlockedAt: typeof candidate.lastBlockedAt === 'number' ? candidate.lastBlockedAt : null,
+        };
+      }
+    } catch (error) {
+      kvStatsWarn('kv stats read failed', {
+        error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
+      });
+    }
+
+    return getStats();
+  };
+
   return {
     enter,
     release,
     getStats,
+    getAggregatedStats,
   };
 };
 
