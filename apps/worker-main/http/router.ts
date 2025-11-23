@@ -1,5 +1,6 @@
 import { DialogEngine, type IncomingMessage } from '../core';
 import type { MessagingPort } from '../ports';
+import type { AiBackpressureGuard, GuardDecision, GuardTicket } from './ai-backpressure-guard';
 import type { TypingIndicator } from './typing-indicator';
 import { safeWebhookHandler } from './safe-webhook';
 import {
@@ -27,6 +28,7 @@ import {
 } from './system-command-handlers';
 
 export const RATE_LIMIT_FALLBACK_TEXT = '🥶⌛️ Лимит ответов исчерпан. Попробуйте позже.';
+export const AI_GUARD_WAIT_TEXT = 'Подождите, я думаю над тем что вы сказали';
 
 const USER_ERROR_TEXT = 'Ой… 🧐 …';
 const ADMIN_ROLE_MISMATCH_TEXT = 'Эта команда доступна только администратору';
@@ -432,6 +434,7 @@ export interface RouterOptions {
       threadId?: string;
     }): Promise<{ handled: boolean }>;
   };
+  aiGuard?: AiBackpressureGuard;
   startDedupeKv?: StartDedupeKvNamespace;
   admin?: {
     token: string;
@@ -632,7 +635,7 @@ export const createRouter = (options: RouterOptions) => {
       return new Response(reason, { status: 400 });
     }
 
-    const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
+  const maybeHandleSystemCommand = async (): Promise<Response | undefined> => {
       const matchResult = matchSystemCommand(message.text, message, systemCommands);
       if (!matchResult) {
         return undefined;
@@ -836,12 +839,23 @@ export const createRouter = (options: RouterOptions) => {
       return systemCommandResponse;
     }
 
-    const runDialog = async () => {
-      const executeDialog = () => options.dialogEngine.handleMessage(message);
+    const resolveLogDetails = (currentMessage: IncomingMessage): MessagingLogDetails => ({
+      ...(messageLogDetails ?? {
+        action: 'sendText',
+        route: 'message',
+        updateId,
+      }),
+      chatIdNormalized: currentMessage.chat.id,
+      fromId: currentMessage.user.userId,
+      messageId: currentMessage.messageId,
+    });
+
+    const runDialog = async (currentMessage: IncomingMessage) => {
+      const executeDialog = () => options.dialogEngine.handleMessage(currentMessage);
 
       const dialogResult = options.typingIndicator
         ? await options.typingIndicator.runWithTyping(
-            { chatId: message.chat.id, threadId: message.chat.threadId },
+            { chatId: currentMessage.chat.id, threadId: currentMessage.chat.threadId },
             executeDialog,
           )
         : await executeDialog();
@@ -852,9 +866,9 @@ export const createRouter = (options: RouterOptions) => {
         if (options.rateLimitNotifier) {
           try {
             const notificationResult = await options.rateLimitNotifier.notify({
-              userId: message.user.userId,
-              chatId: message.chat.id,
-              threadId: message.chat.threadId,
+              userId: currentMessage.user.userId,
+              chatId: currentMessage.chat.id,
+              threadId: currentMessage.chat.threadId,
             });
 
             rateLimitHandled = notificationResult?.handled === true;
@@ -868,20 +882,13 @@ export const createRouter = (options: RouterOptions) => {
           try {
             await logMessagingCall(
               {
-                ...(messageLogDetails ?? {
-                  action: 'sendText',
-                  route: 'rate_limit_fallback',
-                  updateId,
-                  chatIdNormalized: message.chat.id,
-                  fromId: message.user.userId,
-                  messageId: message.messageId,
-                }),
+                ...resolveLogDetails(currentMessage),
                 route: 'rate_limit_fallback',
               },
               () =>
                 options.messaging.sendText({
-                  chatId: message.chat.id,
-                  threadId: message.chat.threadId,
+                  chatId: currentMessage.chat.id,
+                  threadId: currentMessage.chat.threadId,
                   text: RATE_LIMIT_FALLBACK_TEXT,
                 }),
             );
@@ -895,23 +902,104 @@ export const createRouter = (options: RouterOptions) => {
       return dialogResult;
     };
 
-    return safeWebhookHandler({
-      chat: { id: message.chat.id, threadId: message.chat.threadId },
-      messaging: options.messaging,
-      run: runDialog,
-      mapResult: async (result) => {
-        if (result.status === 'rate_limited') {
-          return { body: { status: 'rate_limited' } };
-        }
+    const safeRunDialog = (currentMessage: IncomingMessage) =>
+      safeWebhookHandler({
+        chat: { id: currentMessage.chat.id, threadId: currentMessage.chat.threadId },
+        messaging: options.messaging,
+        run: () => runDialog(currentMessage),
+        mapResult: async (result) => {
+          if (result.status === 'rate_limited') {
+            return { body: { status: 'rate_limited' } };
+          }
 
-        return {
-          body: {
-            status: 'ok',
-            messageId: result.response.messageId ?? null,
-          },
+          return {
+            body: {
+              status: 'ok',
+              messageId: result.response.messageId ?? null,
+            },
+          };
+        },
+      });
+
+    const handleGuardBlocked = async (decision: GuardDecision): Promise<Response> => {
+      const route = 'ai_backpressure';
+      const details =
+        messageLogDetails ?? {
+          action: 'sendText',
+          route,
+          updateId,
+          chatIdNormalized: message.chat.id,
+          fromId: message.user.userId,
+          messageId: message.messageId,
         };
-      },
-    });
+
+      // eslint-disable-next-line no-console
+      console.info('[router] ai guard blocked', {
+        route,
+        merged: decision.merged ?? false,
+        truncated: decision.truncated ?? false,
+        parts: decision.parts,
+        updateId,
+      });
+
+      try {
+        await logMessagingCall(
+          { ...details, route },
+          () =>
+            options.messaging.sendText({
+              chatId: message.chat.id,
+              threadId: message.chat.threadId,
+              text: AI_GUARD_WAIT_TEXT,
+            }),
+        );
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn('[router] failed to send ai guard wait message', error);
+      }
+
+      return jsonResponse({ status: 'queued' }, { status: 200 });
+    };
+
+    const processWithGuard = async (): Promise<Response> => {
+      const guardDecision = await options.aiGuard!.enter(message);
+
+      if (guardDecision.status === 'blocked') {
+        return handleGuardBlocked(guardDecision);
+      }
+
+      if (guardDecision.status === 'buffered') {
+        return jsonResponse({ status: 'queued', buffered: true }, { status: 200 });
+      }
+
+      const ticket = guardDecision.ticket;
+
+      const processCurrent = async (
+        currentMessage: IncomingMessage,
+        currentTicket: GuardTicket,
+      ): Promise<Response> => {
+        try {
+          return await safeRunDialog(currentMessage);
+        } finally {
+          const promoted = await options.aiGuard?.release(currentTicket);
+          if (promoted) {
+            const followup = processCurrent(promoted.message, promoted.ticket);
+            if (context?.waitUntil) {
+              context.waitUntil(followup);
+            } else {
+              void followup;
+            }
+          }
+        }
+      };
+
+      return processCurrent(message, ticket);
+    };
+
+    if (!options.aiGuard) {
+      return safeRunDialog(message);
+    }
+
+    return processWithGuard();
   };
 
   return {

@@ -1,8 +1,12 @@
 import type { AiPort, AiQueueStats } from '../../ports';
+import type { AiBackpressureGuardStats } from '../../http';
 import { json } from '../../shared/json-response';
 
 export interface CreateAiQueueDiagRouteOptions {
   ai: AiPort;
+  guard?: {
+    getStats(): AiBackpressureGuardStats;
+  };
 }
 
 const isAiQueueSupported = (ai: AiPort): ai is AiPort & { getQueueStats: NonNullable<AiPort['getQueueStats']> } =>
@@ -72,7 +76,7 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
     const status = computeQueueStatus(stats);
     const lastDropAt = normalizeLastDropAt(stats.lastDropAt);
 
-    return json({
+    const body: Record<string, unknown> = {
       status,
       active: stats.active,
       queued: stats.queued,
@@ -97,5 +101,21 @@ export const createAiQueueDiagRoute = (options: CreateAiQueueDiagRouteOptions) =
         endpointFailoverThreshold: stats.sources.endpointFailoverThreshold,
         kvConfig: stats.sources.kvConfig,
       },
-    });
+    };
+
+    if (options.guard) {
+      const guardStats = options.guard.getStats();
+      body.guard = {
+        activeChats: guardStats.activeChats,
+        bufferedChats: guardStats.bufferedChats,
+        blockedSinceBoot: guardStats.blockedSinceBoot,
+        mergedSinceBoot: guardStats.mergedSinceBoot,
+        truncatedSinceBoot: guardStats.truncatedSinceBoot,
+        lastBlockedAt: guardStats.lastBlockedAt
+          ? new Date(guardStats.lastBlockedAt).toISOString()
+          : null,
+      };
+    }
+
+    return json(body);
   };

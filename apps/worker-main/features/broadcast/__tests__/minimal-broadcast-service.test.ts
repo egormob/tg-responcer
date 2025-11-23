@@ -5,7 +5,6 @@ import {
   createImmediateBroadcastSender,
   createRegistryBroadcastSender,
   loadBroadcastCheckpoint,
-  listBroadcastCheckpoints,
   type BroadcastRecipient,
 } from '../minimal-broadcast-service';
 
@@ -17,7 +16,7 @@ class MemoryKv implements KVNamespace {
 
   readonly store = new Map<string, { value: string; expiration?: number }>();
 
-  async get(key: string, type: 'text'): Promise<string | null> {
+  async get(key: string): Promise<string | null> {
     const entry = this.store.get(key);
     if (!entry) {
       return null;

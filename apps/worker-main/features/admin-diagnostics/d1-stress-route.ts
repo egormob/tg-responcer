@@ -391,6 +391,7 @@ export const createD1StressRoute = (options: CreateD1StressRouteOptions) => {
     };
 
     const worker = async (threadIndex: number) => {
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         if (shouldStop()) {
           break;
@@ -473,4 +474,3 @@ export const createD1StressRoute = (options: CreateD1StressRouteOptions) => {
     });
   };
 };
-

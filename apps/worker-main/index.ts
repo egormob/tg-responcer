@@ -48,6 +48,7 @@ import {
   type BroadcastTelemetry,
 } from './features';
 import {
+  createAiBackpressureGuard,
   createRouter,
   createSystemCommandRegistry,
   createTypingIndicator,
@@ -737,6 +738,7 @@ const createAdminRoutes = (
   broadcastRecipientsStore: BroadcastRecipientsStore | undefined,
   exportRateTelemetry?: ExportRateTelemetry,
   broadcastTelemetry?: BroadcastTelemetry,
+  aiGuard?: ReturnType<typeof createAiBackpressureGuard>,
 ): RouterOptions['admin'] | undefined => {
   const adminToken = getTrimmedString(env.ADMIN_TOKEN);
   if (!adminToken) {
@@ -747,7 +749,10 @@ const createAdminRoutes = (
     storage: composition.ports.storage,
     env,
   });
-  const aiQueueDiagRoute = createAiQueueDiagRoute({ ai: composition.ports.ai });
+  const aiQueueDiagRoute = createAiQueueDiagRoute({
+    ai: composition.ports.ai,
+    guard: aiGuard ? { getStats: () => aiGuard.getStats() } : undefined,
+  });
   const exportRateDiagRoute = createExportRateDiagRoute({ telemetry: exportRateTelemetry });
   const broadcastDiagRoute = createBroadcastDiagRoute({
     telemetry: broadcastTelemetry,
@@ -1051,6 +1056,14 @@ const createRequestHandler = async (env: WorkerEnv) => {
   });
 
   const typingIndicator = createTypingIndicatorIfAvailable(composition.ports.messaging);
+  const aiGuard = createAiBackpressureGuard({
+    kv: env.AI_CONTROL_KV
+      ? {
+          namespace: env.AI_CONTROL_KV,
+          logger: console,
+        }
+      : undefined,
+  });
 
   const adminAccess = createAdminAccessIfConfigured(env);
   const determineCommandRole: DetermineSystemCommandRole | undefined = adminAccess
@@ -1096,6 +1109,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     broadcastRegistry,
     exportRateTelemetry,
     broadcastTelemetry,
+    aiGuard,
   );
 
   const router = createRouter({
@@ -1103,6 +1117,7 @@ const createRequestHandler = async (env: WorkerEnv) => {
     messaging: composition.ports.messaging,
     webhookSecret: composition.webhookSecret,
     typingIndicator,
+    aiGuard,
     rateLimitNotifier: createRateLimitNotifierIfConfigured(env, composition.ports.messaging),
     transformPayload,
     systemCommands: transformPayload.systemCommands,

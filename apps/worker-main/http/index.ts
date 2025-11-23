@@ -42,3 +42,10 @@ export {
   type TelegramWebhookFeatures,
   type TelegramWebhookOptions,
 } from './telegram-webhook';
+export {
+  createAiBackpressureGuard,
+  type AiBackpressureGuard,
+  type AiBackpressureGuardStats,
+  type GuardDecision,
+  type GuardTicket,
+} from './ai-backpressure-guard';

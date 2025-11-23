@@ -1107,6 +1107,7 @@ const createBroadcastSender = (options: CreateBroadcastSenderOptions): SendBroad
       let nextIndex = startIndex;
 
       const worker = async (): Promise<void> => {
+        // eslint-disable-next-line no-constant-condition
         while (true) {
           ensureNotAborted();
           const currentIndex = nextIndex;

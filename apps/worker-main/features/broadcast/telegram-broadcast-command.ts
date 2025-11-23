@@ -54,7 +54,7 @@ export const buildBroadcastPromptMessage = (count: number, notFound: readonly st
 const BROADCAST_UNSUPPORTED_SUBCOMMAND_MESSAGE =
   'Мгновенная рассылка доступна только через команду /broadcast без аргументов.';
 
-const buildTooLongMessage = (_overflow: number) =>
+const buildTooLongMessage = () =>
   'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
 
 export const buildAwaitingSendPromptMessage = (audience: BroadcastAudience): string => {
@@ -115,8 +115,6 @@ export interface PendingBroadcast {
   chunkCount?: number;
   debounceUntil?: number;
 }
-
-type BroadcastAudienceMode = 'all' | 'list';
 
 interface BroadcastListAudience {
   mode: 'list';
@@ -959,7 +957,7 @@ export const createTelegramBroadcastCommandHandler = (
       await options.messaging.sendText({
         chatId: message.chat.id,
         threadId: message.chat.threadId,
-        text: buildTooLongMessage(0),
+        text: buildTooLongMessage(),
       });
 
       logger.warn('broadcast text rejected due to multiple chunks', {
@@ -1732,7 +1730,7 @@ export const createTelegramBroadcastCommandHandler = (
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: buildTooLongMessage(overflow),
+          text: buildTooLongMessage(),
         });
       } catch (error) {
         logger.error('failed to send broadcast length warning', {
@@ -1914,7 +1912,7 @@ export const createTelegramBroadcastCommandHandler = (
         await options.messaging.sendText({
           chatId: message.chat.id,
           threadId: message.chat.threadId,
-          text: buildTooLongMessage(overflow),
+          text: buildTooLongMessage(),
         });
       } catch (error) {
         logger.error('failed to send broadcast length warning', {

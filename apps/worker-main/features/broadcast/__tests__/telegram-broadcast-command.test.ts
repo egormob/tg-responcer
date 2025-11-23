@@ -67,7 +67,7 @@ const createIncomingMessage = (
   ...overrides,
 });
 
-const buildExpectedTooLongMessage = (_overflow: number) =>
+const buildExpectedTooLongMessage = () =>
   'Текст не укладывается в лимит Telegram, выберите: /new_text чтобы отправить другой текст или /cancel_broadcast для отмены.';
 
 const createDeferred = <T>() => {
