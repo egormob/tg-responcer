@@ -97,6 +97,40 @@ describe('createAiQueueDiagRoute', () => {
     });
   });
 
+  it('includes guard stats when provided', async () => {
+    const ai = createAiPort({
+      getQueueStats: () => createQueueStats(),
+    });
+
+    const route = createAiQueueDiagRoute({
+      ai,
+      guard: {
+        getStats: () => ({
+          activeChats: 2,
+          bufferedChats: 1,
+          blockedSinceBoot: 3,
+          mergedSinceBoot: 2,
+          truncatedSinceBoot: 1,
+          lastBlockedAt: 1_700_000_000_000,
+        }),
+      },
+    });
+
+    const response = await route(new Request('https://example.test/admin/diag?q=ai-queue'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      guard: {
+        activeChats: 2,
+        bufferedChats: 1,
+        blockedSinceBoot: 3,
+        mergedSinceBoot: 2,
+        truncatedSinceBoot: 1,
+        lastBlockedAt: '2023-11-14T22:13:20.000Z',
+      },
+    });
+  });
+
   it('marks warning when queue usage crosses the threshold', async () => {
     const ai = createAiPort({
       getQueueStats: () =>

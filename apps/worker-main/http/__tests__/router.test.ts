@@ -13,7 +13,12 @@ import {
 } from '../../features/broadcast';
 import { createBindingsDiagnosticsRoute } from '../../features/admin-diagnostics/bindings-route';
 import { createSelfTestRoute } from '../../features/admin-diagnostics/self-test-route';
-import { createRouter, parseIncomingMessage, RATE_LIMIT_FALLBACK_TEXT } from '../router';
+import {
+  AI_GUARD_WAIT_TEXT,
+  createRouter,
+  parseIncomingMessage,
+  RATE_LIMIT_FALLBACK_TEXT,
+} from '../router';
 import { createSystemCommandRegistry } from '../system-commands';
 import * as telegramPayload from '../telegram-payload';
 import { resetLastTelegramUpdateSnapshot } from '../telegram-webhook';
@@ -864,6 +869,134 @@ describe('http router', () => {
       threadId: undefined,
       text: RATE_LIMIT_FALLBACK_TEXT,
     });
+  });
+
+  it('sends guard wait message when ai guard blocks the dialog', async () => {
+    const handleMessage = vi.fn();
+    const messaging = createMessagingMock();
+    const aiGuard = {
+      enter: vi.fn().mockResolvedValue({ status: 'blocked', reason: 'over_limit' }),
+      release: vi.fn(),
+      getStats: vi.fn(),
+    };
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      aiGuard,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-guard' },
+          chat: { id: 'chat-guard' },
+          text: 'hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'queued' });
+    expect(aiGuard.enter).toHaveBeenCalledTimes(1);
+    expect(aiGuard.release).not.toHaveBeenCalled();
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(messaging.sendText).toHaveBeenCalledWith({
+      chatId: 'chat-guard',
+      threadId: undefined,
+      text: AI_GUARD_WAIT_TEXT,
+    });
+  });
+
+  it('returns queued status when message is buffered by ai guard', async () => {
+    const handleMessage = vi.fn();
+    const messaging = createMessagingMock();
+    const aiGuard = {
+      enter: vi.fn().mockResolvedValue({
+        status: 'buffered',
+        ticket: { chatKey: 'chat-guard::', ticketId: 1, kvCounted: false },
+      }),
+      release: vi.fn(),
+      getStats: vi.fn(),
+    };
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      aiGuard,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-guard' },
+          chat: { id: 'chat-guard' },
+          text: 'hello 2',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'queued', buffered: true });
+    expect(aiGuard.enter).toHaveBeenCalledTimes(1);
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(aiGuard.release).not.toHaveBeenCalled();
+    expect(messaging.sendText).not.toHaveBeenCalled();
+  });
+
+  it('promotes buffered message after processing the active one', async () => {
+    const handleMessage = vi
+      .fn()
+      .mockResolvedValue({ status: 'replied', response: { text: 'ok', messageId: 'm1' } });
+    const messaging = createMessagingMock();
+    const aiGuard = {
+      enter: vi
+        .fn()
+        .mockResolvedValue({ status: 'proceed', ticket: { chatKey: 'chat-guard::', ticketId: 1, kvCounted: false } }),
+      release: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ticket: { chatKey: 'chat-guard::', ticketId: 2, kvCounted: false },
+          message: {
+            user: { userId: 'user-guard' },
+            chat: { id: 'chat-guard' },
+            text: 'followup',
+            receivedAt: new Date(),
+          },
+        })
+        .mockResolvedValueOnce(null),
+      getStats: vi.fn(),
+    };
+
+    const router = createRouter({
+      dialogEngine: { handleMessage } as unknown as DialogEngine,
+      messaging,
+      webhookSecret: 'secret',
+      aiGuard,
+    });
+
+    const response = await router.handle(
+      new Request('https://example.com/webhook/secret', {
+        method: 'POST',
+        body: JSON.stringify({
+          user: { userId: 'user-guard' },
+          chat: { id: 'chat-guard' },
+          text: 'hello',
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'ok', messageId: 'm1' });
+
+    // handleMessage should be called for the initial message and for the promoted buffer.
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(aiGuard.release).toHaveBeenCalledTimes(2);
   });
 
   it('preserves large identifiers when sending rate limit fallback', async () => {
