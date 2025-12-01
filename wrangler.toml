@@ -1,4 +1,4 @@
-name = "tg-responcer"
+name = "chariot-moon"
 main = "apps/worker-main/index.ts"
 compatibility_date = "2025-10-26"
 
