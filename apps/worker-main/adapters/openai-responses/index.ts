@@ -9,7 +9,7 @@ import { createAiLimiter, type AiLimiterStats } from './concurrency-limiter';
 import { getFriendlyOverloadMessage } from './overload-message';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 28_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_ENDPOINT_FAILOVER_THRESHOLD = 3;
 

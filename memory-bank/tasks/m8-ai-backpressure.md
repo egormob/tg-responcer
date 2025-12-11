@@ -12,7 +12,7 @@
    {
      "AI_MAX_CONCURRENCY": 4,
      "AI_QUEUE_MAX_SIZE": 64,
-     "AI_TIMEOUT_MS": 18000,
+     "AI_TIMEOUT_MS": 20000,
      "AI_RETRY_MAX": 3,
      "AI_BASE_URLS": [
        "https://api.openai.com/v1/responses",
@@ -22,7 +22,7 @@
    }
    ```
 2. **ENV** — fallback при отсутствии ключа в KV (например, при локальной отладке или падении KV). Используем те же ключи окружения.
-3. **Дефолты в коде** — активируются при отсутствии значений в KV и Env (4 / 64 / 18000 / 3). Вариант C логирования `[ai][config]` публикует `sources.kv`, `sources.env`, `sources.default`, поэтому порядок чтения описывается как `KV (AI_QUEUE_CONFIG)` → `ENV` → `default` с явным указанием, откуда пришло актуальное значение.
+3. **Дефолты в коде** — активируются при отсутствии значений в KV и Env (4 / 64 / 18000 / 3), а верхний потолок таймаута в адаптере теперь 28 000 мс. Вариант C логирования `[ai][config]` публикует `sources.kv`, `sources.env`, `sources.default`, поэтому порядок чтения описывается как `KV (AI_QUEUE_CONFIG)` → `ENV` → `default` с явным указанием, откуда пришло актуальное значение.
 4. **AI_BASE_URLS** — массив HTTPS-эндпоинтов Responses API, задаётся в `AI_QUEUE_CONFIG` или `AI_BASE_URLS` (ENV). Формат: JSON-массив строк, каждая должна указывать на `https://.../v1/responses` (допустимы query-параметры). При отсутствии переопределений активен дефолт `https://api.openai.com/v1/responses`; failover включается только когда в массиве ≥ 2 адресов, поскольку нужен резерв.
 5. **AI_ENDPOINT_FAILOVER_THRESHOLD** — количество подряд идущих retryable таймаутов/429/5xx перед переключением на резервный эндпоинт. Значение читается из `AI_QUEUE_CONFIG` → `AI_ENDPOINT_FAILOVER_THRESHOLD` (ENV) → дефолт `3`.
 
