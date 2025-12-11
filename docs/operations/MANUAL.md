@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | Параллелизм очереди | `"AI_MAX_CONCURRENCY"` | `AI_MAX_CONCURRENCY` | `DEFAULT_AI_MAX_CONCURRENCY = 4` | `apps/worker-main/index.ts` → `readAiConcurrencyConfig()` → `resolveValue('AI_MAX_CONCURRENCY', …)` |
 | Размер очереди | `"AI_QUEUE_MAX_SIZE"` | `AI_QUEUE_MAX_SIZE` | `DEFAULT_AI_QUEUE_MAX_SIZE = 64` | Тот же `resolveValue('AI_QUEUE_MAX_SIZE', …)` в `readAiConcurrencyConfig()` |
-| Таймаут запроса к OpenAI (мс) | `"AI_TIMEOUT_MS"` | `AI_TIMEOUT_MS` | `DEFAULT_AI_TIMEOUT_MS = 18_000` | `resolveValue('AI_TIMEOUT_MS', …)` + обработчики `[ai][timeout]` в `apps/worker-main/features/ai/` |
+| Таймаут запроса к OpenAI (мс) | `"AI_TIMEOUT_MS"` | `AI_TIMEOUT_MS` | `DEFAULT_AI_TIMEOUT_MS = 18_000` | `resolveValue('AI_TIMEOUT_MS', …)` + обработчики `[ai][timeout]` в `apps/worker-main/features/ai/`, адаптер ограничивает максимум `DEFAULT_TIMEOUT_MS = 28_000` |
 | Максимум ретраев | `"AI_RETRY_MAX"` | `AI_RETRY_MAX` | `DEFAULT_AI_RETRY_MAX = 3` | `resolveValue('AI_RETRY_MAX', …)` + `apps/worker-main/features/ai/ai-queue.ts` (повторные попытки) |
 | Порог переключения эндпоинта | `"AI_ENDPOINT_FAILOVER_THRESHOLD"` | `AI_ENDPOINT_FAILOVER_THRESHOLD` | `DEFAULT_AI_ENDPOINT_FAILOVER_THRESHOLD = 3` | `resolveValue('AI_ENDPOINT_FAILOVER_THRESHOLD', …)` + блок `endpoints` очереди |
 | Основные URL OpenAI | `"AI_BASE_URLS"` или `"aiBaseUrls"` (массив строк/объектов) | `AI_BASE_URLS` | `["https://api.openai.com/v1/responses"]` | Парсер `parseAiBaseUrls()` внутри `readAiConcurrencyConfig()` и маршрутизация `apps/worker-main/features/ai/openai-client.ts` |
@@ -31,12 +31,12 @@
    - **Как менять:** добавить в JSON `"AI_QUEUE_MAX_SIZE": 96`. После записи проверяйте `/admin/diag` и метрику `avgWaitMs`: она должна оставаться < 2000 мс.
    - **Границы:** 16 минимум (иначе полезность очереди теряется), 128 максимум (больше — пользователи увидят typing > 2 мин, а openAi таймауты срежут все преимущества).
 
-3. **AI_TIMEOUT_MS (18_000 ↔ 22_000/12_000).**
+3. **AI_TIMEOUT_MS (18_000 ↔ 24_000/12_000).**
    - **Когда менять:**
-     - Увеличивать до `22_000–25_000`, если OpenAI стабильно отвечает на 18+ сек, но без ошибок.
+     - Увеличивать до `22_000–28_000`, если OpenAI стабильно отвечает на 18+ сек, но без ошибок.
      - Уменьшать до `12_000–15_000`, если нужно быстрее освобождать воркер (например, во время инцидента и массовых таймаутов).
    - **Наблюдаемое поведение:** `[ai][timeout]` записи в логах и всплеск `retryMax` попыток в диагностике. После изменения таймаута эти события должны или исчезнуть (при увеличении), или ускорить failfast (при уменьшении).
-   - **Границы:** 5_000–30_000 мс (меньше — бессмысленно из‑за сетевых хвостов, больше — Telegram перестаёт ждать typing).
+   - **Границы:** 5_000–28_000 мс (меньше — бессмысленно из‑за сетевых хвостов, больше — Telegram/Cloudflare перестанут ждать ответ; кодовый потолок 28 с).
 
 4. **AI_RETRY_MAX (3 ↔ 1/5).**
    - **Когда менять:**
