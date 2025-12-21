@@ -521,6 +521,31 @@ const toHandledResult = (response?: Response): HandledWebhookResult => ({
   response: response ?? jsonResponse({ status: 'ok' }, { status: 200 }),
 });
 
+const normalizeAdminCommandResponse = (
+  response: Response,
+  context: TelegramAdminCommandContext,
+): Response => {
+  if (response.ok) {
+    return response;
+  }
+
+  const logPayload: Record<string, unknown> = {
+    command: context.command,
+    status: response.status,
+    statusText: response.statusText,
+  };
+  applyTelegramIdLogFields(logPayload, 'chatId', context.chat.id, { includeValue: false });
+  applyTelegramIdLogFields(logPayload, 'userId', context.from.userId, { includeValue: false });
+  if (context.chat.threadId) {
+    applyTelegramIdLogFields(logPayload, 'threadId', context.chat.threadId, { includeValue: false });
+  }
+
+  // eslint-disable-next-line no-console
+  console.warn('[telegram-webhook] normalized admin command response', logPayload);
+
+  return jsonResponse({ status: 'ok' }, { status: 200 });
+};
+
 const buildIncomingMessage = (
   message: TelegramMessage,
   from: TelegramUser,
@@ -569,11 +594,30 @@ const handleAdminCommand = async (
     return undefined;
   }
 
-  const response = await handler(context);
+  let response: Response | TelegramAdminCommandHandlerResult | void;
+
+  try {
+    response = await handler(context);
+  } catch (error) {
+    const logPayload: Record<string, unknown> = {
+      command: context.command,
+      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+    };
+    applyTelegramIdLogFields(logPayload, 'chatId', context.chat.id, { includeValue: false });
+    applyTelegramIdLogFields(logPayload, 'userId', context.from.userId, { includeValue: false });
+    if (context.chat.threadId) {
+      applyTelegramIdLogFields(logPayload, 'threadId', context.chat.threadId, { includeValue: false });
+    }
+
+    // eslint-disable-next-line no-console
+    console.error('[telegram-webhook] admin command handler failed', logPayload);
+
+    return toHandledResult();
+  }
 
   if (response instanceof Response) {
     options.onSystemCommand?.(context.command, context.from.userId);
-    return toHandledResult(response);
+    return toHandledResult(normalizeAdminCommandResponse(response, context));
   }
 
   if (!isAdminCommandHandlerResult(response)) {
@@ -586,7 +630,7 @@ const handleAdminCommand = async (
   }
 
   if (response.response instanceof Response) {
-    return toHandledResult(response.response);
+    return toHandledResult(normalizeAdminCommandResponse(response.response, context));
   }
 
   return undefined;

@@ -295,6 +295,33 @@ describe('transformTelegramUpdate', () => {
     expect(context.incomingMessage.text).toBe('/admin status');
   });
 
+  it('normalizes non-2xx admin command responses to 200', async () => {
+    const update = createBaseUpdate();
+    if (!update.message) {
+      throw new Error('message is required for test');
+    }
+
+    update.message.text = '/admin status';
+    update.message.entities = [
+      { type: 'bot_command', offset: 0, length: '/admin'.length },
+    ];
+
+    const handleAdminCommand = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'bad request' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const result = await transformTelegramUpdate(update, {
+      features: { handleAdminCommand },
+    });
+
+    expect(result.kind).toBe('handled');
+    expect(result.response?.status).toBe(200);
+    await expect(result.response?.json()).resolves.toEqual({ status: 'ok' });
+  });
+
   it('ignores admin commands for other bots when botUsername provided', async () => {
     const update = createBaseUpdate();
     if (!update.message) {
