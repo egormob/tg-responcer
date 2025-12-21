@@ -1,39 +1,39 @@
-name = "tg-responcer"
+name = "chariot-moon"
 main = "apps/worker-main/index.ts"
 compatibility_date = "2025-10-26"
 
 [[d1_databases]]
 binding = "DB"
-database_id = "7669db41-69ee-4c29-995a-418d71cd81c0"
+database_id = "b0f69898-a140-4a79-88c0-33efb3289995"
 migrations_dir = "apps/worker-main/migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "d03442f14f7e4a64bb1d7896244a0d3f"
+id = "6d5ec5ae4b264913b5c7d99df5059bd6"
 
 [[kv_namespaces]]
 binding = "AI_CONTROL_KV"
-id = "26fef8228c074edaaf20d3b1b8d42811"
+id = "a1d4ecc101cb4766a8737f9dac54b434"
 
 
 [[kv_namespaces]]
 binding = "ADMIN_EXPORT_LOG"
-id = "3da8d75b18b548ceb528fac891f6bb24"
+id = "48757921d979411b8c8feaee95fb8006"
 
 [[kv_namespaces]]
 binding = "ADMIN_TG_IDS"
-id = "6e0669bae62c48d5a8d64d11602e9d6d"
+id = "4278f1dae3eb4b1ca1d4fc08a7974b0e"
 
 [[kv_namespaces]]
 binding = "BROADCAST_PENDING_KV"
-id = "ec8ca40dbcca469fa73fe6f3850ef596"
+id = "b78e9b7a28c34543b662ec0b4a8bf4b7"
 
 [[kv_namespaces]]
 binding = "BROADCAST_TELEMETRY_KV"
 # Рекурсируем привязку к тому же namespace, что и BROADCAST_PENDING_KV,
-# чтобы не заводить отдельное KV и использовать уже существующий ec8ca40d…
-# (указан владельцем как пустой, пригоден для телеметрии и pending-очереди).
-id = "ec8ca40dbcca469fa73fe6f3850ef596"
+# чтобы не заводить отдельное KV и использовать уже существующий namespace,
+# пригодный для телеметрии и pending-очереди.
+id = "b78e9b7a28c34543b662ec0b4a8bf4b7"
 
 [vars]
 # Wrangler keeps plaintext variables defined here in sync on every deploy. Sensitive
